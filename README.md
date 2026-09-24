@@ -121,6 +121,28 @@ dotted), confirmed **HH / HL / LH / LL** labels, one **▲ BUY / ▼ SELL** mark
 drops out of a mode, and Entry / SL / TP1 / TP2 lines for the currently clickable signal
 only.
 
+## v1.02 display layer (no new decision rule, still read-only)
+
+* **Arrow on every closed candle**: the NRTR direction of the chart's timeframe class (5M NRTR on
+  M1–M5 charts, 15M NRTR above). Bright green/red = agrees with the 15M boss mode, dim = against
+  it. The forming candle never gets one.
+* **Blinking banner**: CLICK BUY / CLICK SELL alternates bright and dark every second. It is a
+  light, not a button. MT5 does not let an indicator trade, and this one never will; you click
+  Buy or Sell on the broker's own panel.
+* **LOTS FOR x% RISK**: `balance × risk% ÷ money lost per lot at the SL`, rounded **down** to the
+  volume step. Balance and equity are read from the account (read only). If even the minimum lot
+  risks more than x%, the row says SKIP. Default 1.0 %, allowed 0.1–5.0 %. It is a suggestion you
+  type yourself.
+* **SWING TP**: entry ± a fixed distance per metal (default gold 20.00, silver 2.00), drawn on the
+  chart and printed, so you can type a pending order or a far take-profit by hand.
+* **Pending-order reference**: in BUY mode, a pullback limit near the 5M NRTR stop and a breakout
+  stop above the 15M channel; mirrored in SELL mode. Reference prices only. Nothing is sent.
+* **NEW YORK OPEN**: at the broker time you set (default `16:30`, check your broker's clock) one MT5
+  pop-up plus sound, weekdays only, once per day. The panel counts down before it and shows
+  *WAIT, LET IT PRINT* for the first 15 minutes after it. Local only, no Telegram, no network.
+* **ZigZag** (blue): confirmed 15M swings joined by a line, plus a **HOW TO READ THE CHART** block
+  explaining the NRTR channel, the ZigZag structure and the EMA200 filter in one line each.
+
 ## Settings
 
 | Input | Default | |
@@ -135,6 +157,10 @@ only.
 | History used | 10 | days |
 | Panel size / position / X / Y | 1.0 / top-left / 12 / 24 | |
 | Draw chart objects | on | |
+| Candle arrows / blink | on / on | v1.02 |
+| Risk per trade | 1.0 % | lot suggestion only; 0.1–5.0 accepted |
+| Gold / Silver swing distance | 20.00 / 2.00 | price units |
+| NY alert / NY open time / quiet minutes | on / 16:30 / 15 | broker clock |
 
 ## Why it cannot repaint
 

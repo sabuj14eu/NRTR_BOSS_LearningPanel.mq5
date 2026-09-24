@@ -190,7 +190,15 @@ int main()
          CHECK(has(txt("v14"), DoubleToString(r.s.risk, 2)), "risk");
          CHECK(has(txt("v6"), side == 0 ? "BUY MODE" : "SELL MODE"), "15M decision row");
          CHECK(has(txt("v9"), "READY"), "5M confirm READY");
-         CHECK(countPrefix("NBLP_C_L_") == 8, "entry/SL/TP1/TP2 lines + labels drawn");
+         CHECK(countPrefix("NBLP_C_L_") == 10, "entry/SL/TP1/TP2/SWING lines + labels drawn");
+         {
+            double atRisk = 0.0;
+            double lots = NbLotsForRisk(10000.0, 1.0, r.s.risk, 0.01, 1.0, 0.01, 0.01, 100.0, atRisk);
+            CHECK(lots > 0.0 && has(txt("v22"), DoubleToString(lots, 2) + " LOTS"), "lot row = engine formula on the sim balance");
+            CHECK(has(txt("v21"), "10000.00"), "balance row read from the account");
+            double swing = r.s.entry + (side == 0 ? 20.0 : -20.0);
+            CHECK(has(txt("v17"), DoubleToString(swing, 2)), "swing TP = entry +/- 20.00 on gold");
+         }
          CHECK(countPrefix("NBLP_C_G_") > 0, "decision markers drawn");
          std::printf("    %s at %s: entry %s SL %s TP1 %s TP2 %s\n", side == 0 ? "BUY " : "SELL",
                      TimeToString(now, TIME_DATE | TIME_MINUTES).c_str(), DoubleToString(r.s.entry, 2).c_str(),
@@ -425,6 +433,66 @@ int main()
       OnDeinit(0);
    }
    end("I8");
+
+   begin("I9 v1.02 display: arrows on every closed candle, NY open alert, zigzag, blink");
+   {
+      long long now = findNow(gold, 0.01, 2, [](const Ref &r) { return r.state == NB_BUY; });
+      load(gold, "XAUUSD", "XAU", 2, 0.01);
+      _Period = PERIOD_M5;
+      SIM.now = now;
+      start();
+      const std::vector<double> &up = *SIM.bufs[6];
+      const std::vector<double> &dn = *SIM.bufs[8];
+      size_t v = up.size();
+      CHECK(v > 10 && up[v - 1] == EMPTY_VALUE && dn[v - 1] == EMPTY_VALUE, "forming candle has no arrow");
+      int arrows = 0, both = 0, upAtLow = 0;
+      for(size_t i = 0; i + 1 < v; i++)
+      {
+         bool u1 = up[i] != EMPTY_VALUE, d1 = dn[i] != EMPTY_VALUE;
+         if(u1 || d1) arrows++;
+         if(u1 && d1) both++;
+         if(u1 && up[i] == SIM.m5[i].low) upAtLow++;
+      }
+      CHECK(arrows > (int)v / 2 && both == 0, "closed candles carry exactly one arrow once the NRTR is ready");
+      CHECK(upAtLow > 0, "up arrow anchored at the candle low");
+      CHECK(countPrefix("NBLP_C_Z_") > 0, "zigzag segments drawn between confirmed 15M swings");
+      CHECK(has(txt("hg"), "HOW TO READ"), "legend section present");
+      // blink: the banner text never changes, only the fill
+      std::string before = txt("state");
+      OnTimer();
+      CHECK(txt("state") == before && has(before, "CLICK BUY"), "blink keeps the banner text");
+      OnDeinit(0);
+      _Period = PERIOD_M15;
+
+      // NY open: alert once inside the open minute, weekdays only, never on the weekend
+      load(gold, "XAUUSD", "XAU", 2, 0.01);
+      long long day = (gold.m5[3000].t / 86400) * 86400;
+      // pick a Tuesday
+      while(((day / 86400) + 4) % 7 != 2) day += 86400;
+      SIM.now = day + 16 * 3600 + 30 * 60 + 5;
+      SIM.alerts.clear();
+      start();
+      CHECK(SIM.alerts.size() == 1 && has(SIM.alerts[0], "NEW YORK OPEN"), "one alert in the open minute");
+      OnTimer();
+      SIM.now += 20;
+      OnTimer();
+      CHECK(SIM.alerts.size() == 1, "no second alert the same day");
+      CHECK(has(txt("vs"), "NY OPEN - FIRST 15 MIN"), "session row says WAIT in the first 15 minutes");
+      SIM.now = day + 16 * 3600 + 29 * 60;
+      OnTimer();
+      CHECK(has(txt("vs"), "in 01:00"), "countdown before the open");
+      OnDeinit(0);
+      load(gold, "XAUUSD", "XAU", 2, 0.01);
+      long long sat = day;
+      while(((sat / 86400) + 4) % 7 != 6) sat += 86400;
+      SIM.now = sat + 16 * 3600 + 30 * 60 + 5;
+      SIM.alerts.clear();
+      start();
+      CHECK(SIM.alerts.empty(), "no alert on Saturday");
+      OnDeinit(0);
+      CHECK(NbParseHHMM("16:30") == 59400 && NbParseHHMM("1630") < 0 && NbParseHHMM("25:00") < 0, "HH:MM parser");
+   }
+   end("I9");
 
    std::printf("\nINDICATOR TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;

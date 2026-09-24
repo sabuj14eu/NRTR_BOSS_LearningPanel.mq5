@@ -661,6 +661,20 @@ int main()
    }
    end("18");
 
+   begin("19 lots for a fixed % risk (reference only)");
+   {
+      double m = 0.0;
+      // 10000 balance, 1% = 100 budget; SL 5.70 on gold, tick 0.01 worth 1.0 -> 570 per lot -> 0.17 lots
+      CHECK(near(NbLotsForRisk(10000, 1.0, 5.70, 0.01, 1.0, 0.01, 0.01, 100, m), 0.17) && near(m, 96.9), "rounded DOWN to the step");
+      CHECK(NbLotsForRisk(100, 1.0, 5.70, 0.01, 1.0, 0.01, 0.01, 100, m) == 0.0, "min lot risks more than 1% -> 0 (skip)");
+      CHECK(near(NbLotsForRisk(1e9, 1.0, 5.70, 0.01, 1.0, 0.01, 0.01, 100, m), 100.0), "clamped to volume max");
+      CHECK(NbLotsForRisk(10000, 1.0, 0.0, 0.01, 1.0, 0.01, 0.01, 100, m) == 0.0, "no risk distance -> no lots");
+      CHECK(NbLotsForRisk(10000, 0.0, 5.7, 0.01, 1.0, 0.01, 0.01, 100, m) == 0.0, "0% risk -> no lots");
+      // silver: 3 dp, tick 0.001 worth 5.0, SL 0.092 -> 92 ticks * 5 = 460 per lot -> 0.21
+      CHECK(near(NbLotsForRisk(10000, 1.0, 0.092, 0.001, 5.0, 0.01, 0.01, 100, m), 0.21), "silver example");
+   }
+   end("19");
+
    begin("xx building blocks: NRTR, EMA, alignment, reason text");
    {
       std::vector<double> c = {10, 11, 12, 13, 14, 15, 13.9, 16, 12};

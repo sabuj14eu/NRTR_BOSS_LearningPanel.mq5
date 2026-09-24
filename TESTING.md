@@ -30,6 +30,24 @@ the build environment. The indicator was therefore verified like this:
 how it looks on a real chart. **Press F7 in MetaEditor and do the two manual checks below
 before relying on it.** If F7 reports anything, send me the exact message.
 
+## Results (2026-09-24, v1.02 display layer)
+
+```
+SAFETY SCAN: PASS
+FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
+ENGINE TESTS:    131 checks passed, 0 failed   (new: 19 lot sizing)
+INDICATOR TESTS: 106 checks passed, 0 failed   (new: I9 arrows / NY alert / zigzag / blink; I2 lots, balance, swing TP)
+MetaEditor F7:   NOT RUN here
+```
+
+I9 checks: the forming candle never carries an arrow; every closed candle carries exactly one
+once the NRTR is ready; up arrows sit on the candle low; zigzag segments exist; a blink tick keeps
+the banner text; the NY alert fires once inside the open minute on a Tuesday, never twice the same
+day, never on Saturday; the session row counts down before the open and says WAIT after it.
+
+Extra manual check in MT5 for v1.02: set *NY open time* to your broker's 09:30 New York (on the
+chart in the screenshots that is 16:30) and confirm one pop-up + sound at that minute.
+
 ## Results (2026-09-24, v1.01 after the audit of blob f95f970)
 
 ```

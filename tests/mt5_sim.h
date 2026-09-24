@@ -36,12 +36,13 @@ inline int PeriodSeconds(ENUM_TIMEFRAMES tf)
 
 enum { INIT_SUCCEEDED = 0, INIT_FAILED = 1, INIT_PARAMETERS_INCORRECT = 2 };
 enum { INDICATOR_DATA = 0, INDICATOR_COLOR_INDEX = 1, INDICATOR_CALCULATIONS = 2 };
-enum { PLOT_EMPTY_VALUE = 1, PLOT_DRAW_TYPE = 2 };
-enum { DRAW_NONE = 0, DRAW_LINE = 1, DRAW_COLOR_LINE = 2 };
+enum { PLOT_EMPTY_VALUE = 1, PLOT_DRAW_TYPE = 2, PLOT_ARROW = 3, PLOT_ARROW_SHIFT = 4 };
+enum { DRAW_NONE = 0, DRAW_LINE = 1, DRAW_COLOR_LINE = 2, DRAW_ARROW = 3, DRAW_COLOR_ARROW = 4 };
 enum { INDICATOR_SHORTNAME = 1, INDICATOR_DIGITS = 2 };
-enum { SYMBOL_DIGITS = 1, SYMBOL_TRADE_TICK_SIZE, SYMBOL_POINT, SYMBOL_TRADE_TICK_VALUE, SYMBOL_VOLUME_MIN,
+enum { SYMBOL_DIGITS = 1, SYMBOL_TRADE_TICK_SIZE, SYMBOL_POINT, SYMBOL_TRADE_TICK_VALUE, SYMBOL_VOLUME_MIN, SYMBOL_VOLUME_STEP, SYMBOL_VOLUME_MAX,
        SYMBOL_BID, SYMBOL_CURRENCY_BASE, SYMBOL_CURRENCY_PROFIT };
 enum { ACCOUNT_CURRENCY = 1 };
+enum { ACCOUNT_BALANCE = 1, ACCOUNT_EQUITY = 2 };
 enum { POSITION_SYMBOL = 1, POSITION_TYPE, POSITION_VOLUME, POSITION_TIME };
 enum { POSITION_TYPE_BUY = 0, POSITION_TYPE_SELL = 1 };
 enum { OBJ_LABEL = 1, OBJ_RECTANGLE_LABEL, OBJ_TEXT, OBJ_TREND };
@@ -52,7 +53,7 @@ enum { OBJPROP_CORNER = 1, OBJPROP_XDISTANCE, OBJPROP_YDISTANCE, OBJPROP_XSIZE, 
 enum { CORNER_LEFT_UPPER = 0 };
 enum { ANCHOR_LEFT_UPPER = 0, ANCHOR_LEFT_LOWER, ANCHOR_CENTER, ANCHOR_UPPER, ANCHOR_LOWER };
 enum { BORDER_FLAT = 0 };
-enum { STYLE_SOLID = 0, STYLE_DASH, STYLE_DOT };
+enum { STYLE_SOLID = 0, STYLE_DASH, STYLE_DOT, STYLE_DASHDOT };
 enum { TIME_DATE = 1, TIME_MINUTES = 2 };
 enum { CHARTEVENT_CHART_CHANGE = 9 };
 enum { CHART_WIDTH_IN_PIXELS = 1, CHART_HEIGHT_IN_PIXELS };
@@ -76,7 +77,8 @@ struct SimState
 {
    std::string sym = "XAUUSD", base = "XAU", profit = "USD";
    int digits = 2;
-   double tick = 0.01, tickValue = 1.0, volMin = 0.01, bid = 0.0;
+   double tick = 0.01, tickValue = 1.0, volMin = 0.01, volStep = 0.01, volMax = 100.0, bid = 0.0;
+   double balance = 10000.0, equity = 10000.0;
    std::vector<MqlRates> m1, m5, m15;   // full history, may extend past `now`
    datetime now = 0;
    bool copyFail = false;
@@ -85,6 +87,8 @@ struct SimState
    std::map<std::string, SimObj> objs;
    std::map<int, std::vector<double> *> bufs;
    std::vector<std::string> log;
+   std::vector<std::string> alerts;
+   std::vector<std::string> sounds;
 };
 static SimState SIM;
 static std::string _Symbol = "XAUUSD";
@@ -141,6 +145,8 @@ inline double SymbolInfoDouble(const string &, int prop)
       case SYMBOL_POINT: return SIM.tick;
       case SYMBOL_TRADE_TICK_VALUE: return SIM.tickValue;
       case SYMBOL_VOLUME_MIN: return SIM.volMin;
+      case SYMBOL_VOLUME_STEP: return SIM.volStep;
+      case SYMBOL_VOLUME_MAX: return SIM.volMax;
       case SYMBOL_BID: return SIM.bid;
    }
    return 0.0;
@@ -152,6 +158,7 @@ inline string SymbolInfoString(const string &, int prop)
    return "";
 }
 inline string AccountInfoString(int) { return "USD"; }
+inline double AccountInfoDouble(int prop) { return prop == ACCOUNT_BALANCE ? SIM.balance : SIM.equity; }
 inline datetime TimeTradeServer() { return SIM.now; }
 inline datetime TimeCurrent() { return SIM.now; }
 inline string TimeToString(datetime t, int flags)
@@ -217,3 +224,5 @@ inline bool IndicatorSetInteger(int, int) { return true; }
 inline bool EventSetTimer(int) { return true; }
 inline void EventKillTimer() {}
 inline void Print(const string &s) { SIM.log.push_back(s); }
+inline void Alert(const string &s) { SIM.alerts.push_back(s); }
+inline bool PlaySound(const string &s) { SIM.sounds.push_back(s); return true; }
