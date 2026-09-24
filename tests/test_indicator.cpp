@@ -94,7 +94,7 @@ static int countPrefix(const std::string &p)
 // reference computation straight from the engine, for a candidate `now`
 struct Ref
 {
-   int state, reasons, sig, dir15, n5;
+   int state, reasons, sig, dir15, mode15, n5;
    NbSignal s;
 };
 static Ref reference(const Market &m, long long now, double tick, int digits)
@@ -124,6 +124,7 @@ static Ref reference(const Market &m, long long now, double tick, int digits)
    r.reasons = a.reasons.back();
    r.sig = a.sigOf.back();
    r.dir15 = b.dir.back();
+   r.mode15 = b.mode.back();
    if(r.sig >= 0) r.s = sg[(size_t)r.sig];
    return r;
 }
@@ -161,6 +162,9 @@ int main()
       OnDeinit(0);
       load(gold, "BTCUSD", "BTC", 2, 0.01); SIM.now = gold.m5[3000].t + 20; start();
       CHECK(has(txt("state"), "GOLD / SILVER ONLY"), "BTCUSD rejected");
+      OnDeinit(0);
+      load(gold, "ETHUSD", "ETH", 2, 0.01); SIM.now = gold.m5[3000].t + 20; start();
+      CHECK(has(txt("state"), "GOLD / SILVER ONLY"), "ETHUSD rejected");
       OnDeinit(0);
    }
    end("I1");
@@ -233,9 +237,9 @@ int main()
    }
    end("I4");
 
-   begin("I5 existing BUY / SELL position + 15M reversal -> EXIT / PROTECT (read only)");
+   begin("I5 existing BUY / SELL position: EXIT / PROTECT on the FULL 15M BOSS mode (read only)");
    {
-      // a moment where 15M NRTR is bearish, and a time earlier where it was bullish
+      // (a) full boss flip: opened while the boss agreed, boss now in the opposite MODE -> EXIT
       for(int side = 1; side >= -1; side -= 2)
       {
          long long now = 0, openT = 0;
@@ -243,11 +247,11 @@ int main()
          {
             long long cand = gold.m5[i].t + 320;
             Ref r = reference(gold, cand, 0.01, 2);
-            if(r.dir15 != -side) continue;
-            for(long long back = 3600; back < 5 * 3600; back += 900)
-               if(reference(gold, cand - back, 0.01, 2).dir15 == side) { now = cand; openT = cand - back; break; }
+            if(r.mode15 != -side) continue;
+            for(long long back = 3600; back < 3 * 86400; back += 900)
+               if(reference(gold, cand - back, 0.01, 2).mode15 == side) { now = cand; openT = cand - back; break; }
          }
-         CHECK(now > 0, "fixture has a 15M reversal");
+         CHECK(now > 0, "fixture has a full 15M boss flip");
          load(gold, "XAUUSD", "XAU", 2, 0.01);
          SIM.now = now;
          SIM.pos.push_back({"XAUUSD", side > 0 ? POSITION_TYPE_BUY : POSITION_TYPE_SELL, 0.10, openT});
@@ -256,6 +260,7 @@ int main()
          start();
          CHECK(has(txt("state"), side > 0 ? "EXIT / PROTECT BUY" : "EXIT / PROTECT SELL"), "banner EXIT / PROTECT");
          CHECK(has(txt("r1"), "15M TREND INVALIDATED"), "reason 15M TREND INVALIDATED");
+         CHECK(has(txt("r2"), side > 0 ? "15M BOSS NOW SELL MODE" : "15M BOSS NOW BUY MODE"), "reason names the boss MODE, not the NRTR");
          CHECK(has(txt("pw"), "15M TREND INVALIDATED"), "position row explains");
          CHECK(has(txt("v16"), side > 0 ? "BUY 0.10" : "SELL 0.10"), "reads the position on this symbol only");
          bool untouched = SIM.pos.size() == before.size();
@@ -264,19 +269,51 @@ int main()
          CHECK(untouched, "positions unchanged (read only)");
          OnDeinit(0);
       }
-      // regime intact -> not EXIT
-      long long now = findNow(gold, 0.01, 2, [](const Ref &r) { return r.dir15 == 1; });
+      // (b) NRTR flipped against the position but the boss is only WAIT -> PROTECT, never EXIT
+      for(int side = 1; side >= -1; side -= 2)
+      {
+         long long now = 0, openT = 0;
+         for(size_t i = 11 * 288; i + 1 < gold.m5.size() && now == 0; i += 3)
+         {
+            long long cand = gold.m5[i].t + 320;
+            Ref r = reference(gold, cand, 0.01, 2);
+            if(r.mode15 != NB_WAIT || r.dir15 != -side) continue;
+            for(long long back = 900; back < 2 * 86400; back += 900)
+               if(reference(gold, cand - back, 0.01, 2).mode15 == side) { now = cand; openT = cand - back; break; }
+         }
+         CHECK(now > 0, "fixture has an NRTR-only flip (boss WAIT)");
+         load(gold, "XAUUSD", "XAU", 2, 0.01);
+         SIM.now = now;
+         SIM.pos.push_back({"XAUUSD", side > 0 ? POSITION_TYPE_BUY : POSITION_TYPE_SELL, 0.10, openT});
+         start();
+         CHECK(!has(txt("state"), "EXIT"), "NRTR flip alone: banner is NOT EXIT");
+         CHECK(has(txt("state"), "WAIT"), "banner stays WAIT");
+         CHECK(has(txt("pw"), "PROTECT - 15M BOSS WAIT, NOT INVALIDATED"), "position row: PROTECT, boss WAIT");
+         std::printf("    %s + boss WAIT: pw = \"%s\"\n", side > 0 ? "BUY" : "SELL", txt("pw").c_str());
+         OnDeinit(0);
+      }
+      // (c) regime intact (boss in the position's MODE) -> HOLD, not EXIT
+      long long now = findNow(gold, 0.01, 2, [](const Ref &r) { return r.mode15 == NB_BUY; });
       load(gold, "XAUUSD", "XAU", 2, 0.01);
       SIM.now = now;
       SIM.pos.push_back({"XAUUSD", POSITION_TYPE_BUY, 0.10, now - 600});
       start();
-      CHECK(!has(txt("state"), "EXIT"), "BUY with bullish 15M is not EXIT");
-      CHECK(has(txt("pw"), "15M REGIME INTACT"), "position row: regime intact");
+      CHECK(!has(txt("state"), "EXIT"), "BUY with BOSS BUY is not EXIT");
+      CHECK(has(txt("pw"), "15M REGIME INTACT - BOSS BUY MODE"), "position row: regime intact");
+      OnDeinit(0);
+      // (d) position opened while boss was WAIT, boss now BUY -> a SELL is AGAINST the boss
+      load(gold, "XAUUSD", "XAU", 2, 0.01);
+      SIM.now = now;
+      SIM.pos.push_back({"XAUUSD", POSITION_TYPE_SELL, 0.10, now - 600});
+      start();
+      CHECK(has(txt("state"), "EXIT / PROTECT SELL"), "SELL against BOSS BUY -> EXIT");
+      CHECK(has(txt("pw"), "AGAINST 15M BOSS"), "position row: against the boss");
       OnDeinit(0);
       load(gold, "XAUUSD", "XAU", 2, 0.01);
       SIM.now = now;
       start();
       CHECK(txt("v16") == "NO POSITION", "no position -> NO POSITION");
+      CHECK(has(txt("h15"), "CUSTOM ATR-NRTR"), "panel is labelled CUSTOM ATR-NRTR");
       OnDeinit(0);
    }
    end("I5");

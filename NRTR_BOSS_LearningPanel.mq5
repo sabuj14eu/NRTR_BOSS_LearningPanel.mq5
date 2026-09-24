@@ -17,10 +17,28 @@
 //|  SILVER), with any broker prefix/suffix. Nothing else.           |
 //|                                                                  |
 //|  Personal tool. No network, no Telegram, no external executor.   |
+//|                                                                  |
+//|  FROZEN DEFINITIONS (v1.01, audit of blob f95f970). Changing any |
+//|  of these is a NEW versioned behaviour, never a silent edit:     |
+//|  * NRTR = CUSTOM ATR-NRTR on CLOSES: extreme = highest (lowest)  |
+//|    close since the flip, stop = extreme -/+ mult*ATR(Wilder),    |
+//|    ratchets only, flips on a CLOSE beyond the stop. This is NOT  |
+//|    guaranteed to match any MT5 CodeBase "NRTR" bar for bar; the  |
+//|    panel is labelled CUSTOM ATR-NRTR for that reason.            |
+//|  * EXIT / PROTECT uses the COMPLETE 15M BOSS mode (NRTR + EMA200 |
+//|    + confirmed structure), never the NRTR direction alone:       |
+//|      BUY  + BOSS BUY  = HOLD      SELL + BOSS SELL = HOLD        |
+//|      BUY  + BOSS SELL = EXIT      SELL + BOSS BUY  = EXIT        |
+//|      any  + BOSS WAIT = UNKNOWN / PROTECT (no automatic EXIT)    |
+//|      stale or missing 15M data = UNKNOWN                         |
+//|  * SAME-CANDLE RULE: if one closed 5M candle after the entry     |
+//|    touches both the SL and TP1, the SL wins (tick order is not   |
+//|    available). Conservative by design.                           |
+//|  * TP invariant: TP2 R-multiple is strictly greater than TP1's.  |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - learning tool"
-#property version     "1.00"
-#property description "Gold/Silver NRTR BOSS learning panel: 15M direction, 5M timing."
+#property version     "1.01"
+#property description "Gold/Silver NRTR BOSS learning panel: 15M direction, 5M timing. CUSTOM ATR-NRTR."
 #property description "Visual decision support only - never places, modifies or closes orders."
 #property indicator_chart_window
 #property indicator_buffers 6
@@ -118,6 +136,7 @@
 #define NB_WHY_AGAINST     2
 #define NB_WHY_INTACT      3
 #define NB_WHY_UNKNOWN     4
+#define NB_WHY_BOSS_WAIT   5
 
 // supported metals
 #define NB_METAL_NONE   0
@@ -205,6 +224,21 @@ void NbSeriesResize(NbSeries &s, int n)
    ArrayResize(s.c, n);
 }
 
+//--- input contract. TP2 must be STRICTLY beyond TP1 (else the BUY/SELL level
+//    invariants SL < Entry < TP1 < TP2 and TP2 < TP1 < Entry < SL cannot hold).
+bool NbParamsValid(const NbParams &P)
+{
+   if(P.atrPeriod < 1 || P.nrtrMult <= 0.0 || P.emaPeriod < 2)
+      return false;
+   if(P.swing < 1 || P.swing > 20 || P.slBufAtr < 0.0)
+      return false;
+   if(P.tp1R <= 0.0 || P.tp2R <= 0.0 || P.tp2R <= P.tp1R)
+      return false;
+   if(P.validBars < 1)
+      return false;
+   return true;
+}
+
 //--- price grid: round to the symbol's real tick size (mode -1 down, +1 up, 0 nearest)
 double NbRoundTick(double price, double tick, int digits, int mode)
 {
@@ -263,11 +297,20 @@ void NbCalcEMA(const double &c[], int n, int period, double &ema[])
    }
 }
 
-//--- NRTR (Nick Rypock Trailing Reverse), ATR-scaled, on CLOSES.
-//    Bullish: extreme = highest close since the flip, stop = extreme - k*ATR
-//             (ratchets up only). A close below the stop flips bearish.
-//    Bearish: mirror. dir 0 = not ready (never guessed).
-//    flip[i] = +1/-1 on the bar that flipped, 0 otherwise.
+//--- CUSTOM ATR-NRTR (FROZEN DEFINITION - see the file header).
+//    Nick Rypock Trailing Reverse idea, but ATR-scaled and computed on
+//    CLOSES only. This is the exact algorithm this file implements:
+//      seed:    not ready (dir 0) until the closes span >= k*ATR; the side
+//               nearer the current close becomes the first direction.
+//      bullish: extreme = highest CLOSE since the flip,
+//               stop = extreme - k*ATR(Wilder, atrPeriod), ratchets UP only;
+//               a CLOSE < stop flips bearish on that bar (flip[i] = -1) and
+//               the new extreme is that close.
+//      bearish: mirror (stop ratchets DOWN only, CLOSE > stop flips, +1).
+//    It does NOT use highs/lows, a dynamic look-back period or a percentage
+//    band, so it is NOT guaranteed to reproduce any MT5 CodeBase NRTR bar
+//    for bar (direction, flip bar or line value). The panel says
+//    CUSTOM ATR-NRTR for that reason. dir 0 = not ready (never guessed).
 void NbCalcNRTR(const double &c[], const double &atr[], int n, double k,
                 int &dir[], double &stop[], double &ext[], int &flip[])
 {
@@ -604,7 +647,9 @@ void NbRunTrigger(const double &o[], const double &h[], const double &l[], const
          sigOf[s] = (s > 0) ? sigOf[s - 1] : -1;
          continue;
       }
-      // 1) outcome of the active signal, judged on this closed bar
+      // 1) outcome of the active signal, judged on this closed bar.
+      //    SAME-CANDLE RULE (frozen): the SL is tested FIRST. If one candle
+      //    touches both the SL and TP1, tick order is unknown, so SL wins.
       if(cur >= 0 && sigs[cur].status == NB_SIG_ACTIVE && s > sigs[cur].idx)
       {
          if(sigs[cur].dir > 0)
@@ -762,8 +807,9 @@ void NbRun5(NbSeries &s, NbPivot &piv[], const NbSeries &b, bool lastClosed, con
                 s.state, s.reasons, s.sigOf, sigs, nSig);
 }
 
-//--- 15M NRTR direction as known at time `when` (last bar CLOSED by then)
-int NbDirAtTime(const datetime &t[], const int &dir[], int n, int sec, datetime when)
+//--- value of a per-bar 15M series (e.g. BOSS mode) as it was KNOWN at time
+//    `when`: the value of the last bar that had CLOSED by then, 0 if none.
+int NbKnownAtTime(const datetime &t[], const int &v[], int n, int sec, datetime when)
 {
    int k = -1;
    for(int i = 0; i < n; i++)
@@ -773,7 +819,7 @@ int NbDirAtTime(const datetime &t[], const int &dir[], int n, int sec, datetime 
       else
          break;
    }
-   return (k >= 0) ? dir[k] : 0;
+   return (k >= 0) ? v[k] : 0;
 }
 
 //--- data is only usable if the last closed bars are recent
@@ -788,24 +834,34 @@ bool NbIsFresh(datetime last5, int sec5, datetime last15, int sec15, datetime no
    return true;
 }
 
-//--- READ-ONLY advice for an existing position (posDir +1 buy, -1 sell)
-int NbExitAdvice(int posDir, int dirAtOpen, int dirNow, int &why)
+//--- READ-ONLY advice for an existing position (posDir +1 buy, -1 sell),
+//    judged on the COMPLETE 15M BOSS mode (NB_BUY / NB_SELL / NB_WAIT), never
+//    on the NRTR direction alone. modeAtOpen = BOSS mode known when the
+//    position was opened, modeNow = BOSS mode of the last CLOSED 15M bar.
+//      posDir == modeNow            -> HOLD    (INTACT)
+//      modeNow == -posDir           -> EXIT    (INVALIDATED if opened with the
+//                                              boss, AGAINST if it never agreed)
+//      modeNow == NB_WAIT           -> UNKNOWN (BOSS_WAIT: protect, you decide)
+//    Stale / missing data is handled by the caller and is also UNKNOWN.
+//    A single NRTR flip only moves the boss to WAIT, so it can never produce
+//    EXIT by itself.
+int NbExitAdvice(int posDir, int modeAtOpen, int modeNow, int &why)
 {
    why = NB_WHY_NONE;
    if(posDir == 0)
       return NB_ADV_NONE;
-   if(dirNow == 0)
-   {
-      why = NB_WHY_UNKNOWN;
-      return NB_ADV_UNKNOWN;
-   }
-   if(dirNow == posDir)
+   if(modeNow == posDir)
    {
       why = NB_WHY_INTACT;
       return NB_ADV_HOLD;
    }
-   why = (dirAtOpen == posDir) ? NB_WHY_INVALIDATED : NB_WHY_AGAINST;
-   return NB_ADV_EXIT;
+   if(modeNow == -posDir)
+   {
+      why = (modeAtOpen == posDir) ? NB_WHY_INVALIDATED : NB_WHY_AGAINST;
+      return NB_ADV_EXIT;
+   }
+   why = NB_WHY_BOSS_WAIT;
+   return NB_ADV_UNKNOWN;
 }
 
 //--- final panel state. Stale data can never become a positive state.
@@ -1098,9 +1154,22 @@ void   NbRow(string kid, string vid, int kx, int vx, int y, string key, string v
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   if(InpNrtrAtrPeriod < 1 || InpNrtrMultiplier <= 0.0 || InpEmaPeriod < 2 || InpSwingStrength < 1 ||
-      InpSwingStrength > 20 || InpSlBufferAtr < 0.0 || InpTp1R <= 0.0 || InpTp2R <= 0.0 ||
-      InpSignalValidBars < 1 || InpHistoryDays < 3)
+   g_P.atrPeriod = InpNrtrAtrPeriod;
+   g_P.nrtrMult = InpNrtrMultiplier;
+   g_P.emaPeriod = InpEmaPeriod;
+   g_P.swing = InpSwingStrength;
+   g_P.slBufAtr = InpSlBufferAtr;
+   g_P.tp1R = InpTp1R;
+   g_P.tp2R = InpTp2R;
+   g_P.validBars = InpSignalValidBars;
+   g_P.tick = 0.0;
+   g_P.digits = 0;
+   if(InpTp2R <= InpTp1R)
+   {
+      Print("NRTR BOSS: invalid inputs - TP2 (R) must be strictly greater than TP1 (R)");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   if(!NbParamsValid(g_P) || InpHistoryDays < 3)
    {
       Print("NRTR BOSS: invalid inputs");
       return INIT_PARAMETERS_INCORRECT;
@@ -1122,17 +1191,9 @@ int OnInit()
    g_metal = NbMetalOf(g_sym, SymbolInfoString(g_sym, SYMBOL_CURRENCY_BASE),
                        SymbolInfoString(g_sym, SYMBOL_CURRENCY_PROFIT));
    NbReadSpec();
-   IndicatorSetString(INDICATOR_SHORTNAME, "NRTR BOSS Learning Panel");
+   IndicatorSetString(INDICATOR_SHORTNAME, "NRTR BOSS Learning Panel (CUSTOM ATR-NRTR)");
    IndicatorSetInteger(INDICATOR_DIGITS, g_digits);
 
-   g_P.atrPeriod = InpNrtrAtrPeriod;
-   g_P.nrtrMult = InpNrtrMultiplier;
-   g_P.emaPeriod = InpEmaPeriod;
-   g_P.swing = InpSwingStrength;
-   g_P.slBufAtr = InpSlBufferAtr;
-   g_P.tp1R = InpTp1R;
-   g_P.tp2R = InpTp2R;
-   g_P.validBars = InpSignalValidBars;
    g_P.tick = g_tick;
    g_P.digits = g_digits;
 
@@ -1377,16 +1438,19 @@ void NbEvaluate()
    int n15 = g_s15.n;
    datetime now = TimeTradeServer();
    g_fresh = NbIsFresh(g_s5.t[n5 - 1], g_s5.sec, g_s15.t[n15 - 1], g_s15.sec, now);
-   int dirNow = g_s15.dir[n15 - 1];
+   // EXIT / PROTECT is judged on the COMPLETE 15M BOSS mode of the last
+   // CLOSED 15M bar (NRTR + EMA200 + confirmed structure), never on the
+   // NRTR direction alone.
+   int modeNow = g_s15.mode[n15 - 1];
 
    int advB = NB_ADV_NONE;
    int whyB = NB_WHY_NONE;
    int advS = NB_ADV_NONE;
    int whyS = NB_WHY_NONE;
    if(g_buyCnt > 0)
-      advB = NbExitAdvice(1, NbDirAtTime(g_s15.t, g_s15.dir, n15, g_s15.sec, buyTime), dirNow, whyB);
+      advB = NbExitAdvice(1, NbKnownAtTime(g_s15.t, g_s15.mode, n15, g_s15.sec, buyTime), modeNow, whyB);
    if(g_sellCnt > 0)
-      advS = NbExitAdvice(-1, NbDirAtTime(g_s15.t, g_s15.dir, n15, g_s15.sec, sellTime), dirNow, whyS);
+      advS = NbExitAdvice(-1, NbKnownAtTime(g_s15.t, g_s15.mode, n15, g_s15.sec, sellTime), modeNow, whyS);
    if(!g_fresh && (g_buyCnt + g_sellCnt) > 0)
    {
       g_adv = NB_ADV_UNKNOWN;
@@ -1736,8 +1800,8 @@ void NbDrawPanel()
    }
    else if(g_final == NB_EXIT)
    {
-      r1 = (g_advWhy == NB_WHY_INVALIDATED) ? "15M TREND INVALIDATED" : "POSITION AGAINST 15M BOSS";
-      r2 = "15M NRTR NOW " + NbDirText(g_s15.n > 0 ? g_s15.dir[g_s15.n - 1] : 0) + " - YOU DECIDE";
+      r1 = (g_advWhy == NB_WHY_INVALIDATED) ? "15M TREND INVALIDATED (BOSS FLIPPED)" : "POSITION AGAINST 15M BOSS";
+      r2 = "15M BOSS NOW " + NbModeText(g_s15.n > 0 ? g_s15.mode[g_s15.n - 1] : NB_WAIT) + " - YOU DECIDE";
    }
    else
    {
@@ -1754,7 +1818,7 @@ void NbDrawPanel()
    int i5 = ok ? g_s5.n - 1 : 0;
 
    // 15M boss
-   NbLabel("h15", ox + kx, y + (int)MathRound(3 * sc), "15M BOSS  -  DIRECTION", cSec, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
+   NbLabel("h15", ox + kx, y + (int)MathRound(3 * sc), "15M BOSS  -  DIRECTION   (CUSTOM ATR-NRTR)", cSec, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
    y += rh + (int)MathRound(3 * sc);
    int d15 = ok ? g_s15.dir[i15] : 0;
    NbRow("k1", "v1", ox + kx, ox + vx, y, "15M NRTR", ok ? (NbSymDot() + " " + NbDirText(d15)) : "---", ok ? NbDirColor(d15) : cDim, cKey, fs);
@@ -1896,8 +1960,19 @@ void NbDrawPanel()
       }
       else if(g_adv == NB_ADV_HOLD)
       {
-         posWhy = "15M REGIME INTACT";
+         posWhy = "15M REGIME INTACT - BOSS " + NbModeText(g_advDir);
          posC = cUp;
+      }
+      else if(g_advWhy == NB_WHY_BOSS_WAIT)
+      {
+         posWhy = "PROTECT - 15M BOSS WAIT, NOT INVALIDATED";
+         if(g_ready && g_s15.n > 0)
+         {
+            string w0 = NbReasonAt(g_s15.mr[g_s15.n - 1], 0);
+            if(w0 != "")
+               posWhy = posWhy + ": " + w0;
+         }
+         posC = cExit;
       }
       else
       {
