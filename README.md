@@ -1,0 +1,144 @@
+# NRTR BOSS Learning Panel (MT5, Gold & Silver)
+
+One standalone MT5 **indicator**, `NRTR_BOSS_LearningPanel.mq5`, for **XAUUSD / Gold** and
+**XAGUSD / Silver** only. Open the chart and the panel answers one question:
+
+| Banner | Meaning |
+|---|---|
+| 🟢 **CLICK BUY** | Every rule for the learning BUY setup is aligned **right now**. |
+| 🔴 **CLICK SELL** | Every rule for the learning SELL setup is aligned **right now**. |
+| 🟡 **WAIT – NO TRADE** | Something disagrees. The reason line says exactly what. |
+| 🟠 **EXIT / PROTECT** | You hold a position and the 15M boss has turned against it. |
+
+**It never places, modifies or closes an order.** It reads your open positions on this
+symbol only to show EXIT / PROTECT. You click, or you don't. "CLICK BUY" means *the defined
+conditions are aligned for the educational setup*. It is **not** a profit signal.
+
+Personal tool. No SignalMesh, no Telegram, no network, no DLLs, no files.
+
+---
+
+## Install
+
+1. MT5 → **File → Open Data Folder** → `MQL5/Indicators/`
+2. Copy `NRTR_BOSS_LearningPanel.mq5` there.
+3. Open it in MetaEditor and press **F7** (Compile). Expect `0 errors`.
+4. Open an XAUUSD or XAGUSD chart (any timeframe; 5M or 15M is easiest to read) and drag
+   the indicator onto it.
+
+On any other symbol the panel only shows **GOLD / SILVER ONLY** and calculates nothing.
+Broker prefixes/suffixes are fine (`XAUUSD.m`, `#XAGUSD`, `GOLD`, `SILVER`). Metals quoted
+in anything other than USD are rejected.
+
+## The rules (fixed timeframes)
+
+The engine always reads **15M** and **5M** itself, whatever timeframe the chart shows.
+There is no setting that can switch it to 1M or 5M-only.
+
+**15M = BOSS / DIRECTION** (on the last *closed* 15M bar)
+
+| Mode | NRTR | Close vs EMA200 | Confirmed structure |
+|---|---|---|---|
+| BUY MODE | bullish | above | last high **HH** and last low **HL** |
+| SELL MODE | bearish | below | last high **LH** and last low **LL** |
+| WAIT | anything else, with the reason named (NRTR conflict, EMA conflict, structure against NRTR, mixed structure, structure not confirmed, not enough history) |
+
+**5M = ENTRY TRIGGER** (only on *closed* 5M candles)
+
+* 15M must be in BUY (or SELL) mode.
+* 5M NRTR must point the same way. If it doesn't → **WAIT – 5M AGAINST 15M**.
+* A 5M candle must **close** in that direction (bullish body for BUY, bearish for SELL).
+  A candle that is still forming is never used.
+* There must be a confirmed 5M swing low (BUY) / swing high (SELL) for the stop.
+
+Then the panel shows **CLICK BUY / CLICK SELL** with reference levels:
+
+* **Entry** = close of the trigger candle
+* **SL** = the most recent confirmed 5M swing low (BUY) / high (SELL), plus a small buffer
+  (0.10 × 5M ATR), rounded outward to the symbol's real tick size
+* **TP1** = 1R, **TP2** = 2R (R = entry − SL)
+* **Risk** in price, and in money per 1 lot and per minimum lot (from MT5's tick value)
+
+One signal per setup. The CLICK state lasts 6 closed 5M candles (30 min), or until the
+price reaches TP1 ("too late") or the SL ("stand aside"), whichever is first. The next
+signal needs a new setup: 5M pulls back against the 15M, then turns back with it.
+
+**EXIT / PROTECT** (read only): if you hold a BUY and the 15M NRTR turns bearish (or a SELL
+and it turns bullish), the banner shows **EXIT / PROTECT** with the reason:
+*15M TREND INVALIDATED* if the position was opened while the 15M agreed with it, or
+*POSITION AGAINST 15M BOSS* if it never did. Nothing is closed for you.
+
+**Stale data is never a signal.** If the last closed 5M bar is more than 15 min old (or
+15M more than 30 min), for example in the daily metals break, at the weekend or on a
+frozen feed, the panel shows **WAIT – DATA STALE / MARKET CLOSED**.
+
+## Reading the panel
+
+```
+ SILVER NRTR BOSS
+ XAGUSD   PRICE 30.412
+ [   CLICK BUY   ]                 <- final state, big and coloured
+ REASON: 15M BULLISH + HH/HL + ABOVE EMA200
+         5M NRTR BULLISH + CANDLE CLOSED
+ 15M BOSS - DIRECTION
+  15M NRTR              ● BULLISH
+  NRTR UPPER / LOWER    30.455 / 30.391
+  LAST 15M NRTR FLIP    BULL @ 09:45  30.402
+  15M CLOSE vs EMA200   ABOVE (30.120)
+  15M STRUCTURE         HL → HH
+  15M DECISION          BUY MODE
+ 5M TRIGGER - TIMING
+  5M NRTR               ● BULLISH
+  5M CANDLE             CLOSED 10:35   next 03:12
+  5M CONFIRM            READY - WITH 15M
+ LEARNING LEVELS - NO ORDER IS SENT
+  ENTRY / SL / TP1 / TP2 / RISK / RISK (money)
+ POSITION - READ ONLY
+  OPEN ON XAGUSD        NO POSITION
+```
+
+**On the chart:** the 15M EMA200 (blue), the 15M NRTR stop (green bullish / red bearish,
+thick) with its extreme (grey dotted) forming the NRTR channel, the 5M NRTR stop (thin
+dotted), confirmed **HH / HL / LH / LL** labels, one **▲ BUY / ▼ SELL** marker per signal
+(hover it for its levels and what happened afterwards), a small **WAIT** where the 15M boss
+drops out of a mode, and Entry / SL / TP1 / TP2 lines for the currently clickable signal
+only.
+
+## Settings
+
+| Input | Default | |
+|---|---|---|
+| NRTR ATR period | 14 | |
+| NRTR ATR multiplier | 2.0 | NRTR flips when a close moves this many ATRs against the trend extreme |
+| EMA period | 200 | on 15M |
+| Structure lookback | 3 | bars each side of a swing; a swing is confirmed only after that many bars close after it |
+| SL buffer | 0.10 | × 5M ATR beyond the swing |
+| TP1 / TP2 | 1.0 / 2.0 | R multiples |
+| Signal valid for | 6 | closed 5M bars |
+| History used | 10 | days |
+| Panel size / position / X / Y | 1.0 / top-left / 12 / 24 | |
+| Draw chart objects | on | |
+
+## Why it cannot repaint
+
+* The terminal's bar 0 (the forming candle) is never read, on 15M or on 5M.
+* A 5M bar only sees the 15M bars that had **closed** when that 5M bar closed.
+* A swing is used only after `Structure lookback` more bars have closed after it. The
+  HH/HL label is drawn at the swing, but it **appears** that many bars later and never
+  moves. That delay is the cost of not guessing. Until two highs and two lows are
+  confirmed, the structure reads **NOT CONFIRMED**.
+* The history window starts at a calendar day, so reopening MT5 on the same day recomputes
+  exactly the same bars and shows exactly the same state.
+
+## Honest limitations
+
+* This NRTR is the ATR-scaled variant on closing prices. Commercial NRTR indicators differ
+  in details, so flips will not match another NRTR bar for bar.
+* If MT5 is restarted on a *later* day, the window starts one day later, so EMA200 and NRTR
+  are seeded again. In the tests the last four days were still identical bar for bar, but
+  that depends on the data and is not guaranteed.
+* The money row trusts your broker's `SYMBOL_TRADE_TICK_VALUE`.
+* The panel uses coloured banners and the ● ▲ ▼ symbols rather than emoji, because MT5 chart
+  fonts draw emoji as empty boxes.
+
+Tests and exact results: see [TESTING.md](TESTING.md).
