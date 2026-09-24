@@ -675,6 +675,23 @@ int main()
    }
    end("19");
 
+   begin("20 live box: NbPlanSide equals the trigger's own levels");
+   {
+      Crafted k = craft(30, 1, 0, 20);
+      TrigOut t = runTrig(k, true, PG);
+      double e1, sl, t1, t2, rk;
+      bool ok = NbPlanSide(k.c, k.atr, k.piv, k.np, 20, 1, PG, e1, sl, t1, t2, rk);
+      CHECK(ok && t.nSig == 1 && near(e1, t.sigs[0].entry) && near(sl, t.sigs[0].sl) && near(t1, t.sigs[0].tp1) && near(t2, t.sigs[0].tp2),
+            "BUY plan at the trigger bar = the signal's levels");
+      CHECK(!NbPlanSide(k.c, k.atr, k.piv, k.np, 20, -1, PG, e1, sl, t1, t2, rk), "no confirmed swing high above -> SELL plan unavailable");
+      CHECK(!NbPlanSide(k.c, k.atr, k.piv, k.np, 5, 1, PG, e1, sl, t1, t2, rk), "before the swing low is confirmed -> no BUY plan");
+      Crafted m2 = craft(30, -1, 0, 20);
+      TrigOut u2 = runTrig(m2, true, PG);
+      ok = NbPlanSide(m2.c, m2.atr, m2.piv, m2.np, 20, -1, PG, e1, sl, t1, t2, rk);
+      CHECK(ok && u2.nSig == 1 && near(sl, u2.sigs[0].sl) && t2 < t1 && t1 < e1 && e1 < sl, "SELL plan = signal levels, order TP2 < TP1 < Entry < SL");
+   }
+   end("20");
+
    begin("xx building blocks: NRTR, EMA, alignment, reason text");
    {
       std::vector<double> c = {10, 11, 12, 13, 14, 15, 13.9, 16, 12};

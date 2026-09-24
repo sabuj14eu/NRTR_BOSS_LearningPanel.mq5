@@ -124,6 +124,12 @@ inline datetime iTime(const string &, ENUM_TIMEFRAMES tf, int shift)
    if(shift < 0 || shift >= v) return 0;
    return simSeries(tf)[(size_t)(v - 1 - shift)].time;
 }
+inline double iOpen(const string &, ENUM_TIMEFRAMES tf, int shift)
+{
+   int v = simVisible(tf);
+   if(shift < 0 || shift >= v) return 0.0;
+   return simSeries(tf)[(size_t)(v - 1 - shift)].open;
+}
 inline int CopyRates(const string &, ENUM_TIMEFRAMES tf, int start, int count, std::vector<MqlRates> &out)
 {
    if(SIM.copyFail) return -1;

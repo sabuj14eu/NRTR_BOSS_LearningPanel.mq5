@@ -30,6 +30,16 @@ the build environment. The indicator was therefore verified like this:
 how it looks on a real chart. **Press F7 in MetaEditor and do the two manual checks below
 before relying on it.** If F7 reports anything, send me the exact message.
 
+## Results (2026-09-24, v1.03)
+
+```
+SAFETY SCAN: PASS · FULL FILE g++ -Werror: 0 errors, 0 warnings
+ENGINE TESTS:    135 checks passed, 0 failed   (new: 20 NbPlanSide = trigger levels)
+INDICATOR TESTS: 114 checks passed, 0 failed   (I9: one arrow per NRTR flip, preview marker + row,
+                                                live box = engine plan, gates; I8: no preview when stale)
+MetaEditor F7:   v1.02 compiled and ran in the user's MT5 (screenshot 2026-09-24); v1.03 NOT YET
+```
+
 ## Results (2026-09-24, v1.02 display layer)
 
 ```

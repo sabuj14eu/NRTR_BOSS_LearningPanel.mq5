@@ -415,6 +415,7 @@ int main()
       start();
       CHECK(has(txt("state"), "WAIT") && has(txt("r1"), "DATA STALE"), "stale feed -> WAIT / DATA STALE");
       CHECK(has(txt("pw"), "CANNOT JUDGE"), "stale feed -> position advice withheld");
+      CHECK(countPrefix("NBLP_V_") == 0 && txt("vpv") == "---", "stale feed -> no preview marker, no preview text");
       OnDeinit(0);
 
       load(gold, "XAUUSD", "XAU", 2, 0.01);
@@ -453,7 +454,25 @@ int main()
          if(u1 && d1) both++;
          if(u1 && up[i] == SIM.m5[i].low) upAtLow++;
       }
-      CHECK(arrows > (int)v / 2 && both == 0, "closed candles carry exactly one arrow once the NRTR is ready");
+      // v1.03: arrows only where the 5M NRTR direction changes (chart is M5)
+      int flips = 0;
+      {
+         int prev = 0;
+         for(int k = 0; k < g_s5.n; k++) { if(g_s5.dir[(size_t)k] != 0 && g_s5.dir[(size_t)k] != prev) { flips++; prev = g_s5.dir[(size_t)k]; } }
+      }
+      CHECK(arrows > 0 && arrows == flips && both == 0, "one arrow per NRTR flip candle, none elsewhere");
+      CHECK(countPrefix("NBLP_V_") == 1 && has(txt("vpv"), "IF IT CLOSED NOW"), "preview marker + row on the forming candle");
+      // live box: both sides from NbPlanSide
+      {
+         double e, sl, t1, t2, rk;
+         bool okB = NbPlanSide(g_s5.c, g_s5.atr, g_piv5, g_s5.np, g_s5.n - 1, 1, g_P, e, sl, t1, t2, rk);
+         CHECK(okB && txt("lbB0") == DoubleToString(e, 2) && txt("lbB1") == DoubleToString(sl, 2), "live box BUY column = engine plan");
+         CHECK(okB && sl < e && e < t1 && t1 < t2, "live box BUY plan respects the level order");
+         bool okS = NbPlanSide(g_s5.c, g_s5.atr, g_piv5, g_s5.np, g_s5.n - 1, -1, g_P, e, sl, t1, t2, rk);
+         CHECK(!okS || (t2 < t1 && t1 < e && e < sl), "live box SELL plan respects the level order");
+         CHECK(has(txt("lbGb"), "READY"), "BUY gate READY while the banner says CLICK BUY");
+         CHECK(!has(txt("lbGs"), "READY"), "SELL gate is not READY at the same time");
+      }
       CHECK(upAtLow > 0, "up arrow anchored at the candle low");
       CHECK(countPrefix("NBLP_C_Z_") > 0, "zigzag segments drawn between confirmed 15M swings");
       CHECK(has(txt("hg"), "HOW TO READ"), "legend section present");
@@ -481,6 +500,9 @@ int main()
       SIM.now = day + 16 * 3600 + 29 * 60;
       OnTimer();
       CHECK(has(txt("vs"), "in 01:00"), "countdown before the open");
+      SIM.now = day + 10 * 3600;
+      OnTimer();
+      CHECK(has(txt("vs"), "in 6:30:00"), "countdown in h:mm:ss when far away");
       OnDeinit(0);
       load(gold, "XAUUSD", "XAU", 2, 0.01);
       long long sat = day;

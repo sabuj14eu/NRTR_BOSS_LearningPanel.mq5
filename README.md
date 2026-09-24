@@ -121,6 +121,20 @@ dotted), confirmed **HH / HL / LH / LL** labels, one **▲ BUY / ▼ SELL** mark
 drops out of a mode, and Entry / SL / TP1 / TP2 lines for the currently clickable signal
 only.
 
+## v1.03 (after the first MT5 screenshot)
+
+* **Arrows only where the NRTR flips.** One big arrow on the closed candle that changed the NRTR
+  direction. `Also a small arrow on every closed candle` is an input, off by default.
+* **LIVE CANDLE (PREVIEW).** A yellow `▲ ?` / `▼ ?` on the forming 5M candle and a panel line:
+  *IF IT CLOSED NOW: 5M NRTR FLIPS BEARISH / STAYS BULLISH*, with the exact stop price it would
+  have to close beyond. It is recomputed every second from the live price, never stored, and no
+  decision reads it. The real arrow and the real state arrive at the close. This is how you
+  "see it before" without repainting history.
+* **LIVE BOX.** BUY and SELL columns side by side: ENTRY, STOP LOSS, TP1, TP2, SWING TP, LOTS,
+  and a GATE line per side (*READY - CLICK*, or the one reason it is not). Both columns come from
+  the same engine function the signal uses, so the numbers can never disagree with the banner.
+* Countdown in h:mm:ss, wider panel, shorter legend lines, default panel size 0.9.
+
 ## v1.02 display layer (no new decision rule, still read-only)
 
 * **Arrow on every closed candle**: the NRTR direction of the chart's timeframe class (5M NRTR on

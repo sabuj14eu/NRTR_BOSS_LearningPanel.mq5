@@ -49,12 +49,17 @@
 //|  * NEW YORK OPEN: one MT5 pop-up + sound at the broker time you  |
 //|    set, and a WAIT note for the first N minutes. Local only.     |
 //|  * ZigZag: confirmed 15M swings are joined by a line.            |
+//|  v1.03: arrows only on NRTR FLIP candles (every-candle = option),|
+//|    a yellow PREVIEW on the forming candle (what would happen if  |
+//|    it closed now - never stored, never a decision input), and a  |
+//|    two-column LIVE BOX (BUY | SELL plan + GATE) from the same    |
+//|    engine functions. Still display only, still read-only.        |
 //|  * LOTS FOR x% RISK: balance (read only) x risk% / money per lot |
 //|    at the SL, rounded DOWN to the volume step. A suggestion you  |
 //|    type yourself; the panel never sizes or sends anything.       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - learning tool"
-#property version     "1.02"
+#property version     "1.03"
 #property description "Gold/Silver NRTR BOSS learning panel: 15M direction, 5M timing. CUSTOM ATR-NRTR."
 #property description "Visual decision support only - never places, modifies or closes orders."
 #property indicator_chart_window
@@ -670,6 +675,35 @@ int NbFindStopSwing(const NbPivot &piv[], int np, int s, int dir, double entry, 
    return -1;
 }
 
+//--- hypothetical plan for ONE side at closed 5M bar s, from the same rules
+//    the trigger uses (entry = close, SL = confirmed protective swing -/+
+//    buffer, TP = R multiples). Display only: the GATE decides, not this.
+bool NbPlanSide(const double &c[], const double &atr5[], const NbPivot &piv[], int np, int s, int dir,
+                const NbParams &P, double &entry, double &sl, double &tp1, double &tp2, double &risk)
+{
+   entry = 0.0;
+   sl = 0.0;
+   tp1 = 0.0;
+   tp2 = 0.0;
+   risk = 0.0;
+   if(s < 0 || dir == 0 || atr5[s] <= 0.0)
+      return false;
+   double swing = 0.0;
+   int sp = NbFindStopSwing(piv, np, s, dir, c[s], NB_SL_SEARCH_BARS, swing);
+   if(sp < 0)
+      return false;
+   entry = c[s];
+   double buf = P.slBufAtr * atr5[s];
+   sl = (dir > 0) ? NbRoundTick(swing - buf, P.tick, P.digits, -1) : NbRoundTick(swing + buf, P.tick, P.digits, 1);
+   risk = NormalizeDouble(MathAbs(entry - sl), P.digits);
+   double minRisk = (P.tick > 0.0) ? P.tick * 0.5 : 0.0;
+   if(risk <= minRisk || risk <= 0.0)
+      return false;
+   tp1 = NbRoundTick(entry + dir * P.tp1R * risk, P.tick, P.digits, 0);
+   tp2 = NbRoundTick(entry + dir * P.tp2R * risk, P.tick, P.digits, 0);
+   return true;
+}
+
 //--- 5M trigger pass. An "episode" is a stretch where the 15M mode and the
 //    5M NRTR point the same way. Inside an episode the FIRST closed candle
 //    in that direction (with a valid structural stop) is the learning signal;
@@ -1143,12 +1177,14 @@ input bool           InpNyAlert         = true;        // Alert + sound at NY op
 input string         InpNyOpenTime      = "16:30";     // NY 09:30 in your BROKER's clock (HH:MM)
 input int            InpNyQuietMinutes  = 15;          // Show WAIT for this many minutes after the open
 input group "Display"
-input double         InpPanelScale      = 1.0;         // Panel size (0.7 - 1.6)
+input double         InpPanelScale      = 0.9;         // Panel size (0.7 - 1.6)
 input ENUM_NB_CORNER InpPanelCorner     = NB_TOP_LEFT; // Panel position
 input int            InpPanelX          = 12;          // Panel X offset (px)
 input int            InpPanelY          = 24;          // Panel Y offset (px)
 input bool           InpDrawChart       = true;        // Draw EMA/NRTR/structure/markers/levels
-input bool           InpCandleArrows    = true;        // Up / down arrow on every closed candle
+input bool           InpCandleArrows    = true;        // Arrow on the candle where the NRTR flips
+input bool           InpArrowEveryBar   = false;       // Also a small arrow on every closed candle
+input bool           InpPreview         = true;        // Yellow PREVIEW on the forming candle (not a signal)
 input bool           InpBlink           = true;        // Blink the CLICK BUY / SELL banner
 
 // plot buffers
@@ -1226,6 +1262,8 @@ void   NbLabel(string id, int x, int y, string txt, color clr, int size, string 
 string NbPx(double v);
 color  NbDirColor(int d);
 string NbMmSs(long secs);
+string NbHms(long secs);
+void   NbPreview(bool ok, int i5, int d5, double bid, string &line1, string &line2, color &clr);
 void   NbDrawPanel();
 void   NbRow(string kid, string vid, int kx, int vx, int y, string key, string val, color vc, color kc, int fs);
 
@@ -1446,11 +1484,11 @@ string NbNyText(datetime now)
    long sod = (long)now - day * 86400;
    long d = sod - g_nyOpenSec;
    if(d < 0)
-      return "NY OPEN " + InpNyOpenTime + " in " + NbMmSs(-d);
+      return "NY OPEN " + InpNyOpenTime + " in " + NbHms(-d);
    if(d < (long)InpNyQuietMinutes * 60)
       return "NY OPEN - FIRST " + IntegerToString(InpNyQuietMinutes) + " MIN: WAIT, LET IT PRINT";
    if(d < 6 * 3600)
-      return "NEW YORK SESSION (" + NbMmSs(d / 60) + " h:m since open)";
+      return "NEW YORK SESSION - " + NbHms(d) + " since the open";
    return "OUTSIDE NY OPEN WINDOW";
 }
 
@@ -1660,6 +1698,7 @@ void NbFillBuffers(int rates_total, const datetime &time[], const double &high[]
    g_bufDirty = false;
    int chartSec = PeriodSeconds(_Period);
    bool use5 = (chartSec <= 300);
+   int prevAd = 0;
    int n15 = g_ready ? g_s15.n : 0;
    int n5 = g_ready ? g_s5.n : 0;
    int p15 = -1;
@@ -1711,6 +1750,10 @@ void NbFillBuffers(int rates_total, const datetime &time[], const double &high[]
       else
          ad = (p15 >= 0) ? g_s15.dir[p15] : 0;
       if(ad == 0)
+         continue;
+      bool flipHere = (ad != prevAd);
+      prevAd = ad;
+      if(!flipHere && !InpArrowEveryBar)
          continue;
       int bossHere = (p15 >= 0) ? g_s15.mode[p15] : NB_WAIT;
       double clrIdx = (bossHere == ad) ? 0.0 : 1.0;
@@ -1935,10 +1978,64 @@ string NbMmSs(long secs)
    return IntegerToString(secs / 60, 2, '0') + ":" + IntegerToString(secs % 60, 2, '0');
 }
 
+//--- h:mm:ss when an hour or more, else mm:ss
+string NbHms(long secs)
+{
+   if(secs < 0)
+      secs = 0;
+   if(secs < 3600)
+      return NbMmSs(secs);
+   return IntegerToString(secs / 3600) + ":" + NbMmSs(secs % 3600);
+}
+
+//--- PREVIEW of the forming 5M candle: what the LAST CLOSED NRTR stop says
+//    about the current price. Text + a yellow marker only. It is recomputed
+//    every second from the live bid, is never stored, and no decision reads
+//    it - the real arrow and the real state arrive at the close.
+void NbPreview(bool ok, int i5, int d5, double bid, string &line1, string &line2, color &clr)
+{
+   line1 = "---";
+   line2 = " ";
+   clr = NB_RGB(95, 105, 120);
+   ObjectsDeleteAll(0, NB_PFX + "V_");
+   if(!ok || !g_fresh || d5 == 0 || bid <= 0.0 || !InpPreview)
+      return;
+   double stop5 = g_s5.stop[i5];
+   datetime t0 = iTime(g_sym, PERIOD_M5, 0);
+   double o0 = iOpen(g_sym, PERIOD_M5, 0);
+   string body = (bid > o0) ? "bullish body" : ((bid < o0) ? "bearish body" : "flat");
+   color cUp = NB_RGB(46, 204, 113);
+   color cDn = NB_RGB(231, 76, 60);
+   color cPv = NB_RGB(241, 196, 15);
+   bool wouldFlip = (d5 > 0) ? (bid < stop5) : (bid > stop5);
+   if(wouldFlip)
+   {
+      string flipTo = (d5 > 0) ? "BEARISH" : "BULLISH";
+      string side = (d5 > 0) ? "below" : "above";
+      line1 = "IF IT CLOSED NOW: 5M NRTR FLIPS " + flipTo + "  (" + body + ")";
+      line2 = "price " + NbPx(bid) + " is " + side + " the 5M stop " + NbPx(stop5) + " - wait for the close";
+      clr = cPv;
+   }
+   else
+   {
+      line1 = "IF IT CLOSED NOW: 5M NRTR STAYS " + NbDirText(d5) + "  (" + body + ")";
+      string side = (d5 > 0) ? "below " : "above ";
+      line2 = "flips only on a close " + side + NbPx(stop5);
+      clr = (d5 > 0) ? cUp : cDn;
+   }
+   if(t0 > 0)
+   {
+      string nm = NB_PFX + "V_ARROW";
+      int dirPv = wouldFlip ? -d5 : d5;
+      NbText(nm, t0, bid, (dirPv > 0 ? NbSymUp() : NbSymDown()) + " ?", cPv, 10, dirPv > 0 ? ANCHOR_UPPER : ANCHOR_LOWER,
+             "PREVIEW of the forming 5M candle - not a signal. " + line1);
+   }
+}
+
 void NbDrawPanel()
 {
    double sc = MathMax(0.7, MathMin(1.6, InpPanelScale));
-   int W = (int)MathRound(372 * sc);
+   int W = (int)MathRound(430 * sc);
    int rh = (int)MathRound(17 * sc);
    int pad = (int)MathRound(12 * sc);
    int fs = (int)MathRound(9 * sc);
@@ -1948,7 +2045,7 @@ void NbDrawPanel()
    int kx = pad;
    int vx = pad + (int)MathRound(150 * sc);
    int bannerH = (int)MathRound(40 * sc);
-   int rows = 42;
+   int rows = 53;
    int H = pad * 2 + bannerH + rows * rh;
 
    int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0);
@@ -2138,6 +2235,14 @@ void NbDrawPanel()
    }
    NbRow("k9", "v9", ox + kx, ox + vx, y, "5M CONFIRM", conf, confC, cKey, fs);
    y += rh;
+   string pv1 = "";
+   string pv2 = "";
+   color pvC = cDim;
+   NbPreview(ok, i5, d5, bid, pv1, pv2, pvC);
+   NbRow("kpv", "vpv", ox + kx, ox + vx, y, "LIVE CANDLE (PREVIEW)", pv1, pvC, cKey, fs);
+   y += rh;
+   NbLabel("vpv2", ox + vx, y, pv2, cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
 
    // learning levels
    NbLabel("hl", ox + kx, y + (int)MathRound(3 * sc), "LEARNING LEVELS  -  NO ORDER IS SENT", cSec, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
@@ -2211,6 +2316,96 @@ void NbDrawPanel()
    NbRow("k21", "v21", ox + kx, ox + vx, y, "BALANCE / EQUITY", DoubleToString(g_balance, 2) + " / " + DoubleToString(g_equity, 2) + " " + g_accCcy, cVal, cKey, fs);
    y += rh;
    NbRow("k22", "v22", ox + kx, ox + vx, y, "LOTS FOR " + DoubleToString(InpRiskPercent, 1) + "% RISK", vL, vLc, cKey, fs);
+   y += rh;
+
+   // LIVE BOX: both sides from the same engine rules; the GATE decides
+   NbLabel("hb", ox + kx, y + (int)MathRound(3 * sc), "LIVE BOX  -  BOTH SIDES FROM THE SAME RULES  -  THE GATE DECIDES", cSec, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
+   y += rh + (int)MathRound(3 * sc);
+   int cxB = ox + vx;
+   int cxS = ox + vx + (int)MathRound(135 * sc);
+   NbLabel("lbHb", cxB, y, NbSymUp() + " BUY", cUp, fs, "Arial Black", ANCHOR_LEFT_UPPER);
+   NbLabel("lbHs", cxS, y, NbSymDown() + " SELL", cDn, fs, "Arial Black", ANCHOR_LEFT_UPPER);
+   y += rh;
+   double pe[2], ps[2], p1[2], p2[2], pr[2];
+   bool pok[2];
+   for(int q = 0; q < 2; q++)
+   {
+      int sd = (q == 0) ? 1 : -1;
+      pok[q] = ok && NbPlanSide(g_s5.c, g_s5.atr, g_piv5, g_s5.np, i5, sd, g_P, pe[q], ps[q], p1[q], p2[q], pr[q]);
+      if(!pok[q])
+      {
+         pe[q] = 0.0; ps[q] = 0.0; p1[q] = 0.0; p2[q] = 0.0; pr[q] = 0.0;
+      }
+   }
+   string lbKeys[6] = {"ENTRY", "STOP LOSS", "TP1", "TP2", "SWING TP", "LOTS " + DoubleToString(InpRiskPercent, 1) + "%"};
+   for(int rI = 0; rI < 6; rI++)
+   {
+      string vb = "---";
+      string vs2 = "---";
+      for(int q = 0; q < 2; q++)
+      {
+         if(!pok[q])
+            continue;
+         int sd = (q == 0) ? 1 : -1;
+         string txt = "---";
+         if(rI == 0) txt = NbPx(pe[q]);
+         if(rI == 1) txt = NbPx(ps[q]);
+         if(rI == 2) txt = NbPx(p1[q]);
+         if(rI == 3) txt = NbPx(p2[q]);
+         if(rI == 4) txt = (g_swingDist > 0.0) ? NbPx(NbRoundTick(pe[q] + sd * g_swingDist, g_P.tick, g_P.digits, 0)) : "---";
+         if(rI == 5)
+         {
+            double atRisk = 0.0;
+            double lots = (g_tick > 0.0 && g_tickValue > 0.0)
+                          ? NbLotsForRisk(g_balance, InpRiskPercent, pr[q], g_tick, g_tickValue, g_volMin, g_volStep, g_volMax, atRisk)
+                          : 0.0;
+            txt = (lots > 0.0) ? (DoubleToString(lots, 2) + "  (" + DoubleToString(atRisk, 0) + " " + g_accCcy + ")") : "SKIP";
+         }
+         if(q == 0) vb = txt; else vs2 = txt;
+      }
+      string kid = "lbK" + IntegerToString(rI);
+      NbLabel(kid, ox + kx, y, lbKeys[rI], cKey, fs, "Arial", ANCHOR_LEFT_UPPER);
+      NbLabel("lbB" + IntegerToString(rI), cxB, y, vb, pok[0] ? cVal : cDim, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
+      NbLabel("lbS" + IntegerToString(rI), cxS, y, vs2, pok[1] ? cVal : cDim, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
+      y += rh;
+   }
+   // GATE line per side
+   string gB = "---";
+   string gS = "---";
+   color gBc = cDim;
+   color gSc = cDim;
+   if(ok)
+   {
+      for(int q = 0; q < 2; q++)
+      {
+         int sd = (q == 0) ? 1 : -1;
+         string g = "";
+         color gc = cWait;
+         if(g_final == sd)
+         {
+            g = "READY - CLICK";
+            gc = (sd > 0) ? cUp : cDn;
+         }
+         else if(!g_fresh)
+            g = "DATA STALE";
+         else if(m15 == -sd)
+            g = "15M BOSS " + NbModeText(m15);
+         else if(m15 == NB_WAIT)
+            g = "15M: " + NbReasonAt(g_s15.mr[i15], 0);
+         else if(d5 != sd)
+            g = "5M NRTR AGAINST";
+         else if(!pok[q])
+            g = "NO CONFIRMED 5M SWING FOR SL";
+         else
+            g = NbReasonAt(g_s5.reasons[i5], 0);
+         if(g == "")
+            g = "WAIT";
+         if(q == 0) { gB = g; gBc = gc; } else { gS = g; gSc = gc; }
+      }
+   }
+   NbLabel("lbKg", ox + kx, y, "GATE", cKey, fs, "Arial", ANCHOR_LEFT_UPPER);
+   NbLabel("lbGb", cxB, y, gB, gBc, fsH, "Arial Bold", ANCHOR_LEFT_UPPER);
+   NbLabel("lbGs", cxS, y, gS, gSc, fsH, "Arial Bold", ANCHOR_LEFT_UPPER);
    y += rh;
 
    // pending-order REFERENCE prices (nothing is sent)
@@ -2296,13 +2491,13 @@ void NbDrawPanel()
    // how to read the chart (the three tools, in one line each)
    NbLabel("hg", ox + kx, y + (int)MathRound(3 * sc), "HOW TO READ THE CHART", cSec, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
    y += rh + (int)MathRound(3 * sc);
-   NbLabel("g1", ox + kx, y, "NRTR CHANNEL: thick line = trailing stop. Green below price = BULLISH, red above = BEARISH.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
+   NbLabel("g1", ox + kx, y, "NRTR CHANNEL: thick stop line. Green under price = BULLISH, red over = BEARISH.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
    y += rh;
-   NbLabel("g2", ox + kx, y, "ZIGZAG (blue): confirmed swings. HH + HL = up structure, LH + LL = down. Labels appear " + IntegerToString(InpSwingStrength) + " bars late, never move.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
+   NbLabel("g2", ox + kx, y, "ZIGZAG (blue): confirmed swings. HH+HL = up, LH+LL = down. Shown " + IntegerToString(InpSwingStrength) + " bars late, never moves.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
    y += rh;
-   NbLabel("g3", ox + kx, y, "EMA200 (blue line): trend filter. Close above = BUY side only, below = SELL side only.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
+   NbLabel("g3", ox + kx, y, "EMA200 (blue line): filter. Close above = BUY side only, below = SELL side only.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
    y += rh;
-   NbLabel("g4", ox + kx, y, "ARROWS: every closed candle. Bright = with the 15M boss, dim = against it. Forming candle has none.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
+   NbLabel("g4", ox + kx, y, "ARROW = NRTR flip on a CLOSED candle (bright = with 15M boss). Yellow ? = preview only.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
    y += rh + (int)MathRound(4 * sc);
 
    NbLabel("f1", ox + kx, y, "Learning tool. Aligned conditions, not a profit promise.", cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
