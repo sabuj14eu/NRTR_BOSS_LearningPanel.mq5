@@ -253,31 +253,51 @@ int main()
    }
    end("08");
 
-   begin("09 BUY position + 15M reversal -> EXIT / PROTECT");
+   begin("09 BUY position: EXIT / PROTECT judged on the FULL 15M BOSS mode");
    {
       int why = 0;
-      CHECK(NbExitAdvice(1, 1, -1, why) == NB_ADV_EXIT && why == NB_WHY_INVALIDATED, "buy opened in bull, 15M now bear");
-      CHECK(NbExitAdvice(1, -1, -1, why) == NB_ADV_EXIT && why == NB_WHY_AGAINST, "buy opened against the boss");
-      CHECK(NbExitAdvice(1, 1, 1, why) == NB_ADV_HOLD && why == NB_WHY_INTACT, "regime intact -> hold");
-      CHECK(NbExitAdvice(1, 1, 0, why) == NB_ADV_UNKNOWN, "15M unknown -> cannot judge (no guess)");
-      CHECK(NbExitAdvice(0, 0, 1, why) == NB_ADV_NONE, "no position");
+      // the six-row truth table from the audit
+      CHECK(NbExitAdvice(1, NB_BUY, NB_BUY, why) == NB_ADV_HOLD && why == NB_WHY_INTACT, "BUY + BOSS BUY = HOLD");
+      CHECK(NbExitAdvice(1, NB_BUY, NB_SELL, why) == NB_ADV_EXIT && why == NB_WHY_INVALIDATED, "BUY + BOSS SELL = EXIT (invalidated)");
+      CHECK(NbExitAdvice(1, NB_WAIT, NB_SELL, why) == NB_ADV_EXIT && why == NB_WHY_AGAINST, "BUY opened without the boss, BOSS SELL = EXIT (against)");
+      CHECK(NbExitAdvice(1, NB_SELL, NB_SELL, why) == NB_ADV_EXIT && why == NB_WHY_AGAINST, "BUY opened against the boss = EXIT (against)");
+      CHECK(NbExitAdvice(1, NB_BUY, NB_WAIT, why) == NB_ADV_UNKNOWN && why == NB_WHY_BOSS_WAIT, "BUY + BOSS WAIT = UNKNOWN / PROTECT, not EXIT");
+      CHECK(NbExitAdvice(0, 0, NB_BUY, why) == NB_ADV_NONE, "no position");
       int r = 0;
       CHECK(NbFinalState(NB_BUY, 0, true, NB_ADV_EXIT, r) == NB_EXIT, "EXIT outranks a fresh CLICK signal");
-      // direction at open time uses only 15M bars CLOSED by then
+      CHECK(NbFinalState(NB_WAIT, NB_R_STRUCT_MIXED, true, NB_ADV_UNKNOWN, r) == NB_WAIT && r == NB_R_STRUCT_MIXED,
+            "UNKNOWN / PROTECT never becomes the EXIT banner");
+      // a single 15M NRTR flip against a BUY, with EMA200 and structure still
+      // bullish, moves the boss to WAIT - and WAIT is not EXIT
+      int mr = 0;
+      int modeAfterFlip = NbBossDecision(-1, 105.0, 100.0, NB_ST_BULL, mr);
+      CHECK(modeAfterFlip == NB_WAIT && (mr & NB_R_NRTR_CONFLICT) != 0, "NRTR flip alone -> boss WAIT (NRTR CONFLICT)");
+      CHECK(NbExitAdvice(1, NB_BUY, modeAfterFlip, why) == NB_ADV_UNKNOWN && why == NB_WHY_BOSS_WAIT,
+            "NRTR flip alone can never generate EXIT");
+      // full boss flip: NRTR bear + close below EMA + LH/LL structure -> EXIT
+      int modeFull = NbBossDecision(-1, 95.0, 100.0, NB_ST_BEAR, mr);
+      CHECK(modeFull == NB_SELL && NbExitAdvice(1, NB_BUY, modeFull, why) == NB_ADV_EXIT, "complete boss flip -> EXIT");
+      // mode at open time uses only 15M bars CLOSED by then
       std::vector<datetime> t = {0, 900, 1800, 2700};
-      std::vector<int> d = {1, 1, -1, -1};
-      CHECK(NbDirAtTime(t, d, 4, 900, 1800) == 1, "at 00:30 only bars closed by 00:30 count");
-      CHECK(NbDirAtTime(t, d, 4, 900, 2699) == 1, "bar 1800 not closed until 2700");
-      CHECK(NbDirAtTime(t, d, 4, 900, 2700) == -1, "bar 1800 closed at 2700");
-      CHECK(NbDirAtTime(t, d, 4, 900, 100) == 0, "before any closed bar -> unknown");
+      std::vector<int> d = {NB_BUY, NB_BUY, NB_SELL, NB_SELL};
+      CHECK(NbKnownAtTime(t, d, 4, 900, 1800) == NB_BUY, "at 00:30 only bars closed by 00:30 count");
+      CHECK(NbKnownAtTime(t, d, 4, 900, 2699) == NB_BUY, "bar 1800 not closed until 2700");
+      CHECK(NbKnownAtTime(t, d, 4, 900, 2700) == NB_SELL, "bar 1800 closed at 2700");
+      CHECK(NbKnownAtTime(t, d, 4, 900, 100) == 0, "before any closed bar -> unknown");
    }
    end("09");
 
-   begin("10 SELL position + 15M reversal -> EXIT / PROTECT");
+   begin("10 SELL position: EXIT / PROTECT judged on the FULL 15M BOSS mode");
    {
       int why = 0;
-      CHECK(NbExitAdvice(-1, -1, 1, why) == NB_ADV_EXIT && why == NB_WHY_INVALIDATED, "sell opened in bear, 15M now bull");
-      CHECK(NbExitAdvice(-1, -1, -1, why) == NB_ADV_HOLD, "regime intact -> hold");
+      CHECK(NbExitAdvice(-1, NB_SELL, NB_SELL, why) == NB_ADV_HOLD && why == NB_WHY_INTACT, "SELL + BOSS SELL = HOLD");
+      CHECK(NbExitAdvice(-1, NB_SELL, NB_BUY, why) == NB_ADV_EXIT && why == NB_WHY_INVALIDATED, "SELL + BOSS BUY = EXIT (invalidated)");
+      CHECK(NbExitAdvice(-1, NB_BUY, NB_BUY, why) == NB_ADV_EXIT && why == NB_WHY_AGAINST, "SELL opened against the boss = EXIT (against)");
+      CHECK(NbExitAdvice(-1, NB_SELL, NB_WAIT, why) == NB_ADV_UNKNOWN && why == NB_WHY_BOSS_WAIT, "SELL + BOSS WAIT = UNKNOWN / PROTECT, not EXIT");
+      int mr = 0;
+      int modeAfterFlip = NbBossDecision(1, 95.0, 100.0, NB_ST_BEAR, mr);
+      CHECK(modeAfterFlip == NB_WAIT && NbExitAdvice(-1, NB_SELL, modeAfterFlip, why) == NB_ADV_UNKNOWN,
+            "NRTR flip alone against a SELL -> UNKNOWN / PROTECT, never EXIT");
    }
    end("10");
 
@@ -459,6 +479,251 @@ int main()
       CHECK(!NbIsFresh(0, 300, 900, 900, 1000), "no bar -> stale");
    }
    end("15");
+
+   begin("16 input contract + level invariants + pivot confirmation");
+   {
+      NbParams bad = PG;
+      CHECK(NbParamsValid(PG), "defaults (TP1 1R, TP2 2R) are valid");
+      bad.tp2R = bad.tp1R;
+      CHECK(!NbParamsValid(bad), "TP2 == TP1 rejected");
+      bad.tp2R = bad.tp1R - 0.1;
+      CHECK(!NbParamsValid(bad), "TP2 < TP1 rejected");
+      bad = PG;
+      bad.tp2R = bad.tp1R + 0.01;
+      CHECK(NbParamsValid(bad), "TP2 barely above TP1 accepted");
+      bad = PG;
+      bad.tp1R = 0.0;
+      CHECK(!NbParamsValid(bad), "TP1 <= 0 rejected");
+      // every learning signal in both fixtures respects the level order
+      struct Fx { uint64_t seed; double price, tick, vol; int digits; };
+      Fx fx[2] = {{7, 2400.0, 0.01, 1.2, 2}, {21, 30.0, 0.001, 0.015, 3}};
+      int total = 0;
+      bool okBuy = true, okSell = true, okStop = true, okTp = true;
+      for(int f = 0; f < 2; f++)
+      {
+         NbParams P = params(fx[f].tick, fx[f].digits);
+         std::vector<SBar> a = gen5m(fx[f].seed, 16 * 288, T0, fx[f].price, fx[f].tick, fx[f].vol);
+         std::vector<SBar> b = agg(a, 900);
+         Run r;
+         runAt(r, a, b, 0, (int)a.size() - 1, T0, P);
+         for(int k = 0; k < r.nSig; k++)
+         {
+            const NbSignal &g = r.sigs[(size_t)k];
+            total++;
+            if(g.dir > 0) okBuy = okBuy && g.sl < g.entry && g.entry < g.tp1 && g.tp1 < g.tp2;
+            else okSell = okSell && g.tp2 < g.tp1 && g.tp1 < g.entry && g.entry < g.sl;
+            okTp = okTp && near(g.tp2 - g.entry, 2.0 * (g.tp1 - g.entry), fx[f].tick * 0.51 + 1e-9);
+            // the SL swing was confirmed (idx + swing) at or before the signal bar
+            bool found = false;
+            for(size_t q = 0; q < r.p5.size(); q++)
+               if(r.p5[q].idx == g.swingIdx && r.p5[q].kind == -g.dir)
+               {
+                  found = true;
+                  okStop = okStop && r.p5[q].confirmIdx <= g.idx;
+               }
+            okStop = okStop && found;
+         }
+      }
+      std::printf("    %d signals checked across gold + silver fixtures\n", total);
+      CHECK(total > 20, "enough signals to mean something");
+      CHECK(okBuy, "BUY invariant: SL < Entry < TP1 < TP2 on every signal");
+      CHECK(okSell, "SELL invariant: TP2 < TP1 < Entry < SL on every signal");
+      CHECK(okTp, "TP2 = 2R and TP1 = 1R on every signal (to the tick)");
+      CHECK(okStop, "every SL swing was CONFIRMED at or before the signal bar");
+      // a swing that is confirmed only later is invisible to the stop search
+      std::vector<NbPivot> pv(1);
+      pv[0].idx = 10; pv[0].confirmIdx = 13; pv[0].kind = -1; pv[0].price = 90.0; pv[0].label = NB_L_HL;
+      double sw = 0.0;
+      CHECK(NbFindStopSwing(pv, 1, 12, 1, 100.0, 60, sw) < 0, "pivot not usable at bar 12 (confirms at 13)");
+      CHECK(NbFindStopSwing(pv, 1, 13, 1, 100.0, 60, sw) == 0 && near(sw, 90.0), "pivot usable from its confirmation bar");
+   }
+   end("16");
+
+   begin("17 same-candle rule: SL and TP1 touched in one candle -> SL (frozen)");
+   {
+      // BUY: signal at bar 20 (entry 100, SL 89.90, TP1 110.10). Bar 21 spans both.
+      Crafted k = craft(30, 1, 0, 20);
+      k.h[21] = 111.0;
+      k.l[21] = 89.0;
+      TrigOut t = runTrig(k, true, PG);
+      CHECK(t.nSig == 1 && t.sigs[0].idx == 20, "signal exists");
+      CHECK(t.sigs[0].status == NB_SIG_SL && t.sigs[0].statusIdx == 21, "BUY: both touched -> classified SL, on that bar");
+      CHECK(t.state[21] == NB_WAIT && (t.reasons[21] & NB_R_SIG_SL) != 0, "panel says SETUP HIT ITS SL");
+      // SELL mirror: entry 100, SL 110.10, TP1 89.90
+      Crafted m = craft(30, -1, 0, 20);
+      m.h[21] = 111.0;
+      m.l[21] = 89.0;
+      TrigOut u = runTrig(m, true, PG);
+      CHECK(u.nSig == 1 && u.sigs[0].status == NB_SIG_SL && u.sigs[0].statusIdx == 21, "SELL: both touched -> SL");
+      // TP1 alone (SL untouched) is still TP1, so the rule only bites on the tie
+      Crafted w = craft(30, 1, 0, 20);
+      w.h[21] = 111.0;
+      TrigOut v = runTrig(w, true, PG);
+      CHECK(v.nSig == 1 && v.sigs[0].status == NB_SIG_TP1, "TP1 alone -> TP1");
+      // the entry candle itself is never judged
+      Crafted z = craft(30, 1, 0, 20);
+      z.h[20] = 111.0;
+      z.l[20] = 89.0;
+      TrigOut y = runTrig(z, true, PG);
+      CHECK(y.nSig == 1 && y.state[21] == NB_BUY && y.sigs[0].status != NB_SIG_SL, "entry candle's own range does not judge the signal");
+   }
+   end("17");
+
+   begin("18 NRTR definition: CUSTOM ATR-NRTR vs classic percentage NRTR (Kopyrkin)");
+   {
+      // Reference: the classic Nick Rypock Trailing Reverse as published for
+      // MT4/MT5 (dynamic look-back on closes, percentage band K). If the panel
+      // reproduced "the" NRTR, these would agree bar for bar. They do not,
+      // which is why the panel is labelled CUSTOM ATR-NRTR.
+      auto classic = [](const std::vector<double> &c, int period, double kPct, std::vector<int> &dir,
+                        std::vector<double> &line) {
+         int n = (int)c.size();
+         dir.assign((size_t)n, 0);
+         line.assign((size_t)n, 0.0);
+         int trend = 0, dyn = 1;
+         double price = 0.0, value = 0.0;
+         for(int i = 0; i < n; i++)
+         {
+            if(trend == 0)
+            {
+               // seed the way the reference does: first bar sets an up-trend
+               trend = 1; price = c[(size_t)i]; value = price * (1.0 - kPct / 100.0); dyn = 1;
+            }
+            else if(trend > 0)
+            {
+               int from = i - dyn + 1; if(from < 0) from = 0;
+               price = c[(size_t)from];
+               for(int j = from; j <= i; j++) if(c[(size_t)j] > price) price = c[(size_t)j];
+               value = price * (1.0 - kPct / 100.0);
+               if(c[(size_t)i] < value) { trend = -1; price = c[(size_t)i]; value = price * (1.0 + kPct / 100.0); dyn = 1; }
+               else if(dyn < period) dyn++;
+            }
+            else
+            {
+               int from = i - dyn + 1; if(from < 0) from = 0;
+               price = c[(size_t)from];
+               for(int j = from; j <= i; j++) if(c[(size_t)j] < price) price = c[(size_t)j];
+               value = price * (1.0 + kPct / 100.0);
+               if(c[(size_t)i] > value) { trend = 1; price = c[(size_t)i]; value = price * (1.0 - kPct / 100.0); dyn = 1; }
+               else if(dyn < period) dyn++;
+            }
+            dir[(size_t)i] = trend;
+            line[(size_t)i] = value;
+         }
+      };
+      struct Fx { const char *name; uint64_t seed; double price, tick, vol; double kPct; };
+      // K chosen so the classic band is about 2 ATR on each fixture (fair comparison)
+      Fx fx[2] = {{"XAUUSD", 7, 2400.0, 0.01, 1.2, 0.20}, {"XAGUSD", 21, 30.0, 0.001, 0.015, 0.20}};
+      const int secs[2] = {900, 300};
+      const char *tfn[2] = {"M15", "M5"};
+      bool allIdentical = true;
+      for(int f = 0; f < 2; f++)
+      {
+         std::vector<SBar> a = gen5m(fx[f].seed, 16 * 288, T0, fx[f].price, fx[f].tick, fx[f].vol);
+         for(int tf = 0; tf < 2; tf++)
+         {
+            std::vector<SBar> v = (secs[tf] == 300) ? a : agg(a, secs[tf]);
+            int n = (int)v.size();
+            std::vector<double> h, l, c, atr, st, ex;
+            std::vector<int> d, fl;
+            for(const SBar &x : v) { h.push_back(x.h); l.push_back(x.l); c.push_back(x.c); }
+            NbCalcATR(h, l, c, n, 14, atr);
+            NbCalcNRTR(c, atr, n, 2.0, d, st, ex, fl);
+            std::vector<int> rd;
+            std::vector<double> rl;
+            classic(c, 40, fx[f].kPct, rd, rl);
+            int cmp = 0, dirDiff = 0, flipsA = 0, flipsB = 0, flipsSame = 0;
+            double lineDiff = 0.0;
+            for(int i = 200; i < n; i++)
+            {
+               cmp++;
+               if(d[(size_t)i] != rd[(size_t)i]) dirDiff++;
+               if(fl[(size_t)i] != 0) flipsA++;
+               bool rflip = rd[(size_t)i] != rd[(size_t)i - 1];
+               if(rflip) flipsB++;
+               if(fl[(size_t)i] != 0 && rflip) flipsSame++;
+               lineDiff += std::fabs(st[(size_t)i] - rl[(size_t)i]);
+            }
+            std::printf("    %s %s: %d bars | direction differs on %d (%.1f%%) | flips custom %d / classic %d, same bar %d | mean |line diff| %.4f\n",
+                        fx[f].name, tfn[tf], cmp, dirDiff, 100.0 * dirDiff / cmp, flipsA, flipsB, flipsSame, lineDiff / cmp);
+            if(dirDiff != 0 || flipsA != flipsSame || flipsB != flipsSame) allIdentical = false;
+         }
+      }
+      CHECK(!allIdentical, "the two algorithms are NOT identical -> the CUSTOM ATR-NRTR label is required");
+      // and the custom definition itself is frozen: highs/lows must not influence it
+      std::vector<double> c = {10, 11, 12, 13, 14, 15, 13.9, 16, 12};
+      std::vector<double> atr(9, 1.0);
+      std::vector<int> d1, f1;
+      std::vector<double> s1, e1;
+      NbCalcNRTR(c, atr, 9, 2.0, d1, s1, e1, f1);
+      CHECK(near(e1[5], 15.0) && near(s1[5], 13.0), "extreme = highest CLOSE since flip, stop = extreme - 2*ATR");
+      CHECK(d1[8] == -1 && near(e1[8], 12.0) && near(s1[8], 14.0), "flip on CLOSE beyond the stop; new extreme = that close");
+   }
+   end("18");
+
+   begin("19 lots for a fixed % risk (reference only)");
+   {
+      double m = 0.0;
+      // 10000 balance, 1% = 100 budget; SL 5.70 on gold, tick 0.01 worth 1.0 -> 570 per lot -> 0.17 lots
+      CHECK(near(NbLotsForRisk(10000, 1.0, 5.70, 0.01, 1.0, 0.01, 0.01, 100, m), 0.17) && near(m, 96.9), "rounded DOWN to the step");
+      CHECK(NbLotsForRisk(100, 1.0, 5.70, 0.01, 1.0, 0.01, 0.01, 100, m) == 0.0, "min lot risks more than 1% -> 0 (skip)");
+      CHECK(near(NbLotsForRisk(1e9, 1.0, 5.70, 0.01, 1.0, 0.01, 0.01, 100, m), 100.0), "clamped to volume max");
+      CHECK(NbLotsForRisk(10000, 1.0, 0.0, 0.01, 1.0, 0.01, 0.01, 100, m) == 0.0, "no risk distance -> no lots");
+      CHECK(NbLotsForRisk(10000, 0.0, 5.7, 0.01, 1.0, 0.01, 0.01, 100, m) == 0.0, "0% risk -> no lots");
+      // silver: 3 dp, tick 0.001 worth 5.0, SL 0.092 -> 92 ticks * 5 = 460 per lot -> 0.21
+      CHECK(near(NbLotsForRisk(10000, 1.0, 0.092, 0.001, 5.0, 0.01, 0.01, 100, m), 0.21), "silver example");
+   }
+   end("19");
+
+   begin("20 live box: NbPlanSide equals the trigger's own levels");
+   {
+      Crafted k = craft(30, 1, 0, 20);
+      TrigOut t = runTrig(k, true, PG);
+      double e1, sl, t1, t2, rk;
+      bool ok = NbPlanSide(k.c, k.atr, k.piv, k.np, 20, 1, PG, e1, sl, t1, t2, rk);
+      CHECK(ok && t.nSig == 1 && near(e1, t.sigs[0].entry) && near(sl, t.sigs[0].sl) && near(t1, t.sigs[0].tp1) && near(t2, t.sigs[0].tp2),
+            "BUY plan at the trigger bar = the signal's levels");
+      CHECK(!NbPlanSide(k.c, k.atr, k.piv, k.np, 20, -1, PG, e1, sl, t1, t2, rk), "no confirmed swing high above -> SELL plan unavailable");
+      CHECK(!NbPlanSide(k.c, k.atr, k.piv, k.np, 5, 1, PG, e1, sl, t1, t2, rk), "before the swing low is confirmed -> no BUY plan");
+      Crafted m2 = craft(30, -1, 0, 20);
+      TrigOut u2 = runTrig(m2, true, PG);
+      ok = NbPlanSide(m2.c, m2.atr, m2.piv, m2.np, 20, -1, PG, e1, sl, t1, t2, rk);
+      CHECK(ok && u2.nSig == 1 && near(sl, u2.sigs[0].sl) && t2 < t1 && t1 < e1 && e1 < sl, "SELL plan = signal levels, order TP2 < TP1 < Entry < SL");
+   }
+   end("20");
+
+   begin("21 freshness by witnesses: session break is not staleness, dead feed is");
+   {
+      // broker day: metals break 00:00-01:00. At 01:12 the forming 5M bar is 01:10, forming 15M is 01:00,
+      // last closed 5M 01:05, last closed 15M 23:45 (72 min old). Ticks are live.
+      datetime d0 = T0 + 5 * 86400;
+      datetime now = d0 + 3600 + 12 * 60;
+      CHECK(NbFreshness(now, now - 3, d0 + 3600 + 600, d0 + 3600, d0 + 3600 + 300, d0 - 900, 300, 900, 120, 300) == NB_FR_OK,
+            "01:12 after the break: LIVE although the last closed 15M bar is 72 min old");
+      CHECK(!NbIsFresh(d0 + 3600 + 300, 300, d0 - 900, 900, now), "(the v1.03 rule called this STALE - the bug)");
+      // 01:03: forming 5M 01:00, forming 15M 01:00, last closed 5M = 23:55 (68 min old) -> still LIVE
+      CHECK(NbFreshness(d0 + 3600 + 180, d0 + 3600 + 178, d0 + 3600, d0 + 3600, d0 - 300, d0 - 900, 300, 900, 120, 300) == NB_FR_OK,
+            "01:03: first candle after the break is LIVE");
+      // dead feed: last tick 6 h ago
+      CHECK(NbFreshness(now, now - 6 * 3600, d0 + 3600 + 600, d0 + 3600, d0 + 3600 + 300, d0 - 900, 300, 900, 120, 300) == NB_FR_NO_TICK,
+            "no tick for 6 h -> STALE");
+      CHECK(NbFreshness(now, now - 121, d0 + 3600 + 600, d0 + 3600, d0 + 3600 + 300, d0 - 900, 300, 900, 120, 300) == NB_FR_NO_TICK,
+            "tick 121 s old with a 120 s limit -> STALE (fail closed)");
+      // forming bar stale: ticks flow but the forming 5M bar is 40 min old (history not synced)
+      CHECK(NbFreshness(now, now - 3, now - 2400, d0 + 3600, d0 + 3600 + 300, d0 - 900, 300, 900, 120, 300) == NB_FR_BAR0_OLD,
+            "forming bar 40 min old -> STALE");
+      // clock mismatch: tick time 10 min ahead of the server clock estimate
+      CHECK(NbFreshness(now, now + 600, d0 + 3600 + 600, d0 + 3600, d0 + 3600 + 300, d0 - 900, 300, 900, 120, 300) == NB_FR_CLOCK,
+            "tick clock 10 min ahead -> CLOCK MISMATCH, not LIVE");
+      // gap: forming bar not newer than our last closed bar -> reload
+      CHECK(NbFreshness(now, now - 3, d0 + 3600 + 300, d0 + 3600, d0 + 3600 + 300, d0 - 900, 300, 900, 120, 300) == NB_FR_GAP,
+            "closed bar not loaded -> GAP (reload), not LIVE");
+      CHECK(NbFreshness(now, now - 3, 0, d0 + 3600, d0 + 3600 + 300, d0 - 900, 300, 900, 120, 300) == NB_FR_NO_BAR, "no forming bar -> NO BARS");
+      bool named = true;
+      for(int k = 0; k <= 5; k++) named = named && NbFreshText(k) != "UNKNOWN";
+      CHECK(named, "every freshness code has text");
+   }
+   end("21");
 
    begin("xx building blocks: NRTR, EMA, alignment, reason text");
    {

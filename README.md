@@ -8,7 +8,9 @@ One standalone MT5 **indicator**, `NRTR_BOSS_LearningPanel.mq5`, for **XAUUSD / 
 | 🟢 **CLICK BUY** | Every rule for the learning BUY setup is aligned **right now**. |
 | 🔴 **CLICK SELL** | Every rule for the learning SELL setup is aligned **right now**. |
 | 🟡 **WAIT – NO TRADE** | Something disagrees. The reason line says exactly what. |
-| 🟠 **EXIT / PROTECT** | You hold a position and the 15M boss has turned against it. |
+| 🟠 **EXIT / PROTECT** | You hold a position and the complete 15M boss MODE has turned against it. |
+
+The NRTR inside is a **CUSTOM ATR-NRTR** (see *Honest limitations*); the panel says so.
 
 **It never places, modifies or closes an order.** It reads your open positions on this
 symbol only to show EXIT / PROTECT. You click, or you don't. "CLICK BUY" means *the defined
@@ -63,10 +65,25 @@ One signal per setup. The CLICK state lasts 6 closed 5M candles (30 min), or unt
 price reaches TP1 ("too late") or the SL ("stand aside"), whichever is first. The next
 signal needs a new setup: 5M pulls back against the 15M, then turns back with it.
 
-**EXIT / PROTECT** (read only): if you hold a BUY and the 15M NRTR turns bearish (or a SELL
-and it turns bullish), the banner shows **EXIT / PROTECT** with the reason:
-*15M TREND INVALIDATED* if the position was opened while the 15M agreed with it, or
-*POSITION AGAINST 15M BOSS* if it never did. Nothing is closed for you.
+**EXIT / PROTECT** (read only) is judged on the **complete 15M BOSS mode** (NRTR + EMA200 +
+confirmed structure), never on the NRTR direction alone:
+
+| You hold | 15M boss is | Position row |
+|---|---|---|
+| BUY | BUY MODE | **HOLD** – 15M REGIME INTACT |
+| SELL | SELL MODE | **HOLD** – 15M REGIME INTACT |
+| BUY | SELL MODE | **EXIT / PROTECT** (banner turns orange) |
+| SELL | BUY MODE | **EXIT / PROTECT** (banner turns orange) |
+| either | WAIT | **PROTECT – 15M BOSS WAIT, NOT INVALIDATED** + the boss reason. Not an automatic EXIT. |
+| either | data stale / missing | **CANNOT JUDGE** |
+
+The EXIT reason is *15M TREND INVALIDATED (BOSS FLIPPED)* if the position was opened while
+the boss was in its mode, or *POSITION AGAINST 15M BOSS* if it never was. A single NRTR flip
+only moves the boss to WAIT, so on its own it can never produce EXIT. Nothing is closed for you.
+
+**Same-candle rule (frozen):** the learning signal's outcome is judged on closed 5M candles
+after the entry. If one candle touches both the SL and TP1, tick order is unknown, so the
+outcome is **SL**. This is deliberately conservative and is tested; it will not change quietly.
 
 **Stale data is never a signal.** If the last closed 5M bar is more than 15 min old (or
 15M more than 30 min), for example in the daily metals break, at the weekend or on a
@@ -104,6 +121,52 @@ dotted), confirmed **HH / HL / LH / LL** labels, one **▲ BUY / ▼ SELL** mark
 drops out of a mode, and Entry / SL / TP1 / TP2 lines for the currently clickable signal
 only.
 
+## v1.04 freshness fix (found live at the Asia open)
+
+The old stale rule measured the age of the last **closed** bar, so for the first 15 minutes after
+the broker's 00:00–01:00 metals break the panel said `DATA STALE` while fresh candles printed.
+Freshness is now judged by witnesses: the broker's last tick is recent, the **forming** 5M and 15M
+bars are current, the tick clock and the server clock agree, and the closed bars we hold are the
+newest ones. Any failing witness is STALE (fail closed). A `DATA CLOCK` block on the panel shows
+each witness with its age, so a STALE verdict can always be checked. Nothing in the trading rules
+changed. See TESTING.md for the exact numbers.
+
+## v1.03 (after the first MT5 screenshot)
+
+* **Arrows only where the NRTR flips.** One big arrow on the closed candle that changed the NRTR
+  direction. `Also a small arrow on every closed candle` is an input, off by default.
+* **LIVE CANDLE (PREVIEW).** A yellow `▲ ?` / `▼ ?` on the forming 5M candle and a panel line:
+  *IF IT CLOSED NOW: 5M NRTR FLIPS BEARISH / STAYS BULLISH*, with the exact stop price it would
+  have to close beyond. It is recomputed every second from the live price, never stored, and no
+  decision reads it. The real arrow and the real state arrive at the close. This is how you
+  "see it before" without repainting history.
+* **LIVE BOX.** BUY and SELL columns side by side: ENTRY, STOP LOSS, TP1, TP2, SWING TP, LOTS,
+  and a GATE line per side (*READY - CLICK*, or the one reason it is not). Both columns come from
+  the same engine function the signal uses, so the numbers can never disagree with the banner.
+* Countdown in h:mm:ss, wider panel, shorter legend lines, default panel size 0.9.
+
+## v1.02 display layer (no new decision rule, still read-only)
+
+* **Arrow on every closed candle**: the NRTR direction of the chart's timeframe class (5M NRTR on
+  M1–M5 charts, 15M NRTR above). Bright green/red = agrees with the 15M boss mode, dim = against
+  it. The forming candle never gets one.
+* **Blinking banner**: CLICK BUY / CLICK SELL alternates bright and dark every second. It is a
+  light, not a button. MT5 does not let an indicator trade, and this one never will; you click
+  Buy or Sell on the broker's own panel.
+* **LOTS FOR x% RISK**: `balance × risk% ÷ money lost per lot at the SL`, rounded **down** to the
+  volume step. Balance and equity are read from the account (read only). If even the minimum lot
+  risks more than x%, the row says SKIP. Default 1.0 %, allowed 0.1–5.0 %. It is a suggestion you
+  type yourself.
+* **SWING TP**: entry ± a fixed distance per metal (default gold 20.00, silver 2.00), drawn on the
+  chart and printed, so you can type a pending order or a far take-profit by hand.
+* **Pending-order reference**: in BUY mode, a pullback limit near the 5M NRTR stop and a breakout
+  stop above the 15M channel; mirrored in SELL mode. Reference prices only. Nothing is sent.
+* **NEW YORK OPEN**: at the broker time you set (default `16:30`, check your broker's clock) one MT5
+  pop-up plus sound, weekdays only, once per day. The panel counts down before it and shows
+  *WAIT, LET IT PRINT* for the first 15 minutes after it. Local only, no Telegram, no network.
+* **ZigZag** (blue): confirmed 15M swings joined by a line, plus a **HOW TO READ THE CHART** block
+  explaining the NRTR channel, the ZigZag structure and the EMA200 filter in one line each.
+
 ## Settings
 
 | Input | Default | |
@@ -113,11 +176,15 @@ only.
 | EMA period | 200 | on 15M |
 | Structure lookback | 3 | bars each side of a swing; a swing is confirmed only after that many bars close after it |
 | SL buffer | 0.10 | × 5M ATR beyond the swing |
-| TP1 / TP2 | 1.0 / 2.0 | R multiples |
+| TP1 / TP2 | 1.0 / 2.0 | R multiples. **TP2 must be strictly greater than TP1**, otherwise the indicator refuses to start (`invalid inputs` in the Experts log). |
 | Signal valid for | 6 | closed 5M bars |
 | History used | 10 | days |
 | Panel size / position / X / Y | 1.0 / top-left / 12 / 24 | |
 | Draw chart objects | on | |
+| Candle arrows / blink | on / on | v1.02 |
+| Risk per trade | 1.0 % | lot suggestion only; 0.1–5.0 accepted |
+| Gold / Silver swing distance | 20.00 / 2.00 | price units |
+| NY alert / NY open time / quiet minutes | on / 16:30 / 15 | broker clock |
 
 ## Why it cannot repaint
 
@@ -132,8 +199,13 @@ only.
 
 ## Honest limitations
 
-* This NRTR is the ATR-scaled variant on closing prices. Commercial NRTR indicators differ
-  in details, so flips will not match another NRTR bar for bar.
+* **CUSTOM ATR-NRTR.** The NRTR here is frozen as: extreme = highest (lowest) *close* since
+  the flip, stop = extreme −/+ `multiplier × ATR(14, Wilder)`, ratchets only, flips on a
+  *close* beyond the stop. It uses no highs/lows, no dynamic look-back period and no
+  percentage band, so it is **not** guaranteed to match any MT5 CodeBase "NRTR" in direction,
+  flip candle or line value. On the synthetic test data it disagrees with the classic
+  percentage NRTR on 6–13 % of bars (engine test 18). Run the side-by-side described in
+  TESTING.md on your own XAUUSD / XAGUSD M15 and M5 charts before comparing it to another NRTR.
 * If MT5 is restarted on a *later* day, the window starts one day later, so EMA200 and NRTR
   are seeded again. In the tests the last four days were still identical bar for bar, but
   that depends on the data and is not guaranteed.
