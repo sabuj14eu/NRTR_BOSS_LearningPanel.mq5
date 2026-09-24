@@ -30,6 +30,50 @@ the build environment. The indicator was therefore verified like this:
 how it looks on a real chart. **Press F7 in MetaEditor and do the two manual checks below
 before relying on it.** If F7 reports anything, send me the exact message.
 
+## Results (2026-09-25, v1.04 freshness fix)
+
+```
+SAFETY SCAN: PASS · FULL FILE g++ -Werror: 0 errors, 0 warnings
+ENGINE TESTS:    145 checks passed, 0 failed   (new: 21 freshness by witnesses)
+INDICATOR TESTS: 124 checks passed, 0 failed   (new: I11 Asia open after the metals break)
+MetaEditor F7:   v1.04 NOT YET (v1.02 / v1.03 compiled in the user's MT5)
+```
+
+### Live finding (XAGUSD, broker Asia open, 2026-09-25 ~01:15 broker time)
+
+Symptom: fresh M5 candles printing, panel WAIT with `DATA STALE / MARKET CLOSED`, both gates `DATA STALE`.
+
+Root cause: `NbIsFresh` (v1.00–v1.03) required the last CLOSED 15M bar to be at most 30 min old and
+the last closed 5M bar at most 15 min old, measured against the server clock. The broker closes
+metals 00:00–01:00. From 01:00 to 01:15 the last closed 15M bar is 23:45 (age 75 min), and from
+01:00 to 01:05 the last closed 5M bar is 23:55 (age 65 min): a live market judged stale by a
+fixed distance across a session break. Engine test 21 reproduces the exact numbers.
+
+Fix (freshness logic only; BOSS, NRTR, EMA, structure and gate policy untouched): freshness is
+now judged by witnesses, any failure = STALE:
+
+| Witness | Rule | Failure text |
+|---|---|---|
+| Broker's last tick (`SYMBOL_TIME` / `TimeCurrent`) | age ≤ `InpMaxTickAgeSec` (120 s) | NO RECENT TICK - FEED DEAD OR MARKET CLOSED |
+| Forming 5M and 15M bars (`iTime(tf, 0)`) | not older than 2 bars vs the tick | FORMING BAR IS OLD - HISTORY NOT CURRENT |
+| Tick clock vs server-clock estimate (`TimeTradeServer`) | tick not ahead by more than `InpMaxClockSkewSec` (300 s) | CLOCK MISMATCH |
+| Closed bars we hold | forming bar must be newer than them | CLOSED BAR NOT LOADED YET - RELOADING (forces reload) |
+
+Closed-bar AGE is no longer a witness, because a session break makes it large without making the
+data stale. The `DATA CLOCK` block on the panel prints every witness: BROKER TIME (last tick) and
+its age, SERVER CLOCK and skew, LAST M5 CLOSED, LAST M15 CLOSED with ages, FORMING M5 / M15,
+STALE THRESHOLD, DATA STATUS. The `5M CANDLE ... next` countdown now counts to the forming bar's
+close (it showed `next 00:00` when MT5 had not yet opened the new bar).
+
+Indicator test I11 rebuilds the exact situation (silver history with the 00:00–01:00 bars removed,
+clock at 01:12:07): LIVE, gates not stale, LAST M15 CLOSED shows 23:45 with its 72-minute age
+openly. The same clock time with a feed dead since 00:59 is STALE (`NO RECENT TICK`), and a tick
+clock 10 minutes ahead of the server clock is STALE (`CLOCK MISMATCH`).
+
+**Manual check for tonight:** attach v1.04 to XAGUSD M5 during the Asia open and read the DATA
+CLOCK block. Expected 01:00–01:15: DATA STATUS `LIVE`, LAST M15 CLOSED `23:45` with an age over an
+hour, banner no longer `DATA STALE`. During 00:00–01:00: `NO RECENT TICK` and `DATA STALE`.
+
 ## Results (2026-09-24, v1.03)
 
 ```

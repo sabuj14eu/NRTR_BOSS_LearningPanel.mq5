@@ -54,12 +54,21 @@
 //|    it closed now - never stored, never a decision input), and a  |
 //|    two-column LIVE BOX (BUY | SELL plan + GATE) from the same    |
 //|    engine functions. Still display only, still read-only.        |
+//|  v1.04 FRESHNESS (found live on XAGUSD, Asia open): the old rule  |
+//|    "last closed 15M bar <= 30 min old" is false for the first 15  |
+//|    minutes after the broker's 00:00-01:00 metals break although   |
+//|    fresh 5M candles print. Freshness is now judged by WITNESSES:  |
+//|    (1) the broker's last tick is recent, (2) the FORMING 5M and   |
+//|    15M bars are current, (3) tick clock and server clock agree,   |
+//|    (4) the closed bars are the newest ones MT5 has closed. Any    |
+//|    failing witness = STALE / UNKNOWN (fail closed). A DATA CLOCK   |
+//|    block on the panel shows every witness. Gate policy unchanged. |
 //|  * LOTS FOR x% RISK: balance (read only) x risk% / money per lot |
 //|    at the SL, rounded DOWN to the volume step. A suggestion you  |
 //|    type yourself; the panel never sizes or sends anything.       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - learning tool"
-#property version     "1.03"
+#property version     "1.04"
 #property description "Gold/Silver NRTR BOSS learning panel: 15M direction, 5M timing. CUSTOM ATR-NRTR."
 #property description "Visual decision support only - never places, modifies or closes orders."
 #property indicator_chart_window
@@ -908,7 +917,55 @@ int NbKnownAtTime(const datetime &t[], const int &v[], int n, int sec, datetime 
    return (k >= 0) ? v[k] : 0;
 }
 
-//--- data is only usable if the last closed bars are recent
+// freshness witnesses (v1.04)
+#define NB_FR_OK        0
+#define NB_FR_NO_BAR    1   // no closed bar loaded
+#define NB_FR_NO_TICK   2   // broker's last tick too old (feed dead / market closed)
+#define NB_FR_BAR0_OLD  3   // forming bar is not the current one
+#define NB_FR_CLOCK     4   // tick clock and server clock disagree
+#define NB_FR_GAP       5   // a closed bar exists that we have not loaded
+
+//--- v1.04: freshness by witnesses, fail closed. `now` = server clock
+//    (TimeTradeServer), `tick` = time of the broker's last quote
+//    (TimeCurrent / SYMBOL_TIME), bar0_5/bar0_15 = open time of the FORMING
+//    bars, last5/last15 = open time of the last CLOSED bars we hold.
+//    A session break makes closed bars old without making data stale, so
+//    closed-bar age is NOT a witness; the forming bar and the tick are.
+int NbFreshness(datetime now, datetime tick, datetime bar0_5, datetime bar0_15, datetime last5, datetime last15,
+                int sec5, int sec15, int maxTickAge, int maxClockSkew)
+{
+   if(last5 <= 0 || last15 <= 0 || bar0_5 <= 0 || bar0_15 <= 0 || tick <= 0 || now <= 0)
+      return NB_FR_NO_BAR;
+   if(now - tick > maxTickAge)
+      return NB_FR_NO_TICK;
+   if(MathAbs((long)now - (long)tick) > maxClockSkew && tick > now)
+      return NB_FR_CLOCK;
+   // the forming bars must be the current ones: their window must contain
+   // the tick (or be the bar right before it while the new one is not yet
+   // opened by a tick)
+   if(tick - bar0_5 > 2 * sec5 || tick - bar0_15 > 2 * sec15)
+      return NB_FR_BAR0_OLD;
+   // the closed bars we hold must be the ones right before the forming bars
+   if(bar0_5 <= last5 || bar0_15 <= last15)
+      return NB_FR_GAP;
+   return NB_FR_OK;
+}
+
+string NbFreshText(int code)
+{
+   switch(code)
+   {
+      case NB_FR_OK:       return "LIVE";
+      case NB_FR_NO_BAR:   return "NO BARS";
+      case NB_FR_NO_TICK:  return "NO RECENT TICK - FEED DEAD OR MARKET CLOSED";
+      case NB_FR_BAR0_OLD: return "FORMING BAR IS OLD - HISTORY NOT CURRENT";
+      case NB_FR_CLOCK:    return "CLOCK MISMATCH - TICK TIME AHEAD OF SERVER CLOCK";
+      case NB_FR_GAP:      return "CLOSED BAR NOT LOADED YET - RELOADING";
+   }
+   return "UNKNOWN";
+}
+
+//--- (v1.00-v1.03 rule, kept for reference/tests; no longer the gate)
 bool NbIsFresh(datetime last5, int sec5, datetime last15, int sec15, datetime now)
 {
    if(last5 <= 0 || last15 <= 0)
@@ -1172,6 +1229,9 @@ input double         InpRiskPercent     = 1.0;         // Risk per trade, % of b
 input group "Swing / pending-order references (nothing is sent)"
 input double         InpSwingDistGold   = 20.0;        // Gold swing TP distance (price, e.g. 20.00)
 input double         InpSwingDistSilver = 2.0;         // Silver swing TP distance (price, e.g. 2.00)
+input group "Data clock (freshness witnesses)"
+input int            InpMaxTickAgeSec   = 120;         // Last broker tick older than this = STALE
+input int            InpMaxClockSkewSec = 300;         // Tick clock ahead of server clock by more = STALE
 input group "New York open (broker time, local pop-up only)"
 input bool           InpNyAlert         = true;        // Alert + sound at NY open
 input string         InpNyOpenTime      = "16:30";     // NY 09:30 in your BROKER's clock (HH:MM)
@@ -1229,6 +1289,11 @@ bool     g_bufDirty;
 
 // view state
 bool     g_fresh;
+int      g_freshCode;
+datetime g_diagNow;
+datetime g_diagTick;
+datetime g_diagBar05;
+datetime g_diagBar015;
 int      g_final;
 int      g_finalR;
 int      g_adv;
@@ -1344,6 +1409,11 @@ int OnInit()
    g_dataR = NB_R_NO_DATA;
    g_bufDirty = true;
    g_fresh = false;
+   g_freshCode = NB_FR_NO_BAR;
+   g_diagNow = 0;
+   g_diagTick = 0;
+   g_diagBar05 = 0;
+   g_diagBar015 = 0;
    g_final = NB_WAIT;
    g_finalR = (g_metal == NB_METAL_NONE) ? NB_R_UNSUPPORTED : NB_R_NO_DATA;
    g_adv = NB_ADV_NONE;
@@ -1631,6 +1701,11 @@ void NbEvaluate()
    if(!g_ready || g_s5.n < 1 || g_s15.n < 1)
    {
       g_fresh = false;
+      g_freshCode = NB_FR_NO_BAR;
+      g_diagNow = TimeTradeServer();
+      g_diagTick = TimeCurrent();
+      g_diagBar05 = iTime(g_sym, PERIOD_M5, 0);
+      g_diagBar015 = iTime(g_sym, PERIOD_M15, 0);
       g_final = NB_WAIT;
       g_finalR = (g_dataR != 0) ? g_dataR : NB_R_NO_DATA;
       if(g_buyCnt + g_sellCnt > 0)
@@ -1643,7 +1718,21 @@ void NbEvaluate()
    int n5 = g_s5.n;
    int n15 = g_s15.n;
    datetime now = TimeTradeServer();
-   g_fresh = NbIsFresh(g_s5.t[n5 - 1], g_s5.sec, g_s15.t[n15 - 1], g_s15.sec, now);
+   datetime tick = (datetime)SymbolInfoInteger(g_sym, SYMBOL_TIME);
+   if(tick <= 0)
+      tick = TimeCurrent();
+   g_diagNow = now;
+   g_diagTick = tick;
+   g_diagBar05 = iTime(g_sym, PERIOD_M5, 0);
+   g_diagBar015 = iTime(g_sym, PERIOD_M15, 0);
+   g_freshCode = NbFreshness(now, tick, g_diagBar05, g_diagBar015, g_s5.t[n5 - 1], g_s15.t[n15 - 1], g_s5.sec, g_s15.sec,
+                             InpMaxTickAgeSec, InpMaxClockSkewSec);
+   g_fresh = (g_freshCode == NB_FR_OK);
+   if(g_freshCode == NB_FR_GAP)
+   {
+      g_seen15 = 0;   // force a reload on the next tick
+      g_seen5 = 0;
+   }
    // EXIT / PROTECT is judged on the COMPLETE 15M BOSS mode of the last
    // CLOSED 15M bar (NRTR + EMA200 + confirmed structure), never on the
    // NRTR direction alone.
@@ -2045,7 +2134,7 @@ void NbDrawPanel()
    int kx = pad;
    int vx = pad + (int)MathRound(150 * sc);
    int bannerH = (int)MathRound(40 * sc);
-   int rows = 53;
+   int rows = 62;
    int H = pad * 2 + bannerH + rows * rh;
 
    int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0);
@@ -2214,7 +2303,8 @@ void NbDrawPanel()
    if(ok)
    {
       datetime nowS = TimeTradeServer();
-      long left = (long)(g_s5.t[i5] + 2 * g_s5.sec - nowS);
+      datetime b0 = (g_diagBar05 > 0) ? g_diagBar05 : (g_s5.t[i5] + g_s5.sec);
+      long left = (long)(b0 + g_s5.sec - nowS);
       candle = "CLOSED " + TimeToString(g_s5.t[i5] + g_s5.sec, TIME_MINUTES) + "   next " + NbMmSs(left);
    }
    NbRow("k8", "v8", ox + kx, ox + vx, y, "5M CANDLE", candle, cVal, cKey, fs);
@@ -2487,6 +2577,32 @@ void NbDrawPanel()
    y += rh;
    NbLabel("pw", ox + kx, y, posWhy, posC, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
    y += rh + (int)MathRound(4 * sc);
+
+   // DATA CLOCK: every freshness witness, so a STALE verdict can be checked
+   NbLabel("hd", ox + kx, y + (int)MathRound(3 * sc), "DATA CLOCK  -  WHY LIVE OR STALE", cSec, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
+   y += rh + (int)MathRound(3 * sc);
+   string dBroker = (g_diagTick > 0) ? TimeToString(g_diagTick, TIME_DATE | TIME_SECONDS) : "---";
+   string dServer = (g_diagNow > 0) ? TimeToString(g_diagNow, TIME_DATE | TIME_SECONDS) : "---";
+   long skew = (g_diagTick > 0 && g_diagNow > 0) ? ((long)g_diagTick - (long)g_diagNow) : 0;
+   NbRow("kd1", "vd1", ox + kx, ox + vx, y, "BROKER TIME (last tick)", dBroker + ((g_diagNow > 0) ? ("   age " + NbHms((long)g_diagNow - (long)g_diagTick)) : ""), cVal, cKey, fs);
+   y += rh;
+   NbRow("kd2", "vd2", ox + kx, ox + vx, y, "SERVER CLOCK (estimate)", dServer + "   skew " + IntegerToString(skew) + "s", cVal, cKey, fs);
+   y += rh;
+   string m5c = ok ? (TimeToString(g_s5.t[i5], TIME_DATE | TIME_MINUTES) + "   age " + NbHms((long)g_diagNow - (long)(g_s5.t[i5] + g_s5.sec))) : "---";
+   string m15c = ok ? (TimeToString(g_s15.t[i15], TIME_DATE | TIME_MINUTES) + "   age " + NbHms((long)g_diagNow - (long)(g_s15.t[i15] + g_s15.sec))) : "---";
+   NbRow("kd3", "vd3", ox + kx, ox + vx, y, "LAST M5 CLOSED", m5c, cVal, cKey, fs);
+   y += rh;
+   NbRow("kd4", "vd4", ox + kx, ox + vx, y, "LAST M15 CLOSED", m15c, cVal, cKey, fs);
+   y += rh;
+   string f5 = (g_diagBar05 > 0) ? (TimeToString(g_diagBar05, TIME_MINUTES) + "   age " + NbHms((long)g_diagTick - (long)g_diagBar05)) : "---";
+   string f15 = (g_diagBar015 > 0) ? (TimeToString(g_diagBar015, TIME_MINUTES) + "   age " + NbHms((long)g_diagTick - (long)g_diagBar015)) : "---";
+   NbRow("kd5", "vd5", ox + kx, ox + vx, y, "FORMING M5 / M15", f5 + "  /  " + f15, cVal, cKey, fs);
+   y += rh;
+   NbRow("kd6", "vd6", ox + kx, ox + vx, y, "STALE THRESHOLD", "tick > " + IntegerToString(InpMaxTickAgeSec) + "s  or  forming bar > 2 bars old  or  clock skew > " + IntegerToString(InpMaxClockSkewSec) + "s", cVal, cKey, fs);
+   y += rh;
+   string dStatus = (g_metal == NB_METAL_NONE) ? "---" : NbFreshText(g_freshCode);
+   NbRow("kd7", "vd7", ox + kx, ox + vx, y, "DATA STATUS", dStatus, g_fresh ? cUp : cDn, cKey, fs);
+   y += rh;
 
    // how to read the chart (the three tools, in one line each)
    NbLabel("hg", ox + kx, y + (int)MathRound(3 * sc), "HOW TO READ THE CHART", cSec, fsH, "Arial Black", ANCHOR_LEFT_UPPER);

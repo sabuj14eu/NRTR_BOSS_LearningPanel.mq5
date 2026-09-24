@@ -692,6 +692,39 @@ int main()
    }
    end("20");
 
+   begin("21 freshness by witnesses: session break is not staleness, dead feed is");
+   {
+      // broker day: metals break 00:00-01:00. At 01:12 the forming 5M bar is 01:10, forming 15M is 01:00,
+      // last closed 5M 01:05, last closed 15M 23:45 (72 min old). Ticks are live.
+      datetime d0 = T0 + 5 * 86400;
+      datetime now = d0 + 3600 + 12 * 60;
+      CHECK(NbFreshness(now, now - 3, d0 + 3600 + 600, d0 + 3600, d0 + 3600 + 300, d0 - 900, 300, 900, 120, 300) == NB_FR_OK,
+            "01:12 after the break: LIVE although the last closed 15M bar is 72 min old");
+      CHECK(!NbIsFresh(d0 + 3600 + 300, 300, d0 - 900, 900, now), "(the v1.03 rule called this STALE - the bug)");
+      // 01:03: forming 5M 01:00, forming 15M 01:00, last closed 5M = 23:55 (68 min old) -> still LIVE
+      CHECK(NbFreshness(d0 + 3600 + 180, d0 + 3600 + 178, d0 + 3600, d0 + 3600, d0 - 300, d0 - 900, 300, 900, 120, 300) == NB_FR_OK,
+            "01:03: first candle after the break is LIVE");
+      // dead feed: last tick 6 h ago
+      CHECK(NbFreshness(now, now - 6 * 3600, d0 + 3600 + 600, d0 + 3600, d0 + 3600 + 300, d0 - 900, 300, 900, 120, 300) == NB_FR_NO_TICK,
+            "no tick for 6 h -> STALE");
+      CHECK(NbFreshness(now, now - 121, d0 + 3600 + 600, d0 + 3600, d0 + 3600 + 300, d0 - 900, 300, 900, 120, 300) == NB_FR_NO_TICK,
+            "tick 121 s old with a 120 s limit -> STALE (fail closed)");
+      // forming bar stale: ticks flow but the forming 5M bar is 40 min old (history not synced)
+      CHECK(NbFreshness(now, now - 3, now - 2400, d0 + 3600, d0 + 3600 + 300, d0 - 900, 300, 900, 120, 300) == NB_FR_BAR0_OLD,
+            "forming bar 40 min old -> STALE");
+      // clock mismatch: tick time 10 min ahead of the server clock estimate
+      CHECK(NbFreshness(now, now + 600, d0 + 3600 + 600, d0 + 3600, d0 + 3600 + 300, d0 - 900, 300, 900, 120, 300) == NB_FR_CLOCK,
+            "tick clock 10 min ahead -> CLOCK MISMATCH, not LIVE");
+      // gap: forming bar not newer than our last closed bar -> reload
+      CHECK(NbFreshness(now, now - 3, d0 + 3600 + 300, d0 + 3600, d0 + 3600 + 300, d0 - 900, 300, 900, 120, 300) == NB_FR_GAP,
+            "closed bar not loaded -> GAP (reload), not LIVE");
+      CHECK(NbFreshness(now, now - 3, 0, d0 + 3600, d0 + 3600 + 300, d0 - 900, 300, 900, 120, 300) == NB_FR_NO_BAR, "no forming bar -> NO BARS");
+      bool named = true;
+      for(int k = 0; k <= 5; k++) named = named && NbFreshText(k) != "UNKNOWN";
+      CHECK(named, "every freshness code has text");
+   }
+   end("21");
+
    begin("xx building blocks: NRTR, EMA, alignment, reason text");
    {
       std::vector<double> c = {10, 11, 12, 13, 14, 15, 13.9, 16, 12};

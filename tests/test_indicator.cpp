@@ -516,6 +516,46 @@ int main()
    }
    end("I9");
 
+   begin("I11 Asia open after the 00:00-01:00 metals break: LIVE, not STALE (the XAGUSD finding)");
+   {
+      // silver history with the daily break removed: no bars between 00:00 and 01:00 on day 12
+      Market brk = silver;
+      long long dayStart = (brk.m5[12 * 288].t / 86400) * 86400;
+      std::vector<SBar> m5;
+      for(const SBar &b : brk.m5) if(!(b.t >= dayStart && b.t < dayStart + 3600)) m5.push_back(b);
+      brk.m5 = m5;
+      brk.m15 = agg(brk.m5, 900);
+      load(brk, "XAGUSD", "XAG", 3, 0.001);
+      SIM.now = dayStart + 3600 + 12 * 60 + 7;     // 01:12:07, forming 5M = 01:10, forming 15M = 01:00
+      start();
+      CHECK(!has(txt("r1"), "DATA STALE"), "01:12 after the break is not STALE");
+      CHECK(txt("vd7") == "LIVE", "DATA STATUS = LIVE");
+      CHECK(has(txt("vd4"), "23:45") && has(txt("vd4"), "1:12:"), "LAST M15 CLOSED shows 23:45 and its 72 min age openly");
+      CHECK(has(txt("vd3"), "01:05"), "LAST M5 CLOSED = 01:05");
+      CHECK(has(txt("vd5"), "01:10") && has(txt("vd5"), "01:00"), "forming bars 01:10 / 01:00");
+      CHECK(has(txt("vd1"), "01:12:07"), "BROKER TIME row shows the last tick with seconds");
+      CHECK(!has(txt("lbGb"), "DATA STALE") && !has(txt("lbGs"), "DATA STALE"), "gates no longer say DATA STALE");
+      CHECK(has(txt("v8"), "CLOSED 01:10") && has(txt("v8"), "next 02:53"), "5M CANDLE row counts to the forming bar's close");
+      OnDeinit(0);
+      // same moment, but the broker's feed died at 00:59 -> STALE with the reason
+      load(brk, "XAGUSD", "XAG", 3, 0.001);
+      SIM.now = dayStart + 3600 + 12 * 60 + 7;
+      SIM.tickTime = dayStart + 3600 - 60;
+      start();
+      CHECK(has(txt("r1"), "DATA STALE") && has(txt("vd7"), "NO RECENT TICK"), "dead feed at the same clock time -> STALE, reason shown");
+      SIM.tickTime = 0;
+      OnDeinit(0);
+      // clock mismatch: broker tick 10 min ahead of the server-clock estimate
+      load(brk, "XAGUSD", "XAG", 3, 0.001);
+      SIM.now = dayStart + 3600 + 12 * 60 + 7;
+      SIM.tickTime = SIM.now + 600;
+      start();
+      CHECK(has(txt("r1"), "DATA STALE") && has(txt("vd7"), "CLOCK MISMATCH"), "tick clock ahead -> STALE with CLOCK MISMATCH");
+      SIM.tickTime = 0;
+      OnDeinit(0);
+   }
+   end("I11");
+
    std::printf("\nINDICATOR TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
 }

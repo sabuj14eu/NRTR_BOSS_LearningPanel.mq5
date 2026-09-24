@@ -121,6 +121,16 @@ dotted), confirmed **HH / HL / LH / LL** labels, one **▲ BUY / ▼ SELL** mark
 drops out of a mode, and Entry / SL / TP1 / TP2 lines for the currently clickable signal
 only.
 
+## v1.04 freshness fix (found live at the Asia open)
+
+The old stale rule measured the age of the last **closed** bar, so for the first 15 minutes after
+the broker's 00:00–01:00 metals break the panel said `DATA STALE` while fresh candles printed.
+Freshness is now judged by witnesses: the broker's last tick is recent, the **forming** 5M and 15M
+bars are current, the tick clock and the server clock agree, and the closed bars we hold are the
+newest ones. Any failing witness is STALE (fail closed). A `DATA CLOCK` block on the panel shows
+each witness with its age, so a STALE verdict can always be checked. Nothing in the trading rules
+changed. See TESTING.md for the exact numbers.
+
 ## v1.03 (after the first MT5 screenshot)
 
 * **Arrows only where the NRTR flips.** One big arrow on the closed candle that changed the NRTR
