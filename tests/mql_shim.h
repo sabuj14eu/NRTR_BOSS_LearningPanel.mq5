@@ -5,6 +5,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -69,6 +70,7 @@ inline string StringSubstr(const string &s, int start, int len = -1)
    if(start < 0 || start >= (int)s.size()) return "";
    return len < 0 ? s.substr((size_t)start) : s.substr((size_t)start, (size_t)len);
 }
+inline long long StringToInteger(const string &s) { return s.empty() ? 0 : std::atoll(s.c_str()); }
 inline ushort StringGetCharacter(const string &s, int pos)
 {
    return (pos >= 0 && pos < (int)s.size()) ? (ushort)(unsigned char)s[(size_t)pos] : 0;
