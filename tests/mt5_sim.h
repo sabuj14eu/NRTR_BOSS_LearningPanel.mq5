@@ -52,7 +52,7 @@ enum { OBJPROP_CORNER = 1, OBJPROP_XDISTANCE, OBJPROP_YDISTANCE, OBJPROP_XSIZE, 
 enum { CORNER_LEFT_UPPER = 0 };
 enum { ANCHOR_LEFT_UPPER = 0, ANCHOR_LEFT_LOWER, ANCHOR_CENTER, ANCHOR_UPPER, ANCHOR_LOWER };
 enum { BORDER_FLAT = 0 };
-enum { STYLE_SOLID = 0, STYLE_DASH, STYLE_DOT };
+enum { STYLE_SOLID = 0, STYLE_DASH, STYLE_DOT, STYLE_DASHDOT };
 enum { TIME_DATE = 1, TIME_MINUTES = 2 };
 enum { CHARTEVENT_CHART_CHANGE = 9 };
 enum { CHART_WIDTH_IN_PIXELS = 1, CHART_HEIGHT_IN_PIXELS };
@@ -79,6 +79,7 @@ struct SimState
    double tick = 0.01, tickValue = 1.0, volMin = 0.01, bid = 0.0;
    std::vector<MqlRates> m1, m5, m15;   // full history, may extend past `now`
    datetime now = 0;
+   long long gmtOff = 3 * 3600;   // server clock ahead of GMT (EEST); TimeGMT() = now - gmtOff
    bool copyFail = false;
    std::vector<SimPos> pos;
    int selected = -1;
@@ -154,6 +155,7 @@ inline string SymbolInfoString(const string &, int prop)
 inline string AccountInfoString(int) { return "USD"; }
 inline datetime TimeTradeServer() { return SIM.now; }
 inline datetime TimeCurrent() { return SIM.now; }
+inline datetime TimeGMT() { return SIM.now - SIM.gmtOff; }
 inline string TimeToString(datetime t, int flags)
 {
    time_t tt = (time_t)t;
@@ -198,6 +200,9 @@ inline bool ObjectCreate(long, const string &name, int type, int, datetime t1, d
 }
 inline bool ObjectSetInteger(long, const string &name, int prop, long long v) { SIM.objs[name].i[prop] = v; return true; }
 inline bool ObjectSetDouble(long, const string &name, int prop, double v) { SIM.objs[name].d[prop] = v; return true; }
+// modifier overloads (anchor point index of a trend line)
+inline bool ObjectSetInteger(long, const string &name, int prop, int mod, long long v) { SIM.objs[name].i[prop * 100 + mod] = v; return true; }
+inline bool ObjectSetDouble(long, const string &name, int prop, int mod, double v) { SIM.objs[name].d[prop * 100 + mod] = v; return true; }
 inline bool ObjectSetString(long, const string &name, int prop, const string &v) { SIM.objs[name].s[prop] = v; return true; }
 inline int ObjectsDeleteAll(long, const string &prefix, int = -1, int = -1)
 {

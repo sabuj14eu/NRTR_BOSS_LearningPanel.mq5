@@ -80,3 +80,69 @@ indicator. Every one was caught:
    last BUY/SELL marker. Close MT5, reopen it (same day), and compare. They must be
    identical.
 3. Optional: attach it to EURUSD. It must show **GOLD / SILVER ONLY**.
+
+---
+
+# The NY-trap twins (`NRTR_BOSS_Crypto_NYTrap.mq5`, `NRTR_BOSS_Forex_NYTrap.mq5`)
+
+Same method as above, run **once per twin**: safety scan, twin check, surrogate compile of the
+whole file with `-Wall -Wextra -Werror`, engine tests on the real engine block, whole-indicator
+tests on the simulated terminal (which now also simulates `TimeGMT()` so the two-witness clock
+can be exercised).
+
+## Results (2026-09-25)
+
+```
+TWIN CHECK:      PASS  (2579 lines, 4 differ: header, 2 descriptions, NB_MARKET)
+SAFETY SCAN:     PASS  (both files; 42 forbidden identifiers; position API = read-only only)
+FULL FILE crypto (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
+FULL FILE forex  (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
+SESSION ENGINE TESTS:    crypto 106 checks passed / forex 104, 0 failed
+SESSION INDICATOR TESTS: crypto  84 checks passed / forex  83, 0 failed
+MetaEditor F7:   NOT RUN (not available in the build environment)
+```
+
+### What the session tests cover
+
+| # | Case | Result |
+|---|---|---|
+| S1 | Civil calendar and the US DST rule per day (2025 and 2026 switch dates) | PASS |
+| S2 | NY open in broker time: UTC+3 summer -> 16:30, UTC+2 winter -> 16:30, the March weeks where US and EU DST differ -> 15:30, UTC-5 broker, late-night bars belong to the right session, MANUAL | PASS |
+| S3 | Two-witness clock: half-hour offsets accepted (with 200 s drift), 10 min off -> OFF, +20 h -> OFF, missing witness -> OFF | PASS |
+| S4 | Phases, range built causally, sweep extremes remembered, clock OFF -> everything OUT | PASS |
+| S5 | SELL trap: exact entry / SL / R / TP1 / TP2 / level / sweep; one-bar and two-bar versions; no second trap on the same side; bearish close still above the range is not a reclaim; bullish body is not a SELL trap; reason persists to the end of the window then releases | PASS |
+| S6 | BUY trap mirror; SL hit; the other side may still fire in the same session | PASS |
+| S7 | Fewer pre-NY bars than the minimum -> `NO RANGE`, no trap even on a textbook sweep | PASS |
+| S8 | Flow vs trap: an active flow signal is CANCELLED by a trap; paused window starts no flow signal even when the 5M realigns; pause off -> it does; after the trap resolves and the window closes, the flow starts a fresh episode | PASS |
+| S9 | The trap candle still forming -> WAIT; the same candle closed -> CLICK SELL | PASS |
+| S10 | 16 days of synthetic 5M bars: 46 flow + 8 trap signals; every level ordered; every trap inside a window, inside the range it reclaimed, one per side per session; restart bit-identical; clock unknown -> flow only | PASS |
+| S11 | 106 cut points and a different future: no past state, reason, phase, range, sweep or signal changes | PASS |
+| S12 | Market filter for the twin under test (BTCUSD, ETHUSD.m, #SOLUSD, ltcusd, BTCUSDT, Bitcoin ... / EURUSD, USDJPY.m, #gbpjpy, crosses); gold, index, the other market rejected | PASS |
+| I1-I9 | Whole indicator: symbol filter, flow CLICK rendered with the engine's levels, trap CLICK rendered with sweep levels and markers, paused window text, clock UNKNOWN in words and negative offsets, EXIT / PROTECT read-only, forming spike candle changes nothing (flow and trap), restart identical (208 objects), missing / stale data | PASS |
+
+### The tests can fail (twins)
+
+Eight realistic bugs were injected into copies of the crypto file. Every one was caught by
+the session engine tests (two of them by the indicator tests as well):
+
+| Injected bug | Caught |
+|---|---|
+| Trap fires on any bearish close, no sweep required | yes |
+| Trap fires on a bearish close that never came back inside the range | yes |
+| Two traps per side per session | yes |
+| Pre-NY range keeps growing with NY-window bars | yes |
+| US DST ignored (13:30 UTC all year) | yes |
+| Structure flow not paused inside the window | yes (after S8 was extended; it escaped the first version) |
+| Clock accepted whatever the PC said (no half-hour check) | yes |
+| The forming 5M bar evaluated for a trap | yes |
+
+## Manual checks in MT5 (twins)
+
+1. **Compile both files** with F7. Expect `0 errors`.
+2. Drop the crypto file on BTCUSD M5 and the forex file on EURUSD M5. The `SESSION CLOCK` row
+   must print `AUTO: SERVER = UTC+N` with the offset your broker really has (EET/EEST brokers:
+   +2 or +3). If it prints UNKNOWN, set the clock to MANUAL and type the NY open as your
+   chart shows it.
+3. At 16:30 server time (EET/EEST brokers, most of the year) the PHASE row must switch to
+   `NY WINDOW`. If it switches at a different time, the offset is wrong: use MANUAL.
+4. Same restart check as for the gold file.
