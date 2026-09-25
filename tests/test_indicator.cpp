@@ -94,7 +94,7 @@ static int countPrefix(const std::string &p)
 // reference computation straight from the engine, for a candidate `now`
 struct Ref
 {
-   int state, reasons, sig, dir15, n5;
+   int state, reasons, sig, dir15, mode15, n5;
    NbSignal s;
 };
 static Ref reference(const Market &m, long long now, double tick, int digits)
@@ -124,6 +124,7 @@ static Ref reference(const Market &m, long long now, double tick, int digits)
    r.reasons = a.reasons.back();
    r.sig = a.sigOf.back();
    r.dir15 = b.dir.back();
+   r.mode15 = b.mode.back();
    if(r.sig >= 0) r.s = sg[(size_t)r.sig];
    return r;
 }
@@ -162,6 +163,9 @@ int main()
       load(gold, "BTCUSD", "BTC", 2, 0.01); SIM.now = gold.m5[3000].t + 20; start();
       CHECK(has(txt("state"), "GOLD / SILVER ONLY"), "BTCUSD rejected");
       OnDeinit(0);
+      load(gold, "ETHUSD", "ETH", 2, 0.01); SIM.now = gold.m5[3000].t + 20; start();
+      CHECK(has(txt("state"), "GOLD / SILVER ONLY"), "ETHUSD rejected");
+      OnDeinit(0);
    }
    end("I1");
 
@@ -186,7 +190,15 @@ int main()
          CHECK(has(txt("v14"), DoubleToString(r.s.risk, 2)), "risk");
          CHECK(has(txt("v6"), side == 0 ? "BUY MODE" : "SELL MODE"), "15M decision row");
          CHECK(has(txt("v9"), "READY"), "5M confirm READY");
-         CHECK(countPrefix("NBLP_C_L_") == 8, "entry/SL/TP1/TP2 lines + labels drawn");
+         CHECK(countPrefix("NBLP_C_L_") == 10, "entry/SL/TP1/TP2/SWING lines + labels drawn");
+         {
+            double atRisk = 0.0;
+            double lots = NbLotsForRisk(10000.0, 1.0, r.s.risk, 0.01, 1.0, 0.01, 0.01, 100.0, atRisk);
+            CHECK(lots > 0.0 && has(txt("v22"), DoubleToString(lots, 2) + " LOTS"), "lot row = engine formula on the sim balance");
+            CHECK(has(txt("v21"), "10000.00"), "balance row read from the account");
+            double swing = r.s.entry + (side == 0 ? 20.0 : -20.0);
+            CHECK(has(txt("v17"), DoubleToString(swing, 2)), "swing TP = entry +/- 20.00 on gold");
+         }
          CHECK(countPrefix("NBLP_C_G_") > 0, "decision markers drawn");
          std::printf("    %s at %s: entry %s SL %s TP1 %s TP2 %s\n", side == 0 ? "BUY " : "SELL",
                      TimeToString(now, TIME_DATE | TIME_MINUTES).c_str(), DoubleToString(r.s.entry, 2).c_str(),
@@ -233,9 +245,9 @@ int main()
    }
    end("I4");
 
-   begin("I5 existing BUY / SELL position + 15M reversal -> EXIT / PROTECT (read only)");
+   begin("I5 existing BUY / SELL position: EXIT / PROTECT on the FULL 15M BOSS mode (read only)");
    {
-      // a moment where 15M NRTR is bearish, and a time earlier where it was bullish
+      // (a) full boss flip: opened while the boss agreed, boss now in the opposite MODE -> EXIT
       for(int side = 1; side >= -1; side -= 2)
       {
          long long now = 0, openT = 0;
@@ -243,11 +255,11 @@ int main()
          {
             long long cand = gold.m5[i].t + 320;
             Ref r = reference(gold, cand, 0.01, 2);
-            if(r.dir15 != -side) continue;
-            for(long long back = 3600; back < 5 * 3600; back += 900)
-               if(reference(gold, cand - back, 0.01, 2).dir15 == side) { now = cand; openT = cand - back; break; }
+            if(r.mode15 != -side) continue;
+            for(long long back = 3600; back < 3 * 86400; back += 900)
+               if(reference(gold, cand - back, 0.01, 2).mode15 == side) { now = cand; openT = cand - back; break; }
          }
-         CHECK(now > 0, "fixture has a 15M reversal");
+         CHECK(now > 0, "fixture has a full 15M boss flip");
          load(gold, "XAUUSD", "XAU", 2, 0.01);
          SIM.now = now;
          SIM.pos.push_back({"XAUUSD", side > 0 ? POSITION_TYPE_BUY : POSITION_TYPE_SELL, 0.10, openT});
@@ -256,6 +268,7 @@ int main()
          start();
          CHECK(has(txt("state"), side > 0 ? "EXIT / PROTECT BUY" : "EXIT / PROTECT SELL"), "banner EXIT / PROTECT");
          CHECK(has(txt("r1"), "15M TREND INVALIDATED"), "reason 15M TREND INVALIDATED");
+         CHECK(has(txt("r2"), side > 0 ? "15M BOSS NOW SELL MODE" : "15M BOSS NOW BUY MODE"), "reason names the boss MODE, not the NRTR");
          CHECK(has(txt("pw"), "15M TREND INVALIDATED"), "position row explains");
          CHECK(has(txt("v16"), side > 0 ? "BUY 0.10" : "SELL 0.10"), "reads the position on this symbol only");
          bool untouched = SIM.pos.size() == before.size();
@@ -264,19 +277,51 @@ int main()
          CHECK(untouched, "positions unchanged (read only)");
          OnDeinit(0);
       }
-      // regime intact -> not EXIT
-      long long now = findNow(gold, 0.01, 2, [](const Ref &r) { return r.dir15 == 1; });
+      // (b) NRTR flipped against the position but the boss is only WAIT -> PROTECT, never EXIT
+      for(int side = 1; side >= -1; side -= 2)
+      {
+         long long now = 0, openT = 0;
+         for(size_t i = 11 * 288; i + 1 < gold.m5.size() && now == 0; i += 3)
+         {
+            long long cand = gold.m5[i].t + 320;
+            Ref r = reference(gold, cand, 0.01, 2);
+            if(r.mode15 != NB_WAIT || r.dir15 != -side) continue;
+            for(long long back = 900; back < 2 * 86400; back += 900)
+               if(reference(gold, cand - back, 0.01, 2).mode15 == side) { now = cand; openT = cand - back; break; }
+         }
+         CHECK(now > 0, "fixture has an NRTR-only flip (boss WAIT)");
+         load(gold, "XAUUSD", "XAU", 2, 0.01);
+         SIM.now = now;
+         SIM.pos.push_back({"XAUUSD", side > 0 ? POSITION_TYPE_BUY : POSITION_TYPE_SELL, 0.10, openT});
+         start();
+         CHECK(!has(txt("state"), "EXIT"), "NRTR flip alone: banner is NOT EXIT");
+         CHECK(has(txt("state"), "WAIT"), "banner stays WAIT");
+         CHECK(has(txt("pw"), "PROTECT - 15M BOSS WAIT, NOT INVALIDATED"), "position row: PROTECT, boss WAIT");
+         std::printf("    %s + boss WAIT: pw = \"%s\"\n", side > 0 ? "BUY" : "SELL", txt("pw").c_str());
+         OnDeinit(0);
+      }
+      // (c) regime intact (boss in the position's MODE) -> HOLD, not EXIT
+      long long now = findNow(gold, 0.01, 2, [](const Ref &r) { return r.mode15 == NB_BUY; });
       load(gold, "XAUUSD", "XAU", 2, 0.01);
       SIM.now = now;
       SIM.pos.push_back({"XAUUSD", POSITION_TYPE_BUY, 0.10, now - 600});
       start();
-      CHECK(!has(txt("state"), "EXIT"), "BUY with bullish 15M is not EXIT");
-      CHECK(has(txt("pw"), "15M REGIME INTACT"), "position row: regime intact");
+      CHECK(!has(txt("state"), "EXIT"), "BUY with BOSS BUY is not EXIT");
+      CHECK(has(txt("pw"), "15M REGIME INTACT - BOSS BUY MODE"), "position row: regime intact");
+      OnDeinit(0);
+      // (d) position opened while boss was WAIT, boss now BUY -> a SELL is AGAINST the boss
+      load(gold, "XAUUSD", "XAU", 2, 0.01);
+      SIM.now = now;
+      SIM.pos.push_back({"XAUUSD", POSITION_TYPE_SELL, 0.10, now - 600});
+      start();
+      CHECK(has(txt("state"), "EXIT / PROTECT SELL"), "SELL against BOSS BUY -> EXIT");
+      CHECK(has(txt("pw"), "AGAINST 15M BOSS"), "position row: against the boss");
       OnDeinit(0);
       load(gold, "XAUUSD", "XAU", 2, 0.01);
       SIM.now = now;
       start();
       CHECK(txt("v16") == "NO POSITION", "no position -> NO POSITION");
+      CHECK(has(txt("h15"), "CUSTOM ATR-NRTR"), "panel is labelled CUSTOM ATR-NRTR");
       OnDeinit(0);
    }
    end("I5");
@@ -370,6 +415,7 @@ int main()
       start();
       CHECK(has(txt("state"), "WAIT") && has(txt("r1"), "DATA STALE"), "stale feed -> WAIT / DATA STALE");
       CHECK(has(txt("pw"), "CANNOT JUDGE"), "stale feed -> position advice withheld");
+      CHECK(countPrefix("NBLP_V_") == 0 && txt("vpv") == "---", "stale feed -> no preview marker, no preview text");
       OnDeinit(0);
 
       load(gold, "XAUUSD", "XAU", 2, 0.01);
@@ -388,6 +434,127 @@ int main()
       OnDeinit(0);
    }
    end("I8");
+
+   begin("I9 v1.02 display: arrows on every closed candle, NY open alert, zigzag, blink");
+   {
+      long long now = findNow(gold, 0.01, 2, [](const Ref &r) { return r.state == NB_BUY; });
+      load(gold, "XAUUSD", "XAU", 2, 0.01);
+      _Period = PERIOD_M5;
+      SIM.now = now;
+      start();
+      const std::vector<double> &up = *SIM.bufs[6];
+      const std::vector<double> &dn = *SIM.bufs[8];
+      size_t v = up.size();
+      CHECK(v > 10 && up[v - 1] == EMPTY_VALUE && dn[v - 1] == EMPTY_VALUE, "forming candle has no arrow");
+      int arrows = 0, both = 0, upAtLow = 0;
+      for(size_t i = 0; i + 1 < v; i++)
+      {
+         bool u1 = up[i] != EMPTY_VALUE, d1 = dn[i] != EMPTY_VALUE;
+         if(u1 || d1) arrows++;
+         if(u1 && d1) both++;
+         if(u1 && up[i] == SIM.m5[i].low) upAtLow++;
+      }
+      // v1.03: arrows only where the 5M NRTR direction changes (chart is M5)
+      int flips = 0;
+      {
+         int prev = 0;
+         for(int k = 0; k < g_s5.n; k++) { if(g_s5.dir[(size_t)k] != 0 && g_s5.dir[(size_t)k] != prev) { flips++; prev = g_s5.dir[(size_t)k]; } }
+      }
+      CHECK(arrows > 0 && arrows == flips && both == 0, "one arrow per NRTR flip candle, none elsewhere");
+      CHECK(countPrefix("NBLP_V_") == 1 && has(txt("vpv"), "IF IT CLOSED NOW"), "preview marker + row on the forming candle");
+      // live box: both sides from NbPlanSide
+      {
+         double e, sl, t1, t2, rk;
+         bool okB = NbPlanSide(g_s5.c, g_s5.atr, g_piv5, g_s5.np, g_s5.n - 1, 1, g_P, e, sl, t1, t2, rk);
+         CHECK(okB && txt("lbB0") == DoubleToString(e, 2) && txt("lbB1") == DoubleToString(sl, 2), "live box BUY column = engine plan");
+         CHECK(okB && sl < e && e < t1 && t1 < t2, "live box BUY plan respects the level order");
+         bool okS = NbPlanSide(g_s5.c, g_s5.atr, g_piv5, g_s5.np, g_s5.n - 1, -1, g_P, e, sl, t1, t2, rk);
+         CHECK(!okS || (t2 < t1 && t1 < e && e < sl), "live box SELL plan respects the level order");
+         CHECK(has(txt("lbGb"), "READY"), "BUY gate READY while the banner says CLICK BUY");
+         CHECK(!has(txt("lbGs"), "READY"), "SELL gate is not READY at the same time");
+      }
+      CHECK(upAtLow > 0, "up arrow anchored at the candle low");
+      CHECK(countPrefix("NBLP_C_Z_") > 0, "zigzag segments drawn between confirmed 15M swings");
+      CHECK(has(txt("hg"), "HOW TO READ"), "legend section present");
+      // blink: the banner text never changes, only the fill
+      std::string before = txt("state");
+      OnTimer();
+      CHECK(txt("state") == before && has(before, "CLICK BUY"), "blink keeps the banner text");
+      OnDeinit(0);
+      _Period = PERIOD_M15;
+
+      // NY open: alert once inside the open minute, weekdays only, never on the weekend
+      load(gold, "XAUUSD", "XAU", 2, 0.01);
+      long long day = (gold.m5[3000].t / 86400) * 86400;
+      // pick a Tuesday
+      while(((day / 86400) + 4) % 7 != 2) day += 86400;
+      SIM.now = day + 16 * 3600 + 30 * 60 + 5;
+      SIM.alerts.clear();
+      start();
+      CHECK(SIM.alerts.size() == 1 && has(SIM.alerts[0], "NEW YORK OPEN"), "one alert in the open minute");
+      OnTimer();
+      SIM.now += 20;
+      OnTimer();
+      CHECK(SIM.alerts.size() == 1, "no second alert the same day");
+      CHECK(has(txt("vs"), "NY OPEN - FIRST 15 MIN"), "session row says WAIT in the first 15 minutes");
+      SIM.now = day + 16 * 3600 + 29 * 60;
+      OnTimer();
+      CHECK(has(txt("vs"), "in 01:00"), "countdown before the open");
+      SIM.now = day + 10 * 3600;
+      OnTimer();
+      CHECK(has(txt("vs"), "in 6:30:00"), "countdown in h:mm:ss when far away");
+      OnDeinit(0);
+      load(gold, "XAUUSD", "XAU", 2, 0.01);
+      long long sat = day;
+      while(((sat / 86400) + 4) % 7 != 6) sat += 86400;
+      SIM.now = sat + 16 * 3600 + 30 * 60 + 5;
+      SIM.alerts.clear();
+      start();
+      CHECK(SIM.alerts.empty(), "no alert on Saturday");
+      OnDeinit(0);
+      CHECK(NbParseHHMM("16:30") == 59400 && NbParseHHMM("1630") < 0 && NbParseHHMM("25:00") < 0, "HH:MM parser");
+   }
+   end("I9");
+
+   begin("I11 Asia open after the 00:00-01:00 metals break: LIVE, not STALE (the XAGUSD finding)");
+   {
+      // silver history with the daily break removed: no bars between 00:00 and 01:00 on day 12
+      Market brk = silver;
+      long long dayStart = (brk.m5[12 * 288].t / 86400) * 86400;
+      std::vector<SBar> m5;
+      for(const SBar &b : brk.m5) if(!(b.t >= dayStart && b.t < dayStart + 3600)) m5.push_back(b);
+      brk.m5 = m5;
+      brk.m15 = agg(brk.m5, 900);
+      load(brk, "XAGUSD", "XAG", 3, 0.001);
+      SIM.now = dayStart + 3600 + 12 * 60 + 7;     // 01:12:07, forming 5M = 01:10, forming 15M = 01:00
+      start();
+      CHECK(!has(txt("r1"), "DATA STALE"), "01:12 after the break is not STALE");
+      CHECK(txt("vd7") == "LIVE", "DATA STATUS = LIVE");
+      CHECK(has(txt("vd4"), "23:45") && has(txt("vd4"), "1:12:"), "LAST M15 CLOSED shows 23:45 and its 72 min age openly");
+      CHECK(has(txt("vd3"), "01:05"), "LAST M5 CLOSED = 01:05");
+      CHECK(has(txt("vd5"), "01:10") && has(txt("vd5"), "01:00"), "forming bars 01:10 / 01:00");
+      CHECK(has(txt("vd1"), "01:12:07"), "BROKER TIME row shows the last tick with seconds");
+      CHECK(!has(txt("lbGb"), "DATA STALE") && !has(txt("lbGs"), "DATA STALE"), "gates no longer say DATA STALE");
+      CHECK(has(txt("v8"), "CLOSED 01:10") && has(txt("v8"), "next 02:53"), "5M CANDLE row counts to the forming bar's close");
+      OnDeinit(0);
+      // same moment, but the broker's feed died at 00:59 -> STALE with the reason
+      load(brk, "XAGUSD", "XAG", 3, 0.001);
+      SIM.now = dayStart + 3600 + 12 * 60 + 7;
+      SIM.tickTime = dayStart + 3600 - 60;
+      start();
+      CHECK(has(txt("r1"), "DATA STALE") && has(txt("vd7"), "NO RECENT TICK"), "dead feed at the same clock time -> STALE, reason shown");
+      SIM.tickTime = 0;
+      OnDeinit(0);
+      // clock mismatch: broker tick 10 min ahead of the server-clock estimate
+      load(brk, "XAGUSD", "XAG", 3, 0.001);
+      SIM.now = dayStart + 3600 + 12 * 60 + 7;
+      SIM.tickTime = SIM.now + 600;
+      start();
+      CHECK(has(txt("r1"), "DATA STALE") && has(txt("vd7"), "CLOCK MISMATCH"), "tick clock ahead -> STALE with CLOCK MISMATCH");
+      SIM.tickTime = 0;
+      OnDeinit(0);
+   }
+   end("I11");
 
    std::printf("\nINDICATOR TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;

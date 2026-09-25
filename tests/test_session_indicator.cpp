@@ -87,7 +87,7 @@ static int countPrefix(const std::string &p)
 // reference computation straight from the engine, for a candidate `now`
 struct Ref
 {
-   int state, reasons, sig, dir15, ph;
+   int state, reasons, sig, dir15, mode15, ph;
    NbSignal s;
 };
 static Ref reference(const Market &m, long long now)
@@ -114,7 +114,7 @@ static Ref reference(const Market &m, long long now)
    NbRun15(b, p15, P);
    NbRun5(a, p5, b, true, P, S, sg, ns);
    Ref r;
-   r.state = a.state.back(); r.reasons = a.reasons.back(); r.sig = a.sigOf.back(); r.dir15 = b.dir.back(); r.ph = a.ph.back();
+   r.state = a.state.back(); r.reasons = a.reasons.back(); r.sig = a.sigOf.back(); r.dir15 = b.dir.back(); r.mode15 = b.mode.back(); r.ph = a.ph.back();
    if(r.sig >= 0) r.s = sg[(size_t)r.sig];
    return r;
 }
@@ -195,9 +195,17 @@ int main()
          CHECK(has(txt("v13"), DoubleToString(r.s.tp2, DIGITS)) && has(txt("v13"), "2.0R"), "TP2 = 2R");
          CHECK(has(txt("v6"), side == 0 ? "BUY MODE" : "SELL MODE"), "15M decision row");
          CHECK(has(txt("v9"), "READY"), "5M confirm READY");
-         CHECK(has(txt("v17"), "AUTO: SERVER = UTC+3"), "session clock row: AUTO +3 from the two witnesses");
-         CHECK(has(txt("v18"), "OUTSIDE NY") || has(txt("v18"), "PRE-NY"), "a flow signal is never inside the NY window (pause on)");
-         CHECK(countPrefix("NBSP_C_L_") == 8, "entry/SL/TP1/TP2 lines + labels drawn");
+         CHECK(has(txt("vn1"), "AUTO: SERVER = UTC+3"), "session clock row: AUTO +3 from the two witnesses");
+         CHECK(has(txt("vn2"), "OUTSIDE NY") || has(txt("vn2"), "PRE-NY"), "a flow signal is never inside the NY window (pause on)");
+         CHECK(countPrefix("NBSP_C_L_") == 10, "entry/SL/TP1/TP2/swing lines + labels drawn");
+         CHECK((side == 0 ? txt("lbB0") : txt("lbS0")) != "---" && (side == 0 ? txt("lbB1") : txt("lbS1")) != "---", "live box has a plan for the clicked side");
+         CHECK(has(side == 0 ? txt("lbGb") : txt("lbGs"), "READY - CLICK"), "gate line of the clicked side reads READY - CLICK");
+         CHECK(has(txt("v22"), "LOTS") || has(txt("v22"), "SKIP"), "lots for 1% risk row");
+         CHECK(has(txt("v17"), "entry"), "swing TP row from the automatic 15M-ATR distance");
+         CHECK(has(txt("vc5"), " UP / ") && has(txt("vc5"), "net ") && has(txt("vc5"), "ATR)"), "last 5 x 5M strip");
+         CHECK(has(txt("vc15"), " UP / ") && has(txt("vc15"), "net "), "last 5 x 15M strip");
+         CHECK(has(txt("vd7"), "LIVE"), "data clock says LIVE");
+         CHECK(has(txt("vs"), "NY OPEN") || has(txt("vs"), "NEW YORK SESSION") || has(txt("vs"), "OUTSIDE NY"), "NEW YORK OPEN row from the session clock");
          std::printf("    %s at %s: entry %s SL %s TP1 %s TP2 %s | %s\n", side == 0 ? "BUY " : "SELL",
                      TimeToString(now, TIME_DATE | TIME_MINUTES).c_str(), DoubleToString(r.s.entry, DIGITS).c_str(),
                      DoubleToString(r.s.sl, DIGITS).c_str(), DoubleToString(r.s.tp1, DIGITS).c_str(),
@@ -226,9 +234,9 @@ int main()
          CHECK(has(txt("v10"), DoubleToString(r.s.entry, DIGITS)), "entry");
          CHECK(has(txt("v11"), DoubleToString(r.s.sl, DIGITS)) && has(txt("v11"), "beyond the sweep") && has(txt("k11"), "sweep"), "SL beyond the sweep");
          CHECK(has(txt("v9"), "NY TRAP - STRUCTURE NOT USED"), "5M confirm row explains");
-         CHECK(has(txt("v18"), "NY WINDOW"), "phase row: NY window");
-         CHECK(has(txt("v19"), "H ") && has(txt("v19"), "/  L "), "range row shows H / L");
-         CHECK(has(txt("v20"), side == 0 ? "SELL TRAP @" : "BUY TRAP @") && has(txt("v20"), "active"), "trap row: fired and active");
+         CHECK(has(txt("vn2"), "NY WINDOW"), "phase row: NY window");
+         CHECK(has(txt("vn3"), "H ") && has(txt("vn3"), "/  L "), "range row shows H / L");
+         CHECK(has(txt("vn4"), side == 0 ? "SELL TRAP @" : "BUY TRAP @") && has(txt("vn4"), "active"), "trap row: fired and active");
          bool marker = false;
          for(auto &kv : SIM.objs)
             if(kv.first.compare(0, 7, "NBSP_C_G_") == 0 || kv.first.compare(0, 9, "NBSP_C_G_") == 0)
@@ -254,8 +262,9 @@ int main()
       CHECK(has(txt("state"), "WAIT"), "banner WAIT");
       CHECK(has(txt("r1"), "NY OPEN WINDOW - FLOW PAUSED"), "reason names the window");
       CHECK(has(txt("v9"), "PAUSED - NY WINDOW"), "5M confirm row");
-      CHECK(has(txt("v18"), "NY WINDOW") && has(txt("v18"), "until"), "phase row with the end time");
-      CHECK(has(txt("v20"), "WATCHING") || has(txt("v20"), "SWEPT TO"), "trap row: watching or swept-waiting");
+      CHECK(has(txt("vn2"), "NY WINDOW") && has(txt("vn2"), "until"), "phase row with the end time");
+      CHECK(has(txt("vs"), "NY OPEN - WINDOW") && has(txt("vs"), "TRAP ARMED"), "top NEW YORK OPEN row: window running, trap armed");
+      CHECK(has(txt("vn4"), "WATCHING") || has(txt("vn4"), "SWEPT TO"), "trap row: watching or swept-waiting");
       CHECK(txt("v10") == "---" && countPrefix("NBSP_C_L_") == 0, "no levels while waiting");
       OnDeinit(0);
    }
@@ -268,15 +277,16 @@ int main()
       SIM.now = now;
       SIM.gmtOff = 3 * 3600 + 11 * 60;   // PC clock 11 min off any zone
       start();
-      CHECK(has(txt("v17"), "UNKNOWN") && has(txt("v17"), "SET MANUAL"), "clock row says UNKNOWN / SET MANUAL");
-      CHECK(txt("v18") == "---" && txt("v20") == "---", "no phase, no trap when the clock is unknown");
+      CHECK(has(txt("vn1"), "UNKNOWN") && has(txt("vn1"), "SET MANUAL"), "clock row says UNKNOWN / SET MANUAL");
+      CHECK(txt("vn2") == "---" && txt("vn4") == "---", "no phase, no trap when the clock is unknown");
       CHECK(!has(txt("r1"), "NY OPEN WINDOW"), "no NY reason is ever shown");
+      CHECK(has(txt("vs"), "SESSION CLOCK UNKNOWN"), "top row: clock unknown");
       OnDeinit(0);
       load(mk, SYM, BASE, QUOTE, DIGITS, TICK);
       SIM.now = now;
       SIM.gmtOff = -5 * 3600;   // a UTC-5 broker
       start();
-      CHECK(has(txt("v17"), "AUTO: SERVER = UTC-5"), "negative offset printed");
+      CHECK(has(txt("vn1"), "AUTO: SERVER = UTC-5"), "negative offset printed");
       OnDeinit(0);
    }
    end("I5");
@@ -284,13 +294,13 @@ int main()
    begin("I6 existing position + 15M reversal -> EXIT / PROTECT (read only)");
    {
       long long now = 0, openT = 0;
-      for(size_t i = 11 * 288; i + 1 < mk.m5.size() && now == 0; i += 7)
+      for(size_t i = 11 * 288; i + 1 < mk.m5.size() && now == 0; i += 3)
       {
          long long cand = mk.m5[i].t + 320;
          Ref r = reference(mk, cand);
-         if(r.dir15 != -1) continue;
-         for(long long back = 3600; back < 5 * 3600; back += 900)
-            if(reference(mk, cand - back).dir15 == 1) { now = cand; openT = cand - back; break; }
+         if(r.mode15 != NB_SELL) continue;
+         for(long long back = 3600; back < 72 * 3600; back += 900)
+            if(reference(mk, cand - back).mode15 == NB_BUY) { now = cand; openT = cand - back; break; }
       }
       CHECK(now > 0, "fixture has a 15M reversal");
       load(mk, SYM, BASE, QUOTE, DIGITS, TICK);
@@ -298,8 +308,8 @@ int main()
       SIM.pos.push_back({SYM, POSITION_TYPE_BUY, 0.10, openT});
       std::vector<SimPos> before = SIM.pos;
       start();
-      CHECK(has(txt("state"), "EXIT / PROTECT BUY"), "banner EXIT / PROTECT");
-      CHECK(has(txt("r1"), "15M TREND INVALIDATED"), "reason");
+      CHECK(has(txt("state"), "EXIT / PROTECT BUY"), "banner EXIT / PROTECT (boss flipped BUY -> SELL mode)");
+      CHECK(has(txt("r1"), "15M TREND INVALIDATED (BOSS FLIPPED)"), "reason");
       bool untouched = SIM.pos.size() == before.size() && SIM.pos[0].type == before[0].type && SIM.pos[0].vol == before[0].vol;
       CHECK(untouched, "positions unchanged (read only)");
       OnDeinit(0);
@@ -315,7 +325,7 @@ int main()
          load(mk, SYM, BASE, QUOTE, DIGITS, TICK);
          SIM.now = now;
          start();
-         std::string s1 = txt("state"), e1 = txt("v10"), t1 = txt("v20");
+         std::string s1 = txt("state"), e1 = txt("v10"), t1 = txt("vn4");
          OnDeinit(0);
          load(mk, SYM, BASE, QUOTE, DIGITS, TICK);
          SIM.now = now;
@@ -323,7 +333,7 @@ int main()
             for(auto &b : *ser)
                if(b.time <= now && b.time + (ser == &SIM.m5 ? 300 : 900) > now) { b.low -= PRICE * 0.05; b.close -= PRICE * 0.05; b.high += PRICE * 0.05; }
          start();
-         CHECK(txt("state") == s1 && txt("v10") == e1 && txt("v20") == t1, "an unfinished crash/spike candle changes nothing");
+         CHECK(txt("state") == s1 && txt("v10") == e1 && txt("vn4") == t1, "an unfinished crash/spike candle changes nothing");
          OnDeinit(0);
       }
    }
@@ -374,6 +384,8 @@ int main()
       start();
       CHECK(has(txt("state"), "WAIT") && has(txt("r1"), "DATA STALE"), "stale feed -> WAIT / DATA STALE");
       CHECK(has(txt("pw"), "CANNOT JUDGE"), "position advice withheld");
+      CHECK(has(txt("vd7"), "NO RECENT TICK"), "data clock names the failing witness");
+      CHECK(txt("vpv") == "---", "no preview on stale data");
       OnDeinit(0);
    }
    end("I9");
