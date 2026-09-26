@@ -45,13 +45,13 @@ enum { ACCOUNT_CURRENCY = 1 };
 enum { ACCOUNT_BALANCE = 1, ACCOUNT_EQUITY = 2 };
 enum { POSITION_SYMBOL = 1, POSITION_TYPE, POSITION_VOLUME, POSITION_TIME };
 enum { POSITION_TYPE_BUY = 0, POSITION_TYPE_SELL = 1 };
-enum { OBJ_LABEL = 1, OBJ_RECTANGLE_LABEL, OBJ_TEXT, OBJ_TREND };
+enum { OBJ_LABEL = 1, OBJ_RECTANGLE_LABEL, OBJ_TEXT, OBJ_TREND, OBJ_RECTANGLE };
 enum { OBJPROP_CORNER = 1, OBJPROP_XDISTANCE, OBJPROP_YDISTANCE, OBJPROP_XSIZE, OBJPROP_YSIZE, OBJPROP_BGCOLOR,
        OBJPROP_BORDER_TYPE, OBJPROP_COLOR, OBJPROP_WIDTH, OBJPROP_BACK, OBJPROP_SELECTABLE, OBJPROP_HIDDEN,
        OBJPROP_ZORDER, OBJPROP_ANCHOR, OBJPROP_TEXT, OBJPROP_FONT, OBJPROP_FONTSIZE, OBJPROP_TIME, OBJPROP_PRICE,
-       OBJPROP_TOOLTIP, OBJPROP_STYLE, OBJPROP_RAY_RIGHT };
+       OBJPROP_TOOLTIP, OBJPROP_STYLE, OBJPROP_RAY_RIGHT, OBJPROP_FILL };
 enum { CORNER_LEFT_UPPER = 0 };
-enum { ANCHOR_LEFT_UPPER = 0, ANCHOR_LEFT_LOWER, ANCHOR_CENTER, ANCHOR_UPPER, ANCHOR_LOWER };
+enum { ANCHOR_LEFT_UPPER = 0, ANCHOR_LEFT_LOWER, ANCHOR_CENTER, ANCHOR_UPPER, ANCHOR_LOWER, ANCHOR_RIGHT_LOWER, ANCHOR_RIGHT_UPPER };
 enum { BORDER_FLAT = 0 };
 enum { STYLE_SOLID = 0, STYLE_DASH, STYLE_DOT, STYLE_DASHDOT };
 enum { TIME_DATE = 1, TIME_MINUTES = 2, TIME_SECONDS = 4 };
@@ -91,6 +91,7 @@ struct SimState
    std::vector<std::string> log;
    std::vector<std::string> alerts;
    std::vector<std::string> sounds;
+   int chartW = 1400, chartH = 900;   // chart size in pixels
 };
 static SimState SIM;
 static std::string _Symbol = "XAUUSD";
@@ -241,7 +242,7 @@ inline int ObjectsDeleteAll(long, const string &prefix, int = -1, int = -1)
    return n;
 }
 inline void ChartRedraw(long = 0) {}
-inline long long ChartGetInteger(long, int prop, int = 0) { return prop == CHART_WIDTH_IN_PIXELS ? 1400 : 900; }
+inline long long ChartGetInteger(long, int prop, int = 0) { return prop == CHART_WIDTH_IN_PIXELS ? SIM.chartW : SIM.chartH; }
 inline bool SetIndexBuffer(int idx, std::vector<double> &b, int) { SIM.bufs[idx] = &b; return true; }
 inline bool PlotIndexSetDouble(int, int, double) { return true; }
 inline bool PlotIndexSetInteger(int, int, int) { return true; }

@@ -270,6 +270,61 @@ the session engine tests (two of them by the indicator tests as well):
 | Clock accepted whatever the PC said (no half-hour check) | yes |
 | The forming 5M bar evaluated for a trap | yes |
 
+## Results (2026-09-26, v1.05 five-question table)
+
+```
+TWIN CHECK:      PASS  (5058 lines, 4 differ: header, 2 descriptions, NB_MARKET)
+SAFETY SCAN:     PASS  (both files)
+FULL FILE crypto / forex (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
+EXISTING SUITES: all unchanged and passing (gold 145 + 124, crypto 106 + 104, forex 104 + 103)
+FIVE-QUESTION ENGINE TESTS:    crypto 96 / forex 96 passed, 0 failed
+FIVE-QUESTION INDICATOR TESTS: crypto 106 / forex 106 passed, 0 failed
+EXISTING PANEL UNCHANGED:      53 scenarios per twin, every object, buffer, alert and log line
+                               byte-identical to the v1.04 file from git (3f046ef)
+MUTATION TESTS:  python3 tests/mutate_fq.py -> 14 planted, 14 caught, 0 escaped
+MetaEditor F7:   NOT RUN (not available in the build environment)
+Visual MT5 test: NOT RUN
+```
+
+| # | Case | Result |
+|---|---|---|
+| F1 | BUY sweep of support, hand-computed: SETUP until the close above the sweep candle high, READY at exactly that close; entry 100.00, SL 99.56, TP1 103.00 = 6.82R, TP2 104.50; a re-dip keeps the sweep low; fill, then TP1 recorded | PASS |
+| F2 | no confirmation close -> never READY | PASS |
+| F3 | next resistance 1.36R away -> SKIP with that R; the same candles with a 1.3R minimum -> READY | PASS |
+| F4 | no level mapped beyond -> reward UNKNOWN -> SKIP, never READY | PASS |
+| F5 | 15M structure MIXED / NOT CONFIRMED -> NO TRADE on every bar, even on a textbook sweep | PASS |
+| F6 | with the trend only: a BUY sweep in a bearish 15M and a breakdown in a bullish 15M make no plan | PASS |
+| F7 | BUY breakout: READY on the breakout close, limit at the level, SL beyond the confirmed 5M swing | PASS |
+| F8 | breakout without a structural stop -> SKIP; a close back below kills the breakout | PASS |
+| F9 | SELL sweep of resistance (mirror), exact levels, TP2 < TP1 < ENTRY < SL | PASS |
+| F10 | outcomes: fill + SL same candle = SL; fill + TP1 same candle = filled only; TP1 before fill = MISSED; 12 bars = EXPIRED; SL + TP1 same candle = SL; 144 bars = TIMED OUT; SELL mirror | PASS |
+| F11 | pending plan CANCELLED when the 15M structure turns | PASS |
+| F12 | the forming candle is never evaluated | PASS |
+| F13 | level merge (stronger source wins, group width = zone), last 4 swings per side, unconfirmed swings excluded | PASS |
+| F14 | PDH / PDL of the previous COMPLETE broker day; Asia / London known only when the window ends; no clock -> Asia / London unknown | PASS |
+| F15 | 16 synthetic days (crypto: 53 plans, both sides, both kinds): level order, >= 1.5R, tick grid, with the trend, event inside the window, one plan at a time | PASS |
+| F16 | session levels equal an independent brute-force oracle on every bar | PASS |
+| F17 | the levels drawn equal the levels the engine used | PASS |
+| F18 | no repaint: 31 cut points plus a different future -> every earlier answer bit-identical | PASS |
+| Q1 | table at the bottom middle (exactly centred on a 1920 px chart), steps aside for the main panel on 1400 px, every label inside it | PASS |
+| Q2 | READY BUY and SELL rendered with the engine's exact order, SL, TP1, TP2, R:R, NEXT line, plan lines, plan marker, tally | PASS |
+| Q3 | big S/R lines (width 3, running right) at the engine's prices, filled zones reaching into the future, BREAKOUT / BREAKDOWN / possible BUY / SELL words per trend, BREAKOUT tag on the exact candle | PASS |
+| Q4 | SETTING UP, WATCH (middle) and SKIP (low R) render their own words; no plan lines before READY | PASS |
+| Q5 | the engine's last closed bar IS READY and the feed stops -> NO TRADE - DATA STALE, no answers, no plan lines | PASS |
+| Q6 | unsupported symbol / missing history -> no plan, nothing drawn; recovery | PASS |
+| Q7 | restart identical; a forming crash candle changes nothing in the table or the drawing | PASS |
+| Q8 | the MAIN PANEL row repeats the main panel's own answer (CLICK BUY / WAIT + reason) | PASS |
+| dump | the v1.04 file from git and this file, 53 scenarios: every existing object, buffer hash, alert and log line identical | PASS |
+
+The mutation list, the hand arithmetic and every changed line are in [CHANGELOG.md](CHANGELOG.md).
+The synthetic market is a random walk, so its plan outcomes (crypto: TP1 6, SL 14, not filled 32)
+test the mechanics only and say nothing about an edge.
+
+**Manual check for v1.05:** F7 both files; attach the crypto file to BTCUSD M5. The table must sit
+at the bottom middle (or just right of the main panel on a narrow chart). The two thick lines must
+be the nearest level above and below price. With a live feed the status must never read READY
+while the DATA CLOCK says STALE.
+
 ## Manual checks in MT5 (twins)
 
 1. **Compile both files** with F7. Expect `0 errors`.

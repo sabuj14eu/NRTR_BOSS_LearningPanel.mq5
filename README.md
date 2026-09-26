@@ -6,8 +6,8 @@ compile with F7, drag onto the chart. None of them ever places, modifies or clos
 | File | Market | Extra |
 |---|---|---|
 | `NRTR_BOSS_LearningPanel.mq5` | Gold, Silver | the original 15M-boss / 5M-trigger panel |
-| `NRTR_BOSS_Crypto_NYTrap.mq5` | BTC ETH SOL LTC XRP BNB ADA DOGE AVAX DOT LINK BCH (USD, USDT, USDC) | **+ NY-open trap module** |
-| `NRTR_BOSS_Forex_NYTrap.mq5` | EURUSD USDJPY GBPUSD and every pair of USD EUR GBP JPY CHF AUD NZD CAD SGD NOK SEK DKK PLN ZAR MXN HKD CNH | **+ NY-open trap module** |
+| `NRTR_BOSS_Crypto_NYTrap.mq5` | BTC ETH SOL LTC XRP BNB ADA DOGE AVAX DOT LINK BCH (USD, USDT, USDC) | **+ NY-open trap module + 5-question table (v1.05)** |
+| `NRTR_BOSS_Forex_NYTrap.mq5` | EURUSD USDJPY GBPUSD and every pair of USD EUR GBP JPY CHF AUD NZD CAD SGD NOK SEK DKK PLN ZAR MXN HKD CNH | **+ NY-open trap module + 5-question table (v1.05)** |
 
 The crypto and forex files are twins: the same text except one `#define` (the market filter)
 and the description lines. `tests/check_twins.py` enforces that. The NY-trap module is
@@ -391,3 +391,87 @@ Crypto trades through the weekend, so the freshness gate rarely trips there; for
   anything.**
 
 Tests and exact results: see [TESTING.md](TESTING.md).
+
+---
+
+# 3. v1.05: the FIVE-QUESTION PLAN table (crypto & forex twins)
+
+A **new table at the bottom middle of the chart**. The main panel on the left is unchanged: a
+test builds the v1.04 file from git and requires every one of its objects to be identical.
+The table asks five questions on every **closed** 5M candle, using the 15M chart as the map:
+
+| # | Question | YES means |
+|---|---|---|
+| 1 | **TREND** | 15M confirmed structure is HH + HL (BUY side only) or LH + LL (SELL side only). Mixed = NO TRADE. |
+| 2 | **LOCATION** | price is at a mapped level: previous day high / low, Asia high / low, London high / low, or one of the last confirmed 15M swings. Not in the middle. |
+| 3 | **LIQUIDITY** | the level was **swept** (pierced, then back) or **broken by a 5M close** (breakout / breakdown). |
+| 4 | **CONFIRMATION** | after a sweep, a 5M candle **closes** beyond the sweep candle's high (low) with its body. A breakout close counts as its own confirmation. |
+| 5 | **REWARD** | the next mapped level is at least **1.5R** away. |
+
+All five YES = **READY**, and the table prints what to type:
+
+```
+ BTC  -  15M BULLISH                         5-QUESTION PLAN  -  15M MAP + 5M TIMING  -  PENDING ORDERS
+ [            READY  -  BUY LIMIT 63120.00            ]
+  1  TREND          YES  HL -> HH  = BUY SIDE ONLY           ORDER    BUY LIMIT 63120.00
+  2  LOCATION       YES  AT SUPPORT 63120.00 (ASIA L)        SL       63040.00   below sweep low
+  3  LIQUIDITY      YES  SWEPT TO 63050.00, BACK ABOVE       TP1      63580.00   PDH
+  4  CONFIRMATION   YES  5M CLOSED ABOVE 63210.00            TP2      63900.00   SWING H
+  5  REWARD         YES  TP1 = 2.10R   (NEED 1.5R)           R:R      1 : 2.10    /    1 : 3.05
+                                                             LOTS 1.0%  0.05   (risks 98.00 USD)
+                                                             VALID    not filled by 17:35 = cancel it
+ NEXT: type BUY LIMIT 63120.00  SL 63040.00  TP 63580.00  -  not filled in time = cancel, no chasing.
+ SUPPORT 63120.00 (ASIA L)  0.4 ATR below     |     RESISTANCE 63580.00 (PDH)  1.1 ATR above
+ 15M MAP   PDH 63580.00  PDL 62900.00   |   ASIA H 63400.00  L 63120.00   |   LONDON H 63510.00  L 63210.00
+ LAST PLAN: BUY SWEEP @ 14:35   limit 63120.00  -  HIT TP1
+ HISTORY (10 days): 7 plans  -  TP1 3 / SL 2 / not filled 2 / open 0     n<20 = luck, ~100 to judge
+ MAIN PANEL (NRTR rules): WAIT - 5M AGAINST 15M
+```
+
+(The numbers above show the layout. They are not a real signal.)
+
+Other banners: **SETTING UP** (swept, waiting for the confirmation close; the NEXT line names
+the exact price), **WATCH** (trend yes, but price is in the middle, at support with no sweep yet,
+or at the breakout line), **SKIP** (confirmed but only 0.9R to TP1, no stop structure, or no
+target mapped), **FILLED** (the limit was touched; SL / TP running), **NO TRADE** (no 15M
+structure, or **stale data**: when the DATA CLOCK says STALE the table is NO TRADE and the plan
+lines leave the chart).
+
+**On the chart (drawn in advance):** the nearest **RESISTANCE** (red) and **SUPPORT** (green) as
+thick lines with a shaded zone that runs 6 hours past the last candle, labelled with their name
+(`RESISTANCE 64200.00 (PREV DAY HIGH)`) and what they mean right now, in words:
+
+| 15M trend | Resistance says | Support says |
+|---|---|---|
+| bullish | `5M close ABOVE = BREAKOUT -> possible BUY on the retest` | `sweep below + 5M close back ABOVE = possible BUY` (hover: a real BREAKDOWN = against the trend, no trade) |
+| bearish | `sweep above + 5M close back BELOW = possible SELL` (hover: a real BREAKOUT = against the trend, no trade) | `5M close BELOW = BREAKDOWN -> possible SELL on the retest` |
+| unclear | `15M unclear: breakout or rejection - just watch` | `15M unclear: breakdown or bounce - just watch` |
+
+Plus a dashed **MIDDLE - NO ENTRY HERE** line, thin dotted lines for the other mapped levels,
+a **BREAKOUT / BREAKDOWN** tag on the candle that closed through a level (*with 15M* or
+*against 15M - no trade*), a **SWEEP** tag while a sweep waits for confirmation, the live
+plan's LIMIT / SL / TP1 / TP2 lines, and a `PLAN BUY (SWEEP)` marker for every plan in the
+loaded history (hover it: levels and what happened).
+
+"In advance" means the **levels and the pending order** exist before price comes back. It
+does not mean the file guesses the direction. "Possible" is always a condition you can read.
+
+**Settings** (a new group at the bottom of the inputs):
+
+| Input | Default | |
+|---|---|---|
+| Show the 5-question table | on | |
+| Draw big support / resistance lines, zones and the plan | on | |
+| Level zone and merge width | 0.25 | x 15M ATR |
+| Sweep / breakout must be within | 12 | closed 5M bars (1 hour) |
+| Minimum reward to TP1 | 1.5 | R; less = SKIP |
+| Pending limit valid for | 12 | closed 5M bars; then EXPIRED |
+| Asia range | 0 - 7 | UTC hours |
+| London range | 7 - 12 | UTC hours |
+| Table distance from the chart bottom | 16 | px |
+
+**Honest limits:** it is a hypothesis, not a validated edge, so count the plans (n<20 is luck).
+Spread is ignored when judging fills. Asia / London need the AUTO session clock and are not
+shown with MANUAL / UNKNOWN. FVG, order blocks, breakers, PO3 and QML are not in it. Every
+change and every test is listed in [CHANGELOG.md](CHANGELOG.md).
+

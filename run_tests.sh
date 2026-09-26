@@ -6,6 +6,8 @@ cd "$(dirname "$0")"
 FLAGS="-std=c++17 -O1 -Wall -Wextra -Wno-unused-parameter -Werror"
 mkdir -p build
 rc=0
+nr=0
+BASELINE=3f046ef   # last commit before v1.05 (the twins at v1.04)
 
 echo "================ NRTR_BOSS_LearningPanel.mq5 (Gold / Silver) ================"
 SRC=NRTR_BOSS_LearningPanel.mq5
@@ -39,9 +41,35 @@ for m in crypto forex; do
    g++ $FLAGS -Ibuild -DNB_TEST_MARKET=$M tests/test_session_engine.cpp -o build/test_session_engine_$m && ./build/test_session_engine_$m || rc=1
    echo "== 10.$m whole-indicator tests on a simulated MT5 terminal =="
    g++ $FLAGS -Ibuild -DNB_TEST_MARKET=$M tests/test_session_indicator.cpp -o build/test_session_indicator_$m && ./build/test_session_indicator_$m || rc=1
+   echo "== 11.$m v1.05 five-question plan: engine tests =="
+   g++ $FLAGS -Ibuild -DNB_TEST_MARKET=$M tests/test_fq_engine.cpp -o build/test_fq_engine_$m && ./build/test_fq_engine_$m || rc=1
+   echo "== 12.$m v1.05 five-question plan: whole-indicator tests (table + chart drawing) =="
+   g++ $FLAGS -Ibuild -DNB_TEST_MARKET=$M tests/test_fq_indicator.cpp -o build/test_fq_indicator_$m && ./build/test_fq_indicator_$m || rc=1
+   echo "== 13.$m existing panel unchanged: v1.04 baseline (git $BASELINE) vs this file, byte for byte =="
+   if git cat-file -e "$BASELINE:$SRC" 2>/dev/null; then
+      git show "$BASELINE:$SRC" > build/baseline_$m.mq5
+      python3 tests/mql2cpp.py build/baseline_$m.mq5 build/baseline_$m.inc full
+      if g++ $FLAGS -Ibuild -DNB_TEST_MARKET=$M -DDUMP_INC="\"baseline_$m.inc\"" tests/dump_objects.cpp -o build/dump_base_$m &&
+         g++ $FLAGS -Ibuild -DNB_TEST_MARKET=$M -DDUMP_INC="\"full_$m.inc\"" tests/dump_objects.cpp -o build/dump_new_$m; then
+         ./build/dump_base_$m > build/dump_base_$m.txt 2>/dev/null
+         ./build/dump_new_$m > build/dump_new_$m.txt 2>/dev/null
+         if cmp -s build/dump_base_$m.txt build/dump_new_$m.txt; then
+            echo "EXISTING PANEL UNCHANGED ($m): PASS - $(grep -c '^=== ' build/dump_base_$m.txt) scenarios, $(grep -c '^O ' build/dump_base_$m.txt) object records + buffers + alerts + log identical"
+         else
+            echo "EXISTING PANEL UNCHANGED ($m): FAIL - first difference:"; diff build/dump_base_$m.txt build/dump_new_$m.txt | head -5; rc=1
+         fi
+      else
+         echo "EXISTING PANEL UNCHANGED ($m): FAIL - dump does not build"; rc=1
+      fi
+   else
+      echo "EXISTING PANEL UNCHANGED ($m): NOT RUNNABLE - baseline commit $BASELINE is not in this clone"; nr=1
+   fi
 done
 
 echo
-[ $rc -eq 0 ] && echo "ALL SUITES PASSED" || echo "SOME SUITES FAILED"
+if [ $rc -ne 0 ]; then echo "SOME SUITES FAILED"
+elif [ $nr -ne 0 ]; then echo "ALL RUNNABLE SUITES PASSED - but at least one check was NOT RUNNABLE (see above); that is not a pass"
+else echo "ALL SUITES PASSED"; fi
 echo "NOT RUN HERE: MetaEditor (F7) compile - run it in MT5, see TESTING.md"
+echo "SEPARATE (slow, ~5 min): python3 tests/mutate_fq.py - plants 14 bugs, every one must be caught"
 exit $rc
