@@ -270,6 +270,27 @@ the session engine tests (two of them by the indicator tests as well):
 | Clock accepted whatever the PC said (no half-hour check) | yes |
 | The forming 5M bar evaluated for a trap | yes |
 
+## Results (2026-09-27, v1.07 twins: data bridge + counter-trend watch)
+
+```
+SAFETY SCAN (twins):             PASS - file writes only in the bridge block (write-only, NRTR_BRIDGE folder)
+SAFETY SCAN NEGATIVE CHECKS:     7 of 7 planted violations rejected   (step 6c)
+BRIDGE + WATCH TESTS:            crypto 48 / forex 48 passed, 0 failed (step 14)
+BRIDGE PYTHON TESTS:             9 of 9 passed (step 15: JSON vs raw history + independent engine; sender, no network)
+EXISTING PANEL UNCHANGED:        PASS gold / crypto / forex (bridge running)
+ALL EARLIER SUITES:              PASS
+MUTATION TESTS:  52 planted, 52 caught (10 new; 2 real gaps found and closed; M11 anchor fixed + re-run)
+MetaEditor F7:   twins v1.07 NOT YET
+```
+
+**Manual check (crypto first):**
+1. F7 the crypto file, then attach it to BTCUSD M5.
+2. After a few seconds, open `%APPDATA%\MetaQuotes\Terminal\Common\Files\NRTR_BRIDGE\` in
+   Explorer. `BTCUSD.json` should be there and should change every 10 s.
+3. The strip on top of the table should say `BRIDGE: NRTR_BRIDGE\BTCUSD.json <time>`.
+4. Run `python bridge\nrtr_telegram_sender.py --dry-run --once` and read the message.
+5. Then set the token and chat id, run `--test-message`, and then run it normally.
+
 ## Results (2026-09-27, v1.07 metals: NY trap on the table, clean top right)
 
 ```

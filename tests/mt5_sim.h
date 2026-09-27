@@ -95,10 +95,51 @@ struct SimState
    int chartW = 1400, chartH = 900;   // chart size in pixels
    long long seq = 0;                           // object creation counter
    std::map<std::string, long long> seqOf;      // name -> creation order (MT5 draws later objects on top)
+   // v1.07 data bridge: files the indicator writes (WRITE ONLY; there is no read API here)
+   std::map<std::string, std::string> files;    // name -> content
+   std::map<std::string, int> fileFlags;        // name -> FileOpen flags
+   std::map<int, std::string> openFiles;        // handle -> name
+   int nextHandle = 1;
+   bool fileFail = false;                       // FileOpen refuses (disk full, no rights)
+   int fileWrites = 0;                          // successful FileMove count
 };
 static SimState SIM;
 static std::string _Symbol = "XAUUSD";
 static ENUM_TIMEFRAMES _Period = PERIOD_M15;
+
+enum { FILE_READ = 1, FILE_WRITE = 2, FILE_BIN = 4, FILE_CSV = 8, FILE_TXT = 16, FILE_ANSI = 32, FILE_UNICODE = 64,
+       FILE_REWRITE = 512, FILE_COMMON = 4096 };
+const int INVALID_HANDLE = -1;
+inline int FileOpen(const string &name, int flags, short delim = 0)
+{
+   (void)delim;
+   if(SIM.fileFail || !(flags & FILE_WRITE) || (flags & FILE_READ)) return INVALID_HANDLE;
+   int h = SIM.nextHandle++;
+   SIM.openFiles[h] = name;
+   SIM.files[name] = "";
+   SIM.fileFlags[name] = flags;
+   return h;
+}
+inline uint FileWriteString(int h, const string &txt, int len = -1)
+{
+   (void)len;
+   if(!SIM.openFiles.count(h)) return 0;
+   SIM.files[SIM.openFiles[h]] += txt;
+   return (uint)txt.size();
+}
+inline void FileClose(int h) { SIM.openFiles.erase(h); }
+inline bool FileMove(const string &src, int cf, const string &dst, int mode)
+{
+   if(!SIM.files.count(src)) return false;
+   if(SIM.files.count(dst) && !(mode & FILE_REWRITE)) return false;
+   if(((cf & FILE_COMMON) != 0) != ((mode & FILE_COMMON) != 0)) return false;
+   SIM.files[dst] = SIM.files[src];
+   SIM.fileFlags[dst] = SIM.fileFlags[src];
+   SIM.files.erase(src);
+   SIM.fileFlags.erase(src);
+   SIM.fileWrites++;
+   return true;
+}
 
 inline const std::vector<MqlRates> &simSeries(ENUM_TIMEFRAMES tf)
 {

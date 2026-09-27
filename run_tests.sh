@@ -71,6 +71,8 @@ echo "== 6. twin check: the two files differ only in header / description / NB_M
 python3 tests/check_twins.py NRTR_BOSS_Crypto_NYTrap.mq5 NRTR_BOSS_Forex_NYTrap.mq5 || rc=1
 echo "== 6b. the five-question plan blocks are identical in all three files =="
 python3 tests/check_fq_blocks.py || rc=1
+echo "== 6c. the safety scan refuses file access outside the bridge block, reads, and foreign paths (planted variants) =="
+python3 tests/check_safety_neg.py || rc=1
 for m in crypto forex; do
    if [ $m = crypto ]; then SRC=NRTR_BOSS_Crypto_NYTrap.mq5; M=1; else SRC=NRTR_BOSS_Forex_NYTrap.mq5; M=2; fi
    echo "== 7.$m safety scan =="
@@ -90,7 +92,11 @@ for m in crypto forex; do
    g++ $FLAGS -Ibuild -DNB_TEST_MARKET=$M tests/test_fq_indicator.cpp -o build/test_fq_indicator_$m && ./build/test_fq_indicator_$m || rc=1
    echo "== 13.$m existing panel unchanged: v1.04 baseline (git $BASELINE) vs this file, byte for byte =="
    unchanged $m "$SRC" $M full_$m.inc
+   echo "== 14.$m v1.07 data bridge file + counter-trend watch: engine + whole-indicator tests =="
+   g++ $FLAGS -Ibuild -DNB_TEST_MARKET=$M tests/test_bridge.cpp -o build/test_bridge_$m && ./build/test_bridge_$m || rc=1
 done
+echo "== 15. v1.07 bridge JSON vs the raw history + independent engine, and the Telegram sender (no network) =="
+python3 tests/test_bridge_py.py crypto forex || rc=1
 
 echo
 if [ $rc -ne 0 ]; then echo "SOME SUITES FAILED"

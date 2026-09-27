@@ -42,15 +42,17 @@ MUTATIONS = [
      "      while(k15 >= 0 && pc < np15 && piv15[pc].confirmIdx <= k15)",
      "      while(k15 >= 0 && pc < np15 && piv15[pc].confirmIdx <= k15 + 3)"),
     ("crypto", "stale-data gate removed from the table",
-     "   bool gate = ok && g_fresh;", "   bool gate = ok;"),
+     "   bool gate = ok && g_fresh;           // STALE DATA IS NEVER A PLAN", "   bool gate = ok;           // STALE DATA IS NEVER A PLAN"),
     ("crypto", "sweep anchored at the LATEST pierce (the stop moves up on a re-dip)",
      "         for(int j = j0; j <= i; j++)", "         for(int j = i; j >= j0; j--)"),
     ("crypto", "pending plan not cancelled when the 15M structure turns",
      "      if(cur >= 0 && pl[cur].status == NB_PO_PENDING && tr != pl[cur].dir)",
      "      if(cur >= 0 && pl[cur].status == NB_PO_PENDING && tr != pl[cur].dir && false)"),
     ("crypto", "table no longer steps aside for the main panel",
-     "      if(ox < InpPanelX + pw + 8)\n         ox = InpPanelX + pw + 8;",
-     "      if(false)\n         ox = InpPanelX + pw + 8;"),
+     "   int pw = (int)MathRound(430 * sc);   // the main panel's width (NbDrawPanel)\n   int ox = (cw - W) / 2;\n"
+     "   if(InpPanelCorner == NB_TOP_LEFT || InpPanelCorner == NB_BOTTOM_LEFT)\n   {\n      if(ox < InpPanelX + pw + 8)",
+     "   int pw = (int)MathRound(430 * sc);   // the main panel's width (NbDrawPanel)\n   int ox = (cw - W) / 2;\n"
+     "   if(InpPanelCorner == NB_TOP_LEFT || InpPanelCorner == NB_BOTTOM_LEFT)\n   {\n      if(false)"),
     ("crypto", "live plan lines left on the chart when the data goes stale",
      "      if(!gate && drawn)", "      if(false && drawn)"),
     ("crypto", "counter-trend: breakdowns allowed as SELL plans in a bullish 15M",
@@ -120,6 +122,31 @@ MUTATIONS = [
     ("gold", "v1.07 lines: SL / TP lines left on the chart after a side is INVALID",
      "   if(!(trig || s.state == NB_NT_VALID) || s.sl <= 0.0)\n      return;\n   color c = NbNytStateColor",
      "   if(s.state == NB_NT_OFF || s.sl <= 0.0)\n      return;\n   color c = NbNytStateColor"),
+    # ---- v1.07 twins: data bridge + counter-trend watch (caught by tests/test_bridge.cpp + tests/test_bridge_py.py) ----
+    ("crypto", "v1.07 watch: also fires WITH the 15M boss (becomes a trend signal)",
+     "      if(flip[i] > 0 && boss[i] == NB_SELL)\n         dir = NB_BUY;", "      if(flip[i] > 0 && boss[i] != NB_WAIT)\n         dir = NB_BUY;"),
+    ("crypto", "v1.07 watch: the forming 5M bar evaluated",
+     "   int nEvalPw = lastClosed ? n : n - 1;", "   int nEvalPw = n;"),
+    ("crypto", "v1.07 watch: TP1 checked before SL on the same candle",
+     "         if(stopHit)\n            rec[open].status = NB_PW_SL;\n         else if(tpHit)\n            rec[open].status = NB_PW_TP1;",
+     "         if(tpHit)\n            rec[open].status = NB_PW_TP1;\n         else if(stopHit)\n            rec[open].status = NB_PW_SL;"),
+    ("crypto", "v1.07 watch: an open watch shown as CLICK in the bridge",
+     "   else if(g_final == NB_BUY)\n      action = \"CLICK BUY\";",
+     "   else if(g_final == NB_BUY || (g_pwCur >= 0 && g_pwCur < g_nPw && g_pw[g_pwCur].dir > 0))\n      action = \"CLICK BUY\";"),
+    ("crypto", "v1.07 bridge: the forming candle counted as closed",
+     "   int endClosed = hasForming ? last - 1 : last;", "   int endClosed = last;"),
+    ("crypto", "v1.07 bridge: 19 closed candles instead of 18 (off by one)",
+     "   int first = endClosed - want + 1;", "   int first = endClosed - want;"),
+    ("crypto", "v1.07 bridge: stale data written as a live action",
+     "   if(!g_fresh)\n      action = \"NO TRADE - DATA STALE / MARKET CLOSED\";",
+     "   if(false)\n      action = \"NO TRADE - DATA STALE / MARKET CLOSED\";"),
+    ("crypto", "v1.07 bridge: not rewritten when a 5M bar closes (only on the timer)",
+     "   bool newBar = (g_seen5 != g_brBar);", "   bool newBar = false;"),
+    ("crypto", "v1.07 bridge: 15M indicators taken from the wrong candle",
+     "      int j = NbBrFind(s, r[k].time);", "      int j = NbBrFind(s, r[k].time) - 1;"),
+    ("crypto", "v1.07 watch strip: not docked on the table",
+     "   int oy = InpFqShow ? (ch - tableH - InpFqBottomY - H) : (ch - H - InpFqBottomY);",
+     "   int oy = InpFqShow ? (ch - tableH - InpFqBottomY) : (ch - H - InpFqBottomY);"),
     ("gold", "v1.07 lines: NY HIGH / LOW keep counting after the NY window",
      "      if(g_s5.t[k] >= g_nt[i].winEnd)\n         continue;\n", ""),
 ]
@@ -152,6 +179,8 @@ def build_and_test(target, src_text, tag):
             return {"BUILD": None}
         open(os.path.join(d, "full_ladder.inc"), "w").write(inc)
         tests += [("test_nyt", []), ("test_nyt_ladder", ["-DNYT_LADDER", '-DNYT_INC="full_ladder.inc"'])]
+    if target == "crypto":   # v1.07 data bridge + counter-trend watch (twins)
+        tests += [("test_bridge", [])]
     for test, extra in tests:
         exe = os.path.join(d, test)
         srcf = "tests/test_nyt.cpp" if test.startswith("test_nyt") else "tests/%s.cpp" % test
@@ -159,6 +188,8 @@ def build_and_test(target, src_text, tag):
         if r.returncode != 0:
             return {"BUILD": None}   # a mutation that does not compile proves nothing about the tests
         res[test] = run([exe]).returncode == 0
+        if test == "test_bridge":   # it wrote build/bridge_*.json from the mutated file: check them too
+            res["test_bridge_py"] = res[test] and run([sys.executable, "tests/test_bridge_py.py", "crypto"]).returncode == 0
     exe = os.path.join(d, "dump_new")
     r = run(["g++"] + FLAGS + ["-I" + d, "-DNB_TEST_MARKET=" + mk, '-DDUMP_INC="%s"' % full, "tests/dump_objects.cpp", "-o", exe])
     same = False

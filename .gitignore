@@ -1,2 +1,4 @@
 build/
 __pycache__/
+bridge/nrtr_sender_state.json
+bridge/nrtr_sender_state.json.tmp

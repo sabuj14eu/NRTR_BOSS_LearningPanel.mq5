@@ -284,6 +284,23 @@ Two things are new on top of the gold panel:
   automatic = `Automatic swing TP distance` x the last closed 15M ATR (default 3.0), because
   there is no fixed dollar distance that fits BTC, LTC, EURUSD and USDJPY at once.
 
+## v1.07: data bridge to Telegram + counter-trend WATCH (crypto and forex; metals next)
+
+* **Data bridge.** The indicator writes `Files\Common\NRTR_BRIDGE\<SYMBOL>.json`: the last 18
+  closed M5 and M15 candles plus the forming candle (RAW), NRTR / ATR / EMA200 per candle
+  (INDICATORS), HH/HL or LH/LL (STRUCTURE), and, **kept separate**, the MT5 CONCLUSION (boss,
+  timing, CLICK / WAIT / NO TRADE, the signal's entry / SL / TP1 / TP2, NY, 5-question plan). A
+  small script, [bridge/nrtr_telegram_sender.py](bridge/README.md), posts it to **your** Telegram
+  chat when the conclusion changes. MT5 itself sends nothing (indicators cannot use the internet),
+  and nothing places an order. Setup: [bridge/README.md](bridge/README.md).
+* **COUNTER-TREND WATCH** (a strip of two rows on top of the bottom-middle table): when the 15M
+  boss is in full SELL MODE and the 5M NRTR flips up on a closed candle, it records a **BUY WATCH**
+  with a ref entry (that close), a ref SL (the 5M NRTR stop + buffer) and a ref TP1 (1R). The
+  mirror is a SELL WATCH in BUY MODE. It is **never a signal**: no CLICK, no alert, no READY.
+  Counter-trend entries are the #1 documented loss driver, so it is counted instead (n, TP1, SL,
+  expired, net R) until n >= 20 / ~100 can say whether those pull-ups pay.
+* Inputs: `InpBridgeOn` (true), `InpBridgeCandles` (18), `InpBridgeEverySec` (10), `InpPwShow` (true).
+
 ## Why a separate NY module
 
 Outside the NY open, price mostly *flows*: the 15M structure is respected and the 5M

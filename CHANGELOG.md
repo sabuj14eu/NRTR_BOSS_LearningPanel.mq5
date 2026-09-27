@@ -1,5 +1,108 @@
 # CHANGELOG
 
+## v1.07 twins (2026-09-27): DATA BRIDGE to Telegram + COUNTER-TREND WATCH (crypto and forex; metals next)
+
+### What was asked (Shyam, 2026-09-27)
+
+A v18 council BUY on BITSTAMP:BTCUSD (entry 84508.1, SL 84266.4, TP 84713.2, grade A) came while
+the crypto panel stayed silent. 1H, 4H, 15M and 5M were all bearish, and BTC pulled up from 84580
+to 85156 in under 15 minutes. "When all bearish signal come pull up sell but we miss pull up buy
+position." Then, quoted from another reviewer: "the next developer change should be the data
+bridge, not another redesign". All three files should send the last 18 closed 5M and 15M candles,
+the forming candle, NRTR, ATR, EMA where applicable, structure, the signal/state and the NY trap,
+with **the MT5 conclusion separate from the raw data**, "for I will entry in telegram". "Do now
+crypto, so confirm, then metal."
+
+Decisions Shyam made when asked (2026-09-27):
+* **Destination:** Telegram chat only; he enters trades by hand. Nothing goes to the v18 brain or
+  the v7 bot.
+* **Transport:** the indicator writes a JSON file, and a separate Python sender posts it. The token
+  lives in an environment variable.
+* **When:** only on change. The file updates every closed 5M candle; Telegram gets a message when
+  the conclusion changes.
+* **The missed pull-up BUY:** a WATCH row, recorded as a hypothesis. It is not a signal.
+
+### Why the BTC BUY was not caught (and why it still is not a CLICK)
+
+The panel's rule: BUY only when the 15M boss is in BUY MODE. With every timeframe bearish, a BUY
+is counter-trend by definition, so the panel waited **by design**. Counter-trend entries are the #1
+documented loss driver in this system (the SELL bleed, -406). This one BUY probably won (TP 84713
+was below the 85156 high), but that is n = 1. The Evidence Law calls n < 20 luck. So v1.07 records
+every such pull-up as a **WATCH**, with its reference prices and outcome, and lets the count decide.
+The fixture's watch record (23 cases, 2 TP1 / 6 SL / 15 expired, -4R) is random synthetic data and
+says nothing about BTC.
+
+### What changed (crypto and forex are twins: same text, `tests/make_twin.py` regenerates forex)
+
+| Lines (crypto file) | What |
+|---|---|
+| 102-114 | Header paragraph for v1.07. Line 29-30: "no network" now says the file is written for a separate sender. |
+| 117 | `#property version "1.07"`. |
+| 169 | `NB_BR_VERSION "1.07"` (written into the file). |
+| 2855-2999 | **Engine block `NB_PW`:** `NbRunPw` (the WATCH on closed bars only), `NbPwStats`, `NbPwStatusText`. The rule, frozen: the 15M boss is in full SELL MODE (BUY MODE) and the 5M NRTR flips up (down) on a closed bar. Ref entry = that close. Ref SL = the new 5M NRTR stop -/+ `InpSlBufferAtr` x 5M ATR, rounded outward. Ref TP1 = `InpTp1R` x risk. Later bars: SL first, then TP1, else EXPIRED after `InpSignalValidBars`. One watch at a time. |
+| 3011 | Prefix `NBSP_W_` (the watch strip). |
+| 3077-3081 | Inputs: `InpBridgeOn` true, `InpBridgeCandles` 18 (5-100), `InpBridgeEverySec` 10 (1-3600), `InpPwShow` true. |
+| 3151-3161 | Globals (watch records, bridge status / last write / key). |
+| 3195-3204 | Prototypes. |
+| 3245 | `OnInit` range check for the bridge inputs. |
+| 3401, 3573 | Calls: `NbBridgeUpdate` + `NbPwDrawStrip` every refresh, `NbPwRecompute` after each recompute. A failed recompute clears the watch. |
+| 5484-5853 | **Bridge block `NB_BR`** (made to be shared with the metals file next): JSON helpers, `NbBrTf` (raw + indicators of one timeframe via `CopyRates`, forming candle separate), `NbBrBuild` (the whole file, conclusion last and apart), `NbBrWrite` (temp file + atomic rename, `FILE_COMMON`), `NbBridgeUpdate` (on each new closed 5M bar, else every `InpBridgeEverySec` s). |
+| 5861-6023 | Twin terminal code: `NbPwRecompute`, `NbPwDrawStrip` (two rows on top of the table), bridge adapters `NbBrSource` / `NbBrMarket` / `NbBrNy` / `NbBrNyKey`. |
+
+New files:
+* `bridge/nrtr_telegram_sender.py`: standard library only. It reads the folder, posts one message
+  per `change_key` change (or one DATA STALE), redacts the token from every output line, and does
+  not remember a failed send (so it is resent). It has `--dry-run`, `--once` and `--test-message`.
+* `bridge/README.md`: setup in six steps.
+
+The main panel of both twins is still byte-identical to v1.04 (53 scenarios each, bridge
+running). The 5-question blocks are still identical in all three files. The metals file is not
+touched by this change.
+
+### Safety
+
+* **File access**, which the indicator never had before, is allowed only inside the `NB_BR` block.
+  Only `FileOpen` (write, `FILE_COMMON`), `FileWriteString`, `FileClose` and `FileMove` may be
+  used, and only on paths declared as `"NRTR_BRIDGE\\" + g_sym + ".json" / ".tmp"`.
+  `tests/check_safety.py` enforces this. `tests/check_safety_neg.py` plants 7 violations (a foreign
+  folder, a READ, a file call outside the block, a delete, a WebRequest, an order, broken markers),
+  and all 7 are rejected.
+* No network, no order, no position change: the indicator writes a file. The sender only talks to
+  `api.telegram.org`, and its test proves it (it fails the test on any other URL).
+
+### Tests
+
+* `tests/test_bridge.cpp`, per twin: **48 checks, 0 failed** (crypto and forex).
+  * P1-P5: the watch engine on hand-built bars with prices worked out by hand (BUY 101.00 / SL
+    99.30 / TP1 102.70; SELL mirror; SL beats TP1 in one candle; expiry; no watch with the boss,
+    with the boss in WAIT, or without a flip; one at a time; the forming bar; the stop on the
+    wrong side; the record).
+  * B1: the file name, folder, flags, ASCII and section order, and no conclusion inside the raw
+    data.
+  * B2: when it writes: timer, and a new bar within 10 s of the last write.
+  * B2b: market closed: exactly 18 closed candles, forming null.
+  * B3: stale data.
+  * B4: a failing disk; an unsupported symbol.
+  * B5: 160 moments, the strip docked on the table, the watch prices and record equal an
+    independent engine run, an open watch never gives a CLICK, 63 characters.
+  * B6: an open-watch moment written out for the Python check.
+* `tests/test_bridge_py.py`: **9 of 9**.
+  * The file is compared number by number with an EXPECTED file built from the raw simulated
+    history and an independent engine run: the last 18 closed bars oldest first, the forming bar
+    never in "closed", indicators per candle, no invented 5M EMA, the watch.
+  * The sender: layout (conclusion first), at most 4096 characters, one message per change,
+    stale once, broken files skipped, dry run, the token never printed, a failed send not
+    remembered, no credentials = no run.
+* Mutations (`python3 tests/mutate_fq.py`): **52 planted, 52 caught.** That includes 10 new for the
+  bridge and the watch: fires WITH the boss, the forming bar evaluated, TP1 before SL, a watch
+  shown as CLICK, the forming candle counted as closed, 19 candles, stale written as live, no
+  rewrite on a new bar, indicators from the wrong candle, the strip not docked.
+  * The first run of the ten found **two real test gaps**. M47 (19 candles) only shows when there
+    is no forming candle (market closed), which no test covered; B2b now does. M49 (no rewrite on
+    a new bar) hid behind the 10 s timer; B2 now closes a bar within 10 s of the last write.
+  * In the full run M11 was NOT RUNNABLE: the strip copies the table's "step aside" code, so its
+    anchor matched twice. The anchor was made unique and M11 re-run: CAUGHT.
+
 ## v1.07 metals (2026-09-27): clean screen - NY trap on the bottom-middle table, PRE-NY / NY lines
 
 ### What was asked (Shyam, 2026-09-27, with an MT5 screenshot of XAUUSD M5 on v1.06)
