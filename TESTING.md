@@ -270,6 +270,32 @@ the session engine tests (two of them by the indicator tests as well):
 | Clock accepted whatever the PC said (no half-hour check) | yes |
 | The forming 5M bar evaluated for a trap | yes |
 
+## Results (2026-09-27, v1.07 metals: NY trap on the table, clean top right)
+
+```
+NY TRAP + NY STRIP TESTS (metals):   69 passed, 0 failed   (step 5d, default view: N1-N7, Y1-Y4 x XAUUSD / XAGUSD)
+DECISION LADDER TESTS (metals):      77 passed, 0 failed   (step 5d2, InpLadderShow = true: L1-L10)
+SIMPLE VIEW TESTS (metals):          14 passed, 0 failed   (step 5e)
+EXISTING PANEL UNCHANGED:            PASS gold / crypto / forex (53 scenarios each)
+ALL EARLIER SUITES:                  PASS
+MUTATION TESTS:  42 planted, 42 caught (full run 40/42; M22 + M36 were harness anchor issues, fixed, re-run: CAUGHT)
+MetaEditor F7:   metals v1.06 compiled and ran in the user's MT5 (screenshot, 2026-09-27); v1.07 NOT YET
+```
+
+* **Y1**: nothing of this indicator in the top-right 300 x 300 px, where MT5 shows the price. The NY
+  rows share the table's x and width, and their bottom edge equals its top edge.
+* **Y2**: every 5th bar of 5 days per metal. The rows equal the engine's state, why and exact
+  prices. PRE-NY H/L lines carry the trap state. NY H/L equal the closed NY-window bars (computed
+  here from the raw bars). SL / TP lines appear only while swept or in play, ENTRY only in play.
+* **Y3**: the verdict row for all 12 swept / in-play x side x boss combinations, plus nothing in play.
+* **Y4**: the 01:00 reopen is not stale; with a dead feed there is no state and no price.
+* **N7** (new): a close back inside with the wrong body, or a doji, is not a trigger. This closes
+  the gap mutation M23 found.
+
+**Manual check:** F7. XAUUSD M5 and XAGUSD M5: the top-right corner is empty and the price scale
+readable. The NY rows sit directly on the table. During the NY window, the PRE-NY and NY lines
+match the rows.
+
 ## Results (2026-09-27, v1.06 metals: NY trap + decision ladder)
 
 ```
@@ -277,7 +303,7 @@ NY TRAP + LADDER TESTS (metals): 105 passed, 0 failed    (./run_tests.sh step 5d
 SIMPLE VIEW TESTS (metals):       12 passed, 0 failed    (step 5e: the same test built with InpSimpleView = true)
 EXISTING GOLD PANEL UNCHANGED:    PASS (v1.04 baseline, 53 scenarios; the new NBLP_N_ / NBLP_L_ objects excluded)
 ALL EARLIER SUITES:               PASS
-MUTATION TESTS:  35 planted (13 new for v1.06) - PENDING at this commit, see the next commit
+MUTATION TESTS:  35 planted (13 new for v1.06): 33 caught; M23 ESCAPED (fixed by N7 in v1.07), M35 did not build (replaced)
 MetaEditor F7:   metals v1.05 compiled in the user's MT5 with no error (2026-09-27); metals v1.06 NOT YET
 ```
 

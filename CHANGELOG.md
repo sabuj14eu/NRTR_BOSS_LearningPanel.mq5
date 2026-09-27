@@ -1,6 +1,110 @@
 # CHANGELOG
 
+## v1.07 metals (2026-09-27): clean screen - NY trap on the bottom-middle table, PRE-NY / NY lines
+
+### What was asked (Shyam, 2026-09-27, with an MT5 screenshot of XAUUSD M5 on v1.06)
+
+"Full block screen. You have [the] bottom middle box, you can add this NY entry, SL, TP1 and TP2, no
+need more information, is that right? Make line similar how you do in crypto file - line NY low
+high, pre NY low high. Line NY trap buy or sell. So screen will keep more clean. MT5 top right only
+see current price."
+
+### What the screenshot showed
+
+* The v1.06 DECISION LADDER box (top right, 31 rows) sat over MT5's price scale. The current price
+  (4286.10) was hidden behind it. That is a real usability bug, whatever the tests said: the tests
+  checked that the box stayed clear of the main panel and the table, but never that MT5's own price
+  scale stayed visible.
+* The data was stale in that screenshot (23:56, the metals daily break): every panel said NO TRADE /
+  DATA STALE. That is correct behaviour.
+
+### Answer to "is that right?"
+
+Yes. The bottom-middle table is the place for the pending prices, and the NY trap belongs next to
+it. The main panel on the left and the table in the middle already carry the 15M boss, the 5M
+timing, CLICK BUY / SELL, the pending plan and the position. The ladder repeated them in a third
+place. So v1.07:
+
+1. **Turns the big ladder box OFF by default** (`InpLadderShow = false`). Nothing of this indicator
+   sits in the top-right corner any more, so MT5's price scale shows the current price. The ladder
+   still exists: set it to `true` if you want it. It is still tested (step 5d2).
+2. **Docks four NY rows on TOP of the bottom-middle table**, with the same x and width, so it reads
+   as one box. `NBLP_Y_*`, switch `InpNyStripShow`:
+   ```
+   NY TRAP  16:30-18:00                PRE-NY H 4315.82  L 4277.94     NY H <high>  L <low>
+   SELL  INVALID - NY window over ...  ref E 4315.82   SL 4322.33   TP1 4309.31   TP2 4302.80
+   BUY   INVALID - SL hit              ENTRY 4280.05   SL 4272.85   TP1 4287.25   TP2 4294.45
+   NY TRAP: nothing in play  -  15M BOSS WAIT                  you place it - NOTHING IS SENT
+   ```
+   (Layout only. The prices are the ones the v1.06 ladder showed in the screenshot. With the data
+   stale, as it was there, v1.07 shows "---" in every row instead.)
+   `ref E` = the reference entry (the range level) before the trigger. `ENTRY` = the real 5M close
+   once TRIGGERED. The verdict row keeps the hierarchy. Against the 15M boss it reads **CONFLICT -
+   NO TRADE**. With the boss in WAIT it reads NO TRADE. A swept trap that has not triggered reads
+   "wait for the 5M close back inside". Only a triggered trap WITH the boss reads "... VALID - CLICK
+   ...". Stale data shows no state and no price at all ("---", NO TRADE - DATA STALE).
+3. **Draws the lines the way the crypto file does:**
+   * `PRE-NY HIGH 4315.82  =  NY TRAP SELL <state>` and `PRE-NY LOW ...  =  NY TRAP BUY <state>`,
+     dash-dot purple, from the range start to the end of the NY window. These ARE the trap lines, so
+     the trap state is written on them instead of drawing a second line at the same price;
+   * `NY HIGH` / `NY LOW`: blue dotted lines at the high and low of the CLOSED 5M bars inside the NY
+     window so far;
+   * SL / TP1 / TP2 lines of a side **only while it is swept (VALID, dashed "(ref)") or in play
+     (TRIGGERED)**, plus a solid ENTRY line only in play. A WAIT or INVALID side draws nothing extra.
+     v1.06 drew all eight lines all day.
+
+### Every change to `NRTR_BOSS_LearningPanel.mq5` (1.06 -> 1.07; line numbers in the NEW file)
+
+| Lines | What |
+|---|---|
+| 99-108 | Header paragraph for v1.07. |
+| 110 | `#property version "1.07"`. |
+| 2827 | New prefix `NBLP_Y_` (the NY rows). |
+| 2885-2886 | `InpLadderShow` default `true` -> **`false`**. New `InpNyStripShow = true`. |
+| 5170 | `NbNytDrawSide`: lines only while VALID or in play; the ENTRY line only in play. |
+| 5198 | New `NbNytSessionHL`: high / low of the closed 5M bars inside the NY window. |
+| 5223 | `NbNytDrawChart`: PRE-NY HIGH / LOW with the trap state in the text, NY HIGH / LOW, and it also deletes the NY rows so they are recreated after the markers (drawn on top). |
+| 5278-5319 | `NbORect` / `NbOLabel`: the old ladder helpers made prefix-generic; `NbLRect` / `NbLLabel` now call them (identical objects). |
+| 5812-5979 | New `NbYLabel`, `NbYSide`, `NbNyStripDraw`: the four NY rows. The position repeats the table's geometry (`NbFqDrawTable`, inside the shared block, which cannot change); test Y1 checks that the rows' bottom edge equals the table's top edge. |
+| 3007, 3169, 3218 | Prototype and the two calls (refresh + chart resize), after the ladder. |
+
+The engine (`NB_NYT` block), the main panel, the 5-question table, the NRTR maths, EMA200 and
+structure code are unchanged. The main panel is still byte-identical to v1.04 (step 5c).
+
+### Tests (`./run_tests.sh`, 2026-09-27)
+
+* 5d, default view: **69 checks, 0 failed**.
+  * N1-N7 engine. **N7 is new**: a close back inside with the body the wrong way, or a doji, is
+    not a trigger. Mutation M23 escaped the first v1.06 run; this test closes that gap.
+  * Y1-Y4 per metal:
+    * Y1: no box in the top-right corner; the NY rows share the table's x and width and touch
+      its top edge.
+    * Y2: every 5th bar of 5 days. Rows and lines are compared with the engine and with NY H/L
+      computed independently from the raw bars. PRE-NY lines carry the state. The side-line rule
+      holds. Nothing is over 63 characters.
+    * Y3: the verdict row, injected for swept / in play x BUY / SELL x boss BUY / SELL / WAIT
+      (12 cases) plus "nothing in play".
+    * Y4: 01:00 reopen not stale; with a dead feed there is no state and no price.
+* 5d2, the ladder build (`InpLadderShow = true`): **77 checks, 0 failed**. L2 also checks now that
+  "TIMING = CONFIRMED" appears exactly when the engine's closed-candle decision is BUY / SELL.
+* 5e, simple view: **14 checks, 0 failed**. The NY rows move to the bottom when the table is hidden.
+* All earlier suites PASS. All three "existing panel unchanged" dumps PASS (`NBLP_Y_` excluded like
+  the other new prefixes).
+* Mutations (`python3 tests/mutate_fq.py`): **42 planted, 42 caught**. That is 7 new for v1.07:
+  ladder back on by default, NY rows not docked, the NY rows' stale gate removed, CONFLICT not shown,
+  a swept trap shown as CLICK, SL/TP lines left after INVALID, NY H/L counting after the window.
+  * The full run gave 40 of 42. The other two were harness problems, not test gaps, and both were
+    fixed and re-run (`python3 tests/mutate_fq.py 22 36`, both CAUGHT):
+    * M22's anchor now matched twice (the new NY rows start with the same line as the table's
+      stale gate), so it was NOT RUNNABLE;
+    * M36 switches the ladder on, which removed the anchor the harness uses to make the ladder
+      build.
+  * The harness now builds `test_nyt` twice for the metals file: the default view and the ladder
+    build. It also takes mutation numbers as arguments.
+
 ## v1.06 metals (2026-09-27): NY TRAP layer + DECISION LADDER on the gold / silver panel
+
+(v1.07 above turned the ladder box off by default and moved the NY trap onto the bottom-middle table.)
 
 This is the full audit record of this change. Every claim below has a command that reproduces it
 (`./run_tests.sh` steps 5d and 5e, and `python3 tests/mutate_fq.py`).
@@ -109,7 +213,10 @@ Runs are separate for XAUUSD (tick 0.01, 2 digits, tick value 1, contract 100) a
 * 5e the same test built with `InpSimpleView = true`: **12 checks, 0 failed** (main panel and table
   hidden, ladder drawn, still hidden after a refresh).
 * All earlier suites still pass, and all three "existing panel unchanged" dumps PASS.
-* `tests/mutate_fq.py` now also builds `test_nyt` for the metals file, and plants 13 new v1.06 mutations (35 in total). Results: PENDING - the run was still in progress at this commit; see the next commit.
+* `tests/mutate_fq.py` now also builds `test_nyt` for the metals file, and plants 13 new v1.06 mutations (35 in total). **First run: 33 of 35 caught.**
+  M23 (a trigger without a body in the trap's direction) ESCAPED, a real test gap, closed in v1.07 by
+  N7. M35 did not compile (it used `iClose`, which the simulator lacks), so it proved nothing and was
+  replaced by a mutation that builds. The final run is recorded in TESTING.md.
 * The harness had a weakness, now fixed: a mutation that did not compile used to count as CAUGHT.
   It now counts as NOT RUNNABLE, which is a failure.
 * L5 was rewritten before commit. The first version only checked inside an `if` that the random

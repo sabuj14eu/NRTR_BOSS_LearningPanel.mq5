@@ -76,7 +76,8 @@ static unsigned long long fnv(const void *p, size_t n, unsigned long long h = 14
 static bool added(const std::string &name)
 {
    return name.compare(0, 7, PFX "Q_") == 0 || name.compare(0, 7, PFX "F_") == 0 ||
-          name.compare(0, 7, PFX "N_") == 0 || name.compare(0, 7, PFX "L_") == 0;   // v1.06 metals: NY trap + ladder
+          name.compare(0, 7, PFX "N_") == 0 || name.compare(0, 7, PFX "L_") == 0 ||   // v1.06 metals: NY trap + ladder
+          name.compare(0, 7, PFX "Y_") == 0;     // v1.07 metals: NY rows on top of the table
 }
 static void dump(const char *label)
 {

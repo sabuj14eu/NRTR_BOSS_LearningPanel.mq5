@@ -18,14 +18,14 @@ static int g_pass = 0, g_fail = 0, g_sec = 0;
    } while(0)
 static void begin(const char *n) { g_sec = g_fail; std::printf("[ RUN  ] %s\n", n); }
 static void end(const char *n) { std::printf("[ %s ] %s\n", g_fail == g_sec ? " OK " : "FAIL", n); }
-static bool near(double a, double b, double eps = 1e-9) { return std::fabs(a - b) <= eps; }
+[[maybe_unused]] static bool near(double a, double b, double eps = 1e-9) { return std::fabs(a - b) <= eps; }
 static bool has(const std::string &s, const std::string &sub) { return s.find(sub) != std::string::npos; }
-static bool onGrid(double x, double tick) { return std::fabs(x / tick - std::round(x / tick)) < 1e-6; }
+[[maybe_unused]] static bool onGrid(double x, double tick) { return std::fabs(x / tick - std::round(x / tick)) < 1e-6; }
 
 static const long long D0 = 1788220800LL;   // 2026-09-01, a Tuesday (UTC midnight = broker midnight here)
 
 //--------------------------------------------------------------- engine cases
-static NbNytCfg ncfg(double slMult = 1.0, double confirm = 0.0)
+[[maybe_unused]] static NbNytCfg ncfg(double slMult = 1.0, double confirm = 0.0)
 {
    NbNytCfg N;
    N.openSec = 16 * 3600 + 1800; N.preHours = 4; N.winMin = 90; N.minBars = 12;
@@ -39,14 +39,14 @@ struct Day
    std::vector<NbNytBar> nt;
    Day() { NbSeriesResize(s, 0); s.sec = 300; }
 };
-static void bar(Day &d, long long t, double o, double h, double l, double c)
+[[maybe_unused]] static void bar(Day &d, long long t, double o, double h, double l, double c)
 {
    int n = d.s.n;
    NbSeriesResize(d.s, n + 1);
    d.s.t[(size_t)n] = t; d.s.o[(size_t)n] = o; d.s.h[(size_t)n] = h; d.s.l[(size_t)n] = l; d.s.c[(size_t)n] = c;
 }
 // 12:00 .. 16:25 flat bars: range 12:30-16:25 = 48 bars, H 100.50 / L 99.50
-static void flat(Day &d, long long day0, int preBars = 48)
+[[maybe_unused]] static void flat(Day &d, long long day0, int preBars = 48)
 {
    bar(d, day0 + 12 * 3600, 100.0, 100.2, 99.8, 100.1);            // 12:00 before the range
    bar(d, day0 + 12 * 3600 + 900, 100.0, 100.2, 99.8, 100.1);      // 12:15
@@ -54,14 +54,14 @@ static void flat(Day &d, long long day0, int preBars = 48)
    for(int k = 0; k < preBars; k++)
       bar(d, start + (long long)k * 300, 100.0, 100.5, 99.5, (k % 2) ? 100.2 : 99.8);
 }
-static long long ny(long long day0, int k) { return day0 + 16 * 3600 + 1800 + (long long)k * 300; }
-static void runDay(Day &d, const NbNytCfg &N, bool lastClosed = true)
+[[maybe_unused]] static long long ny(long long day0, int k) { return day0 + 16 * 3600 + 1800 + (long long)k * 300; }
+[[maybe_unused]] static void runDay(Day &d, const NbNytCfg &N, bool lastClosed = true)
 {
    ArrayResize(d.s.atr, d.s.n);
    ArrayInitialize(d.s.atr, 1.0);
    NbRunNyt(d.s, lastClosed, N, d.nt);
 }
-static int idxAt(const Day &d, long long t) { for(int i = 0; i < d.s.n; i++) if(d.s.t[(size_t)i] == t) return i; return -1; }
+[[maybe_unused]] static int idxAt(const Day &d, long long t) { for(int i = 0; i < d.s.n; i++) if(d.s.t[(size_t)i] == t) return i; return -1; }
 
 //--------------------------------------------------------------- terminal
 static std::vector<MqlRates> toRates(const std::vector<SBar> &v)
@@ -121,8 +121,8 @@ static void calc()
    OnTimer();
 }
 static int start() { int rc = OnInit(); calc(); return rc; }
-static std::string L(const std::string &id) { return SIM.objs.count("NBLP_L_" + id) ? SIM.objs["NBLP_L_" + id].s[OBJPROP_TEXT] : "<missing>"; }
-static std::string P(const std::string &id) { return SIM.objs.count("NBLP_P_" + id) ? SIM.objs["NBLP_P_" + id].s[OBJPROP_TEXT] : "<missing>"; }
+[[maybe_unused]] static std::string L(const std::string &id) { return SIM.objs.count("NBLP_L_" + id) ? SIM.objs["NBLP_L_" + id].s[OBJPROP_TEXT] : "<missing>"; }
+[[maybe_unused]] static std::string P(const std::string &id) { return SIM.objs.count("NBLP_P_" + id) ? SIM.objs["NBLP_P_" + id].s[OBJPROP_TEXT] : "<missing>"; }
 static double NP(const std::string &id) { return SIM.objs.count("NBLP_N_" + id) ? SIM.objs["NBLP_N_" + id].d[OBJPROP_PRICE * 100 + 0] : -1.0; }
 static std::string NT(const std::string &id) { return SIM.objs.count("NBLP_N_" + id) ? SIM.objs["NBLP_N_" + id].s[OBJPROP_TEXT] : "<missing>"; }
 static int countPrefix(const std::string &p)
@@ -181,6 +181,36 @@ template <class F> static long long findNow(const Metal &m, F pred, size_t from 
 }
 static int cps(const std::string &u) { int n = 0; for(unsigned char ch : u) if((ch & 0xC0) != 0x80) n++; return n; }
 
+// v1.07 line rule: SL / TP1 / TP2 only while a side is swept (VALID) or in
+// play (TRIGGERED, active); ENTRY line only in play; nothing else
+[[maybe_unused]] static bool linesOk(const NbNytSide &s, const std::string &t)
+{
+   bool inPlay = NbNytLive(s);
+   bool drawn = (s.state == NB_NT_VALID || inPlay) && s.sl > 0.0;
+   if(!drawn)
+      return countPrefix("NBLP_N_" + t + "E") == 0 && countPrefix("NBLP_N_" + t + "SL") == 0 && countPrefix("NBLP_N_" + t + "T1") == 0 &&
+             countPrefix("NBLP_N_" + t + "T2") == 0;
+   if(std::fabs(NP(t + "SL") - s.sl) > 1e-9 || std::fabs(NP(t + "T1") - s.tp1) > 1e-9 || std::fabs(NP(t + "T2") - s.tp2) > 1e-9)
+      return false;
+   if(inPlay)
+      return std::fabs(NP(t + "E") - s.entry) < 1e-9 && has(NT(t + "E_T"), std::string(s.dir > 0 ? "NY TRAP BUY  ENTRY " : "NY TRAP SELL  ENTRY "));
+   return countPrefix("NBLP_N_" + t + "E") == 0;
+}
+[[maybe_unused]] static std::string Y(const std::string &id) { return SIM.objs.count("NBLP_Y_" + id) ? SIM.objs["NBLP_Y_" + id].s[OBJPROP_TEXT] : "<missing>"; }
+// NY high / low of the closed bars in the NY window, computed here from the raw bars
+[[maybe_unused]] static bool nyHL(const Ref &r, double &hi, double &lo)
+{
+   bool any = false;
+   for(int k = 0; k < r.s5.n; k++)
+      if(r.s5.t[(size_t)k] >= r.b.open && r.s5.t[(size_t)k] < r.b.winEnd && r.nt[(size_t)k].sid == r.b.sid)
+      {
+         if(!any || r.s5.h[(size_t)k] > hi) hi = r.s5.h[(size_t)k];
+         if(!any || r.s5.l[(size_t)k] < lo) lo = r.s5.l[(size_t)k];
+         any = true;
+      }
+   return any;
+}
+
 int main()
 {
 #ifdef NYT_SIMPLE
@@ -188,12 +218,13 @@ int main()
    for(int mi = 0; mi < 2; mi++)
    {
       Metal m = makeMetal(mi == 1, mi == 1 ? 11 : 7);
-      begin(mi ? "S1 XAGUSD simple view: ladder + chart only" : "S1 XAUUSD simple view: ladder + chart only");
+      begin(mi ? "S1 XAGUSD simple view: NY rows + chart only" : "S1 XAUUSD simple view: NY rows + chart only");
       load(m);
       SIM.now = m.m5[12 * 288 + 50].t + 320;
       CHECK(start() == INIT_SUCCEEDED, "init ok");
       CHECK(countPrefix("NBLP_P_") == 0 && countPrefix("NBLP_Q_") == 0, "main panel and 5-question table hidden");
-      CHECK(countPrefix("NBLP_L_") > 20 && has(L("h1"), "15M = BOSS") && L("act") != "<missing>", "the ladder is drawn");
+      CHECK(countPrefix("NBLP_Y_") > 5 && countPrefix("NBLP_L_") == 0, "the NY rows are drawn (the ladder stays off)");
+      CHECK(SIM.objs["NBLP_Y_bg"].i[OBJPROP_YDISTANCE] + SIM.objs["NBLP_Y_bg"].i[OBJPROP_YSIZE] == 900 - InpFqBottomY, "the NY rows move down to the bottom");
       CHECK(countPrefix("NBLP_C_") > 0 || countPrefix("NBLP_N_") > 0, "chart objects still drawn");
       OnTimer();
       CHECK(countPrefix("NBLP_P_") == 0 && countPrefix("NBLP_Q_") == 0, "still hidden after a timer refresh");
@@ -204,6 +235,7 @@ int main()
    std::printf("\nSIMPLE VIEW TESTS (metals): %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
 #endif
+#ifndef NYT_LADDER
    //============================================================ engine
    begin("N1 SELL trap: sweep, then a bearish 5M close back below the range high = TRIGGERED with exact levels");
    {
@@ -342,7 +374,201 @@ int main()
    }
    end("N6");
 
-   //============================================================ whole indicator
+   begin("N7 the close back inside needs a body IN THE TRAP'S DIRECTION");
+   {
+      Day d;
+      flat(d, D0);
+      bar(d, ny(D0, 0), 100.2, 100.9, 100.1, 100.7);    // swept above 100.50
+      bar(d, ny(D0, 1), 100.1, 100.4, 100.0, 100.3);    // closes back BELOW 100.50, but a BULLISH body
+      runDay(d, ncfg());
+      CHECK(d.nt.back().sell.state == NB_NT_VALID, "SELL: a bullish candle closing back inside is not a trigger");
+      Day b;
+      flat(b, D0);
+      bar(b, ny(D0, 0), 99.8, 99.9, 99.1, 99.3);        // swept below 99.50
+      bar(b, ny(D0, 1), 99.9, 100.0, 99.6, 99.7);       // closes back ABOVE 99.50, but a BEARISH body
+      runDay(b, ncfg());
+      CHECK(b.nt.back().buy.state == NB_NT_VALID, "BUY: a bearish candle closing back inside is not a trigger");
+      Day z;
+      flat(z, D0);
+      bar(z, ny(D0, 0), 100.2, 100.9, 100.1, 100.7);
+      bar(z, ny(D0, 1), 100.3, 100.4, 100.1, 100.3);    // doji back inside
+      runDay(z, ncfg());
+      CHECK(z.nt.back().sell.state == NB_NT_VALID, "a doji back inside is not a trigger");
+   }
+   end("N7");
+
+   //============================================================ v1.07 default view: NY strip + lines
+   for(int mi = 0; mi < 2; mi++)
+   {
+      Metal m = makeMetal(mi == 1, mi == 1 ? 11 : 7);
+      const char *tag = m.silver ? "XAGUSD" : "XAUUSD";
+      std::printf("---- %s (default view) ----\n", tag);
+      char title[160];
+
+      std::snprintf(title, sizeof title, "Y1 %s: no box top right; the NY rows sit on top of the bottom-middle table", tag);
+      begin(title);
+      {
+         load(m);
+         SIM.now = m.m5[12 * 288 + 50].t + 320;
+         CHECK(start() == INIT_SUCCEEDED, "init ok");
+         CHECK(countPrefix("NBLP_L_") == 0, "the big ladder box is off by default");
+         SimObj &yb = SIM.objs["NBLP_Y_bg"], &qb = SIM.objs["NBLP_Q_bg"];
+         long long yx = yb.i[OBJPROP_XDISTANCE], yy = yb.i[OBJPROP_YDISTANCE], yw = yb.i[OBJPROP_XSIZE], yh = yb.i[OBJPROP_YSIZE];
+         CHECK(yx == qb.i[OBJPROP_XDISTANCE] && yw == qb.i[OBJPROP_XSIZE], "same x and width as the table");
+         CHECK(yy + yh == qb.i[OBJPROP_YDISTANCE] && yy > 450, "docked exactly on the table's top edge, in the lower half");
+         int topRight = 0;
+         for(auto &kv : SIM.objs)
+            if(kv.second.type == OBJ_RECTANGLE_LABEL && kv.first.compare(0, 5, "NBLP_") == 0 &&
+               kv.second.i[OBJPROP_XDISTANCE] + kv.second.i[OBJPROP_XSIZE] > 1400 - 300 && kv.second.i[OBJPROP_YDISTANCE] < 300)
+               topRight++;
+         CHECK(topRight == 0, "nothing of this indicator in the top-right corner (MT5's price scale stays visible)");
+         CHECK(has(Y("h"), "NY TRAP") && Y("s") == "SELL" && Y("b") == "BUY" && Y("v") != "<missing>", "rows: NY TRAP, SELL, BUY, verdict");
+         OnDeinit(0);
+         CHECK(countPrefix("NBLP_") == 0, "OnDeinit removes everything");
+      }
+      end(title);
+
+      std::snprintf(title, sizeof title, "Y2 %s: rows and lines = the engine: PRE-NY H/L, NY H/L, state, ENTRY / SL / TP1 / TP2", tag);
+      begin(title);
+      {
+         int checked = 0, badRow = 0, badLine = 0, badHL = 0, too = 0, nyLines = 0, sideLines = 0;
+         std::string worst;
+         for(size_t k = 11 * 288; k + 1 < m.m5.size(); k += 5)
+         {
+            long long now = m.m5[k].t + 320;
+            Ref r;
+            reference(m, now, r);
+            if(r.b.phase == NB_NTP_OUT || r.b.sid < 0) continue;
+            load(m);
+            SIM.now = now;
+            start();
+            if(!g_fresh) { OnDeinit(0); continue; }
+            for(int sd = 0; sd < 2; sd++)
+            {
+               const NbNytSide &s = sd ? r.b.buy : r.b.sell;
+               std::string id = sd ? "b" : "s";
+               if(!has(Y(id + "_st"), std::string(NbNytStateText(s.state)) + "  -  " + NbNytWhyText(s.why))) badRow++;
+               if(s.state != NB_NT_OFF && s.level > 0.0 && s.sl > 0.0)
+               {
+                  std::string want = std::string(s.estimate ? "ref E " : "ENTRY ") + px(s.entry, m.digits) + "   SL " + px(s.sl, m.digits) + "   TP1 " +
+                                     px(s.tp1, m.digits) + "   TP2 " + px(s.tp2, m.digits);
+                  if(Y(id + "_px") != want) badRow++;
+               }
+               if(!linesOk(s, sd ? "B_" : "S_")) badLine++;
+               if(countPrefix(std::string("NBLP_N_") + (sd ? "B_SL" : "S_SL"))) sideLines++;
+            }
+            if(r.b.rn > 0)
+            {
+               if(!has(Y("hr"), "PRE-NY H " + px(r.b.rh, m.digits) + "  L " + px(r.b.rl, m.digits))) badRow++;
+               if(std::fabs(NP("RH") - r.b.rh) > 1e-9 || std::fabs(NP("RL") - r.b.rl) > 1e-9) badLine++;
+               if(!has(NT("RH_T"), std::string("NY TRAP SELL ") + NbNytStateText(r.b.sell.state)) ||
+                  !has(NT("RL_T"), std::string("NY TRAP BUY ") + NbNytStateText(r.b.buy.state))) badLine++;
+            }
+            double hi = 0.0, lo = 0.0;
+            if(nyHL(r, hi, lo))
+            {
+               nyLines++;
+               if(std::fabs(NP("NH") - hi) > 1e-9 || std::fabs(NP("NL") - lo) > 1e-9) badHL++;
+               if(!has(Y("hr"), "NY H " + px(hi, m.digits) + "  L " + px(lo, m.digits))) badHL++;
+            }
+            else if(countPrefix("NBLP_N_NH") || countPrefix("NBLP_N_NL")) badHL++;
+            for(auto &kv : SIM.objs)
+               if((kv.first.compare(0, 7, "NBLP_Y_") == 0 || kv.first.compare(0, 7, "NBLP_N_") == 0) && kv.second.s.count(OBJPROP_TEXT) &&
+                  cps(kv.second.s[OBJPROP_TEXT]) > 63) { too++; if(worst.empty()) worst = kv.first + ": " + kv.second.s[OBJPROP_TEXT]; }
+            OnDeinit(0);
+            checked++;
+         }
+         std::printf("    %d session moments; %d with NY H/L lines, %d side-line sets\n", checked, nyLines, sideLines);
+         CHECK(checked > 50 && nyLines > 10 && sideLines > 0, "the fixture covers NY windows and in-play sides (else this proves nothing)");
+         CHECK(badRow == 0, "SELL / BUY rows: the engine's state, why, and exact ENTRY / SL / TP1 / TP2 on the symbol's digits");
+         CHECK(badLine == 0, "PRE-NY H/L lines carry the trap state; SL / TP lines only while swept or in play, ENTRY only in play");
+         CHECK(badHL == 0, "NY HIGH / LOW lines and row = the closed NY-window bars, computed independently here");
+         CHECK(too == 0, "no NY row or line text over MT5's 63 characters");
+         if(too) std::printf("    too long: %s\n", worst.c_str());
+      }
+      end(title);
+
+      std::snprintf(title, sizeof title, "Y3 %s: the verdict row - the 15M boss always decides", tag);
+      begin(title);
+      {
+         long long nw = findNow(m, [](const Ref &r) { return r.state == NB_WAIT; }, 3 * 288, 1);
+         CHECK(nw > 0, "fixture has a WAIT moment to inject into");
+         if(nw > 0)
+         {
+            load(m);
+            SIM.now = nw;
+            start();
+            CHECK(g_fresh, "data fresh at the injection moment");
+            int i5 = g_s5.n - 1, i15 = g_s15.n - 1;
+            double a = g_s5.atr[i5] > 0.0 ? g_s5.atr[i5] : 1.0, c = g_s5.c[i5];
+            int bad = 0;
+            for(int st = 0; st < 2; st++)          // 0 = swept (VALID), 1 = in play (TRIGGERED)
+               for(int td = -1; td <= 1; td += 2)
+                  for(int bs = -1; bs <= 1; bs++)
+                  {
+                     NbNytSide T;
+                     NbNytSideReset(T, td);
+                     T.state = st ? NB_NT_TRIGGERED : NB_NT_VALID;
+                     T.why = st ? NB_NTW_ACTIVE : NB_NTW_SWEPT;
+                     T.level = NormalizeDouble(c + td * 0.5 * a, m.digits);
+                     T.entry = NormalizeDouble(c, m.digits);
+                     T.sl = NormalizeDouble(c - td * a, m.digits);
+                     T.risk = MathAbs(T.entry - T.sl);
+                     T.tp1 = NormalizeDouble(c + td * T.risk, m.digits);
+                     T.tp2 = NormalizeDouble(c + td * 2.0 * T.risk, m.digits);
+                     NbNytSideReset(g_nt[i5].buy, NB_BUY);
+                     NbNytSideReset(g_nt[i5].sell, NB_SELL);
+                     if(td > 0) NbNytSideCopy(g_nt[i5].buy, T); else NbNytSideCopy(g_nt[i5].sell, T);
+                     g_s15.mode[i15] = bs;
+                     NbNyStripDraw();
+                     std::string v = Y("v");
+                     std::string side = td > 0 ? "BUY" : "SELL";
+                     bool okv;
+                     if(bs == -td) okv = (v == "NY TRAP vs 15M BOSS = CONFLICT  -  NO TRADE");
+                     else if(st == 0) okv = has(v, "swept") && !has(v, "VALID") && !has(v, "CLICK");
+                     else if(bs == td) okv = (v == "NY TRAP " + side + " + 15M BOSS = " + side + " VALID - CLICK " + side);
+                     else okv = has(v, "15M BOSS WAIT") && has(v, "NO TRADE");
+                     if(bs != td && has(v, "CLICK")) okv = false;
+                     if(!okv) { bad++; std::printf("    swept/in-play %d td %d boss %d -> '%s'\n", st, td, bs, v.c_str()); }
+                  }
+            NbNytSideReset(g_nt[i5].buy, NB_BUY);
+            NbNytSideReset(g_nt[i5].sell, NB_SELL);
+            NbNyStripDraw();
+            CHECK(has(Y("v"), "nothing in play") && !has(Y("v"), "CLICK"), "nothing swept: nothing in play");
+            CHECK(bad == 0, "opposite boss = CONFLICT, NO TRADE; boss WAIT = NO TRADE; swept only = wait; CLICK only with the boss");
+            OnDeinit(0);
+         }
+      }
+      end(title);
+
+      std::snprintf(title, sizeof title, "Y4 %s: stale data shows no trap at all; the 01:00 reopen is not stale", tag);
+      begin(title);
+      {
+         Metal gap = m;
+         gap.m5.erase(std::remove_if(gap.m5.begin(), gap.m5.end(), [](const SBar &b) { return (b.t % 86400) < 3600; }), gap.m5.end());
+         gap.m15 = agg(gap.m5, 900);
+         long long day = D0 + 14 * 86400;
+         load(gap);
+         SIM.now = day + 3600 + 12 * 60 + 7;
+         start();
+         CHECK(g_fresh && !has(Y("v"), "STALE"), "01:12 after the 01:00 reopen: not stale");
+         OnDeinit(0);
+         load(gap);
+         SIM.now = day + 3600 + 12 * 60 + 7;
+         SIM.tickTime = day - 60;
+         start();
+         CHECK(!g_fresh && Y("v") == "NO TRADE  -  DATA STALE / MARKET CLOSED", "dead feed: NO TRADE, DATA STALE");
+         CHECK(Y("s_st") == "---" && Y("s_px") == "---" && Y("b_st") == "---" && Y("b_px") == "---" && Y("hr") == "---",
+               "no state and no price is shown from stale data");
+         OnDeinit(0);
+      }
+      end(title);
+   }
+#endif
+
+#ifdef NYT_LADDER
+
+   //============================================================ ladder build (InpLadderShow = true)
    for(int mi = 0; mi < 2; mi++)
    {
       Metal m = makeMetal(mi == 1, mi == 1 ? 11 : 7);
@@ -397,6 +623,8 @@ int main()
             if(has(act, "CONFLICT")) { conflicts++; if(boss == NB_WAIT) bad++; }
             // the 5M layer: a CLICK from the main engine only when its 5M state is confirmed on a closed candle
             if(has(act, "CLICK") && has(L("src"), "5M CONFIRMED") && g_final != boss) bad++;
+            // step 2 says CONFIRMED exactly when the engine's closed-candle decision is BUY / SELL
+            if(has(L("t2"), "TIMING = CONFIRMED") != (g_final == NB_BUY || g_final == NB_SELL)) bad++;
             for(auto &kv : SIM.objs)
                if((kv.first.compare(0, 7, "NBLP_L_") == 0 || kv.first.compare(0, 7, "NBLP_N_") == 0) && kv.second.s.count(OBJPROP_TEXT) &&
                   cps(kv.second.s[OBJPROP_TEXT]) > 63) { too++; if(worst.empty()) worst = kv.first + ": " + kv.second.s[OBJPROP_TEXT]; }
@@ -456,13 +684,7 @@ int main()
             for(int sd = 0; sd < 2; sd++)
             {
                const NbNytSide &s = sd ? r.b.buy : r.b.sell;
-               const char *t = sd ? "B_" : "S_";
-               double want = (s.state == NB_NT_TRIGGERED) ? s.entry : s.level;
-               if(s.level > 0.0 && std::fabs(NP(std::string(t) + "E") - want) > 1e-9) badLine++;
-               if(s.level > 0.0 && !has(NT(std::string(t) + "E_T"), std::string(sd ? "NY TRAP BUY  " : "NY TRAP SELL  ") + NbNytStateText(s.state))) badLine++;
-               bool live = s.state == NB_NT_WAIT || s.state == NB_NT_VALID || NbNytLive(s);
-               if(live && s.sl > 0.0 && (std::fabs(NP(std::string(t) + "SL") - s.sl) > 1e-9 || std::fabs(NP(std::string(t) + "T1") - s.tp1) > 1e-9 ||
-                                         std::fabs(NP(std::string(t) + "T2") - s.tp2) > 1e-9)) badLine++;
+               if(!linesOk(s, sd ? "B_" : "S_")) badLine++;
                if(s.sl > 0.0 && (!onGrid(s.sl, m.tick) || !onGrid(s.tp1, m.tick) || !onGrid(s.tp2, m.tick))) badGrid++;
                if(s.state == NB_NT_TRIGGERED)
                {
@@ -658,7 +880,12 @@ int main()
       OnDeinit(0);
    }
    end("L10");
+#endif
 
-   std::printf("\nNY TRAP + LADDER TESTS (metals): %d checks passed, %d failed\n", g_pass, g_fail);
+#ifdef NYT_LADDER
+   std::printf("\nDECISION LADDER TESTS (metals, InpLadderShow = true): %d checks passed, %d failed\n", g_pass, g_fail);
+#else
+   std::printf("\nNY TRAP + NY STRIP TESTS (metals): %d checks passed, %d failed\n", g_pass, g_fail);
+#endif
    return g_fail == 0 ? 0 : 1;
 }

@@ -8,7 +8,8 @@ are built against it and run. A mutation counts as CAUGHT when at least one
 of them fails. Anything not caught is printed as ESCAPED and the script
 exits non-zero.
 
-usage: python3 tests/mutate_fq.py        (from the repository root; needs git + g++)
+usage: python3 tests/mutate_fq.py [N ...]   (from the repository root; needs git + g++;
+       optional mutation numbers run only those)
 """
 import os
 import subprocess
@@ -73,7 +74,7 @@ MUTATIONS = [
     ("gold", "metals: EXISTING gold panel touched (one extra space in its REASON row)",
      'NbLabel("r1", ox + kx, y, "REASON: " + r1', 'NbLabel("r1", ox + kx, y, "REASON:  " + r1'),
     ("gold", "metals: stale-data gate removed from the table",
-     "   bool gate = ok && g_fresh;", "   bool gate = ok;"),
+     "   bool gate = ok && g_fresh;           // STALE DATA IS NEVER A PLAN", "   bool gate = ok;           // STALE DATA IS NEVER A PLAN"),
     # ---- v1.06 metals NY trap + decision ladder (caught by tests/test_nyt.cpp) ----
     ("gold", "v1.06 NY trap: trigger without a body (any close back inside counts)",
      "(c > s.level + need && c > o) : (c < s.level - need && c < o)", "(c > s.level + need) : (c < s.level - need)"),
@@ -104,7 +105,23 @@ MUTATIONS = [
      "   return MathAbs(move) / g_tick * g_tickValue * lots;", "   return MathAbs(move) / g_tick * lots;"),
     ("gold", "v1.06 ladder: the forming candle's preview drives the timing row",
      "      if(g_final == NB_BUY || g_final == NB_SELL)\n      {\n         t2 = ",
-     "      if(g_final == NB_BUY || g_final == NB_SELL || iClose(g_sym, PERIOD_M5, 0) != iOpen(g_sym, PERIOD_M5, 0))\n      {\n         t2 = "),
+     "      if(g_final == NB_BUY || g_final == NB_SELL || (bid > 0.0 && bid != g_s5.c[i5]))\n      {\n         t2 = "),
+    # ---- v1.07 metals: NY rows on the table + PRE-NY / NY lines (caught by tests/test_nyt.cpp, default build) ----
+    ("gold", "v1.07: the big ladder box back on by default (covers MT5's price scale)",
+     "input bool           InpLadderShow      = false;", "input bool           InpLadderShow      = true; "),
+    ("gold", "v1.07 NY rows: not docked on the table (drawn over it)",
+     "      oy = ch - tableH - InpFqBottomY - H;", "      oy = ch - tableH - InpFqBottomY;"),
+    ("gold", "v1.07 NY rows: stale-data gate removed (old trap prices shown as current)",
+     "   bool gate = ok && g_fresh;   // STALE DATA IS NEVER A TRAP", "   bool gate = ok;   // STALE DATA IS NEVER A TRAP"),
+    ("gold", "v1.07 NY rows: trap against the 15M boss not called CONFLICT",
+     "   else if(tDir != 0 && boss == -tDir)\n   {\n      v = \"NY TRAP vs", "   else if(false)\n   {\n      v = \"NY TRAP vs"),
+    ("gold", "v1.07 NY rows: a swept (not triggered) trap shown as VALID - CLICK",
+     "   else if(tDir != 0 && liveT && boss == tDir)\n   {\n      string tSide", "   else if(tDir != 0 && boss == tDir)\n   {\n      string tSide"),
+    ("gold", "v1.07 lines: SL / TP lines left on the chart after a side is INVALID",
+     "   if(!(trig || s.state == NB_NT_VALID) || s.sl <= 0.0)\n      return;\n   color c = NbNytStateColor",
+     "   if(s.state == NB_NT_OFF || s.sl <= 0.0)\n      return;\n   color c = NbNytStateColor"),
+    ("gold", "v1.07 lines: NY HIGH / LOW keep counting after the NY window",
+     "      if(g_s5.t[k] >= g_nt[i].winEnd)\n         continue;\n", ""),
 ]
 
 
@@ -124,10 +141,21 @@ def build_and_test(target, src_text, tag):
         if r.returncode != 0:
             return {"translate": False}
     res = {}
-    tests = ["test_fq_engine", "test_fq_indicator"] + (["test_nyt"] if target == "gold" else [])   # v1.06 NY trap: metals only
-    for test in tests:
+    tests = [("test_fq_engine", []), ("test_fq_indicator", [])]
+    if target == "gold":   # v1.06/v1.07 NY trap: metals only; the ladder build is the same source with InpLadderShow = true
+        inc = open(os.path.join(d, full)).read()
+        anchor = "const bool           InpLadderShow      = false;"
+        on = "const bool           InpLadderShow      = true; "
+        if inc.count(anchor) == 1:
+            inc = inc.replace(anchor, on)
+        elif inc.count(on) != 1:   # already on (a mutation may do that) = use as is; anything else = no build
+            return {"BUILD": None}
+        open(os.path.join(d, "full_ladder.inc"), "w").write(inc)
+        tests += [("test_nyt", []), ("test_nyt_ladder", ["-DNYT_LADDER", '-DNYT_INC="full_ladder.inc"'])]
+    for test, extra in tests:
         exe = os.path.join(d, test)
-        r = run(["g++"] + FLAGS + ["-I" + d, "-DNB_TEST_MARKET=" + mk, "tests/%s.cpp" % test, "-o", exe])
+        srcf = "tests/test_nyt.cpp" if test.startswith("test_nyt") else "tests/%s.cpp" % test
+        r = run(["g++"] + FLAGS + ["-I" + d, "-DNB_TEST_MARKET=" + mk] + extra + [srcf, "-o", exe])
         if r.returncode != 0:
             return {"BUILD": None}   # a mutation that does not compile proves nothing about the tests
         res[test] = run([exe]).returncode == 0
@@ -174,7 +202,10 @@ def main():
             return 2
         print("unmutated %-6s: engine PASS, indicator PASS, existing panel unchanged PASS" % t)
     escaped = 0
+    only = set(int(a) for a in sys.argv[1:])   # optional: mutation numbers to run, e.g. 22 36
     for k, (t, name, old, new) in enumerate(MUTATIONS, 1):
+        if only and k not in only:
+            continue
         text = texts[t]
         if text.count(old) != 1:
             print("M%02d NOT RUNNABLE - anchor not found exactly once in %s: %s" % (k, t, name))
@@ -190,7 +221,8 @@ def main():
         if not failed:
             escaped += 1
         print("M%02d [%-6s] %-72s %s" % (k, t, name, verdict))
-    print("MUTATION TESTS: %d planted, %d caught, %d escaped / not runnable" % (len(MUTATIONS), len(MUTATIONS) - escaped, escaped))
+    planted = len(only) if only else len(MUTATIONS)
+    print("MUTATION TESTS: %d planted, %d caught, %d escaped / not runnable" % (planted, planted - escaped, escaped))
     return 0 if escaped == 0 else 1
 
 

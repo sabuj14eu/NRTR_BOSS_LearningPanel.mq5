@@ -5,7 +5,7 @@ compile with F7, drag onto the chart. None of them ever places, modifies or clos
 
 | File | Market | Extra |
 |---|---|---|
-| `NRTR_BOSS_LearningPanel.mq5` | Gold, Silver | the original 15M-boss / 5M-trigger panel **+ 5-question table (v1.05) + NY trap layer and decision ladder (v1.06)** |
+| `NRTR_BOSS_LearningPanel.mq5` | Gold, Silver | the original 15M-boss / 5M-trigger panel **+ 5-question table (v1.05) + NY trap rows and lines (v1.06/v1.07)** |
 | `NRTR_BOSS_Crypto_NYTrap.mq5` | BTC ETH SOL LTC XRP BNB ADA DOGE AVAX DOT LINK BCH (USD, USDT, USDC) | **+ NY-open trap module + 5-question table (v1.05)** |
 | `NRTR_BOSS_Forex_NYTrap.mq5` | EURUSD USDJPY GBPUSD and every pair of USD EUR GBP JPY CHF AUD NZD CAD SGD NOK SEK DKK PLN ZAR MXN HKD CNH | **+ NY-open trap module + 5-question table (v1.05)** |
 
@@ -35,33 +35,32 @@ conditions are aligned for the educational setup*. It is **not** a profit signal
 
 Personal tool. No SignalMesh, no Telegram, no network, no DLLs, no files.
 
-## v1.06: the DECISION LADDER and the NY trap (gold / silver)
+## v1.07: the NY trap on the bottom-middle table (gold / silver)
 
-A new box at the **top right** reads in one direction, top to bottom:
+The top-right corner is left free, so MT5's price scale shows the current price. The NY trap sits in
+four rows **on top of the bottom-middle table**:
 
 ```
-1  15M = BOSS / DIRECTION      -> BOSS = BUY MODE / SELL MODE / WAIT
-2  5M = ENTRY / SCALP TIMING   -> TIMING = CONFIRMED (closed candle) / WAIT
-   FORMING 5M - PREVIEW ONLY, NOT A SIGNAL: IF IT CLOSED NOW: ...
-3  NY TRAP / PENDING LOCATION  -> NY TRAP SELL / BUY: WAIT / VALID / TRIGGERED / INVALID
-4  ACTION                      -> exactly ONE of:
-     BUY VALID - CLICK BUY  /  SELL VALID - CLICK SELL      (entry, SL, TP1, TP2, R:R, lots)
-     PENDING ORDER PLAN  (BUY LIMIT / SELL LIMIT - PLACE MANUALLY, NOTHING IS SENT)
-     POSITION ACTIVE     (entry, SL, TP, distance in price and money, EXIT / PROTECT)
-     NY TRAP vs 15M BOSS = CONFLICT   /   NO TRADE (stale data)   /   WAIT (+ reason)
+NY TRAP  16:30-18:00          PRE-NY H ....  L ....     NY H ....  L ....
+SELL  <WAIT / VALID / TRIGGERED / INVALID - why>     ENTRY  SL  TP1  TP2
+BUY   <WAIT / VALID / TRIGGERED / INVALID - why>     ENTRY  SL  TP1  TP2
+<verdict: CLICK only WITH the 15M boss; CONFLICT - NO TRADE against it>
 ```
 
-* **The 15M boss is always in charge.** An NY trap against it is shown as CONFLICT and never as
-  READY. With the boss in WAIT, a trap is only WAIT.
-* **NY trap:** the range is the 4 hours before `InpNyOpenTime`. In the 90-minute NY window, a wick
-  beyond the range = VALID (swept). A **closed** 5M candle back inside, with a body = TRIGGERED:
-  entry = that close, SL beyond the sweep, TP1/TP2 = 1R/2R. Lines on the chart: solid = triggered,
-  dashed = reference. Silver uses a wider stop and a stronger close back inside (the same inputs as
-  the 5-question table).
-* **Scalp reference:** gold 5.00-20.00 and silver 0.30-1.00 of price, converted to money with your
-  broker's tick size and tick value (contract size shown). It is a reference, **not a promise**.
-* **`InpSimpleView = true`** hides the main panel and the table and keeps only the ladder and the
-  chart.
+* **Chart lines (as in the crypto file):** PRE-NY HIGH / LOW (dash-dot purple; these ARE the NY
+  TRAP SELL / BUY lines, and the trap state is written on them), NY HIGH / LOW (blue dotted, the
+  closed NY-window bars so far), and a side's SL / TP1 / TP2 only while it is swept or in play,
+  plus a solid ENTRY line once triggered.
+* **NY trap rule:** the range is the 4 hours before `InpNyOpenTime`. In the 90-minute NY window, a
+  wick beyond the range = VALID (swept). A **closed** 5M candle back inside, with a body in the
+  trap's direction = TRIGGERED: entry = that close, SL beyond the sweep, TP1/TP2 = 1R/2R. Silver
+  uses a wider stop and a stronger close back inside (the same inputs as the 5-question table).
+* **The 15M boss always decides.** A trap against it = CONFLICT, NO TRADE. Boss in WAIT = NO TRADE.
+* **Stale data shows no trap at all** ("---").
+* `InpLadderShow = true` brings back the v1.06 DECISION LADDER box (top right: 15M -> 5M -> NY trap
+  -> one action, scalp reference, open position). It is off by default because it covers the price
+  scale.
+* `InpSimpleView = true` hides the main panel and the table; the NY rows move to the bottom.
 * **No evidence yet** for the NY trap rule on real data. Judge it after n >= 20, ~100 to decide.
   Details: [CHANGELOG.md](CHANGELOG.md).
 

@@ -96,9 +96,18 @@
 //|      with money from the broker's tick size / tick value. Not a  |
 //|      promise. Open position: read only, distances to SL/TP.      |
 //|    Nothing is sent, modified or closed. See CHANGELOG.md.        |
+//|  v1.07 CLEAN SCREEN (after the first v1.06 screenshot): the big  |
+//|    ladder box covered MT5's price scale, so it is OFF by default |
+//|    (InpLadderShow). The NY trap now lives in four rows docked on |
+//|    top of the bottom-middle table: NY window + PRE-NY H/L + NY   |
+//|    H/L, SELL and BUY with state + ENTRY / SL / TP1 / TP2, and    |
+//|    one verdict row (CONFLICT when against the 15M boss). Chart:  |
+//|    PRE-NY HIGH / LOW lines (= the trap lines, state in the text) |
+//|    and NY HIGH / LOW lines, as in the crypto file; SL / TP lines |
+//|    only while a side is swept or in play, ENTRY only in play.    |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - learning tool"
-#property version     "1.06"
+#property version     "1.07"
 #property description "Gold/Silver NRTR BOSS learning panel: 15M direction, 5M timing. CUSTOM ATR-NRTR."
 #property description "Visual decision support only - never places, modifies or closes orders."
 #property indicator_chart_window
@@ -2814,7 +2823,8 @@ const string NB_PFX_C = "NBLP_C_";
 const string NB_PFX_Q = "NBLP_Q_";   // v1.05: the bottom-middle 5-question table
 const string NB_PFX_F = "NBLP_F_";   // v1.05: its chart drawing (S/R lines, zones, plan)
 const string NB_PFX_N = "NBLP_N_";   // v1.06: NY trap lines on the chart
-const string NB_PFX_L = "NBLP_L_";   // v1.06: the decision ladder panel (top right)
+const string NB_PFX_L = "NBLP_L_";   // v1.06: the decision ladder panel (top right, off by default since v1.07)
+const string NB_PFX_Y = "NBLP_Y_";   // v1.07: the NY trap rows docked on top of the bottom-middle table
 #define NB_RGB(r, g, b) ((color)((r) | ((g) << 8) | ((b) << 16)))
 
 enum ENUM_NB_CORNER
@@ -2872,7 +2882,8 @@ input int            InpFqBottomY       = 16;          // Table distance from th
 input double         InpFqSilverSlMult  = 2.0;         // SILVER: SL buffer x this (wider, volatility-adjusted stop)
 input double         InpFqSilverConfirmAtr = 0.25;     // SILVER: confirmation close must pass by this x 5M ATR
 input group "NY TRAP + DECISION LADDER (v1.06, read only - nothing is sent)"
-input bool           InpLadderShow      = true;        // Show the decision ladder (15M > 5M > NY trap > ACTION)
+input bool           InpLadderShow      = false;       // Show the big decision ladder box (top right; covers the price scale)
+input bool           InpNyStripShow     = true;        // Show the NY TRAP rows on top of the bottom-middle table
 input bool           InpNytDraw         = true;        // Draw the NY TRAP BUY / SELL lines
 input int            InpNytRangeHours   = 4;           // NY trap: pre-NY range = hours before the NY open time
 input int            InpNytWindowMin    = 90;          // NY trap: window after the NY open (minutes)
@@ -2993,6 +3004,7 @@ void   NbNytConfig();
 void   NbNytRecompute();
 void   NbNytDrawChart();
 void   NbLadderDraw();
+void   NbNyStripDraw();
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -3154,6 +3166,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          NbFqDrawTable();
       }
       NbLadderDraw();
+      NbNyStripDraw();
       ChartRedraw(0);
    }
 }
@@ -3202,6 +3215,7 @@ void NbUpdate()
       ObjectsDeleteAll(0, NB_PFX_Q);
    }
    NbLadderDraw();
+   NbNyStripDraw();
    ChartRedraw(0);
 }
 
@@ -5149,27 +5163,26 @@ color NbNytStateColor(int st, int dir)
    return NB_RGB(110, 110, 120);
 }
 
-//--- NY TRAP BUY / SELL lines of the latest session: entry reference, SL,
-//    TP1, TP2 from the range start to the end of the NY window (drawn
-//    before the window happens). Texts in the background.
+//--- NY TRAP BUY / SELL lines of the latest session (v1.07: only while a
+//    side is IN PLAY - swept or triggered). While WAIT the trap line IS the
+//    PRE-NY HIGH / LOW line, which carries the trap state in its text, so
+//    nothing is drawn twice. Texts in the background.
 void NbNytDrawSide(const NbNytSide &s, datetime t1, datetime t2, string tag)
 {
-   if(s.state == NB_NT_OFF || s.level <= 0.0)
+   bool trig = NbNytLive(s);
+   if(!(trig || s.state == NB_NT_VALID) || s.sl <= 0.0)
       return;
    color c = NbNytStateColor(s.state, s.dir);
    color cSl = NB_RGB(231, 76, 60);
    color cTp = NB_RGB(46, 204, 113);
    string side = (s.dir > 0) ? "NY TRAP BUY" : "NY TRAP SELL";
    string pfx = NB_PFX_N + tag;
-   string st = NbNytStateText(s.state);
-   string ref = (s.state == NB_NT_TRIGGERED) ? "entry " : "ref ";
-   NbNSeg(pfx + "E", t1, t2, (s.state == NB_NT_TRIGGERED) ? s.entry : s.level, c, 2, STYLE_SOLID);
-   NbFText(pfx + "E_T", t1, (s.state == NB_NT_TRIGGERED) ? s.entry : s.level,
-           side + "  " + st + "  " + ref + NbPx((s.state == NB_NT_TRIGGERED) ? s.entry : s.level), c, 9,
-           (s.dir > 0) ? ANCHOR_LEFT_UPPER : ANCHOR_LEFT_LOWER, side + ": " + NbNytWhyText(s.why));
-   bool live = (s.state == NB_NT_WAIT || s.state == NB_NT_VALID || NbNytLive(s));
-   if(!live || s.sl <= 0.0)
-      return;
+   if(trig)
+   {
+      NbNSeg(pfx + "E", t1, t2, s.entry, c, 2, STYLE_SOLID);
+      NbFText(pfx + "E_T", t1, s.entry, side + "  ENTRY " + NbPx(s.entry), c, 9, (s.dir > 0) ? ANCHOR_LEFT_UPPER : ANCHOR_LEFT_LOWER,
+              side + ": " + NbNytWhyText(s.why));
+   }
    string est = s.estimate ? " (ref)" : "";
    NbNSeg(pfx + "SL", t1, t2, s.sl, cSl, 1, STYLE_DASH);
    NbFText(pfx + "SL_T", t2, s.sl, side + " SL " + NbPx(s.sl) + est, cSl, 7, ANCHOR_RIGHT_LOWER,
@@ -5180,22 +5193,68 @@ void NbNytDrawSide(const NbNytSide &s, datetime t1, datetime t2, string tag)
    NbFText(pfx + "T2_T", t2, s.tp2, side + " TP2 " + NbPx(s.tp2) + est, cTp, 7, ANCHOR_RIGHT_LOWER, "TP2 = " + DoubleToString(g_N.tp2R, 1) + "R");
 }
 
+//--- high / low of the CLOSED 5M bars inside the NY window of bar i's
+//    session (v1.07). false before the window has a closed bar.
+bool NbNytSessionHL(int i, double &hi, double &lo, datetime &tEnd)
+{
+   hi = 0.0;
+   lo = 0.0;
+   tEnd = 0;
+   if(i < 0 || i >= g_s5.n || ArraySize(g_nt) != g_s5.n || g_nt[i].sid < 0)
+      return false;
+   bool any = false;
+   for(int k = i; k >= 0 && g_nt[k].sid == g_nt[i].sid; k--)
+   {
+      if(g_s5.t[k] < g_nt[i].open)
+         break;
+      if(g_s5.t[k] >= g_nt[i].winEnd)
+         continue;
+      if(!any || g_s5.h[k] > hi)
+         hi = g_s5.h[k];
+      if(!any || g_s5.l[k] < lo)
+         lo = g_s5.l[k];
+      if(!any)
+         tEnd = g_s5.t[k] + g_s5.sec;
+      any = true;
+   }
+   return any;
+}
+
 void NbNytDrawChart()
 {
    ObjectsDeleteAll(0, NB_PFX_N);
-   // the ladder is recreated right after this (same refresh): drawn on top of the markers
+   // the ladder and the NY strip are recreated right after this (same refresh): drawn on top of the markers
    ObjectsDeleteAll(0, NB_PFX_L);
+   ObjectsDeleteAll(0, NB_PFX_Y);
    if(!InpNytDraw || !g_ready || g_s5.n < 1 || ArraySize(g_nt) != g_s5.n)
       return;
    int i = g_s5.n - 1;
    if(g_nt[i].phase == NB_NTP_OUT || g_nt[i].sid < 0)
       return;
+   color cNy = NB_RGB(155, 89, 182);
+   color cSess = NB_RGB(80, 160, 255);
    datetime t1 = g_nt[i].preStart;
    datetime t2 = g_nt[i].winEnd;
+   // PRE-NY HIGH / LOW = the NY TRAP SELL / BUY lines (as in the crypto file)
    if(g_nt[i].rn > 0)
    {
-      NbNSeg(NB_PFX_N + "RH", t1, g_nt[i].open, g_nt[i].rh, NB_RGB(155, 89, 182), 1, STYLE_DASHDOT);
-      NbNSeg(NB_PFX_N + "RL", t1, g_nt[i].open, g_nt[i].rl, NB_RGB(155, 89, 182), 1, STYLE_DASHDOT);
+      NbNSeg(NB_PFX_N + "RH", t1, t2, g_nt[i].rh, cNy, 1, STYLE_DASHDOT);
+      NbFText(NB_PFX_N + "RH_T", t1, g_nt[i].rh, "PRE-NY HIGH " + NbPx(g_nt[i].rh) + "  =  NY TRAP SELL " + NbNytStateText(g_nt[i].sell.state),
+              cNy, 8, ANCHOR_LEFT_LOWER, "A 5M wick above it = swept; a 5M close back below = NY TRAP SELL.");
+      NbNSeg(NB_PFX_N + "RL", t1, t2, g_nt[i].rl, cNy, 1, STYLE_DASHDOT);
+      NbFText(NB_PFX_N + "RL_T", t1, g_nt[i].rl, "PRE-NY LOW " + NbPx(g_nt[i].rl) + "  =  NY TRAP BUY " + NbNytStateText(g_nt[i].buy.state),
+              cNy, 8, ANCHOR_LEFT_UPPER, "A 5M wick below it = swept; a 5M close back above = NY TRAP BUY.");
+   }
+   // NY HIGH / LOW: what the NY window has done so far (closed bars)
+   double nh = 0.0;
+   double nl = 0.0;
+   datetime te = 0;
+   if(NbNytSessionHL(i, nh, nl, te))
+   {
+      NbNSeg(NB_PFX_N + "NH", g_nt[i].open, te, nh, cSess, 1, STYLE_DOT);
+      NbFText(NB_PFX_N + "NH_T", te, nh, "NY HIGH " + NbPx(nh), cSess, 7, ANCHOR_LEFT_LOWER, "Highest 5M high since the NY open.");
+      NbNSeg(NB_PFX_N + "NL", g_nt[i].open, te, nl, cSess, 1, STYLE_DOT);
+      NbFText(NB_PFX_N + "NL_T", te, nl, "NY LOW " + NbPx(nl), cSess, 7, ANCHOR_LEFT_UPPER, "Lowest 5M low since the NY open.");
    }
    NbNytDrawSide(g_nt[i].sell, g_nt[i].open, t2, "S_");
    NbNytDrawSide(g_nt[i].buy, g_nt[i].open, t2, "B_");
@@ -5216,9 +5275,8 @@ void NbNytDrawChart()
    }
 }
 
-void NbLRect(string id, int x, int y, int w, int h, color bg, color border)
+void NbORect(string name, int x, int y, int w, int h, color bg, color border)
 {
-   string name = NB_PFX_L + id;
    if(ObjectFind(0, name) < 0)
       ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
@@ -5236,9 +5294,8 @@ void NbLRect(string id, int x, int y, int w, int h, color bg, color border)
    ObjectSetInteger(0, name, OBJPROP_ZORDER, 10);
 }
 
-void NbLLabel(string id, int x, int y, string txt, color clr, int size, string font, int anchor)
+void NbOLabel(string name, int x, int y, string txt, color clr, int size, string font, int anchor)
 {
-   string name = NB_PFX_L + id;
    if(ObjectFind(0, name) < 0)
       ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
@@ -5253,6 +5310,16 @@ void NbLLabel(string id, int x, int y, string txt, color clr, int size, string f
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
    ObjectSetInteger(0, name, OBJPROP_ZORDER, 11);
+}
+
+void NbLRect(string id, int x, int y, int w, int h, color bg, color border)
+{
+   NbORect(NB_PFX_L + id, x, y, w, h, bg, border);
+}
+
+void NbLLabel(string id, int x, int y, string txt, color clr, int size, string font, int anchor)
+{
+   NbOLabel(NB_PFX_L + id, x, y, txt, clr, size, font, anchor);
 }
 
 //--- money for a price move: move / tick size x tick value x lots (the
@@ -5740,3 +5807,173 @@ void NbLadderDraw()
    NbLLabel("foot", ox + W / 2, y + (int)MathRound(2 * sc), foot, ac, fs, "Arial Black", ANCHOR_CENTER);
 }
 //+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| NY TRAP STRIP (v1.07): four rows docked on TOP of the bottom-    |
+//| middle 5-question table, same x and width. Only the NY trap:     |
+//| both sides with state + ENTRY / SL / TP1 / TP2, and one line on  |
+//| how the trap stands against the 15M boss. Read only.             |
+//+------------------------------------------------------------------+
+void NbYLabel(string id, int x, int y, string txt, color clr, int size, string font)
+{
+   NbOLabel(NB_PFX_Y + id, x, y, txt, clr, size, font, ANCHOR_LEFT_UPPER);
+}
+
+//--- one side: name, state + why, prices
+void NbYSide(const NbNytSide &s, string id, bool gate, int x0, int x1, int xr, int y, int fs, int fsS)
+{
+   color c = gate ? NbNytStateColor(s.state, s.dir) : NB_RGB(95, 105, 120);
+   NbYLabel(id, x0, y, (s.dir > 0) ? "BUY" : "SELL", c, fs, "Arial Black");
+   string st = "---";
+   string px = "---";
+   if(gate)
+   {
+      st = NbNytStateText(s.state) + "  -  " + NbNytWhyText(s.why);
+      if(s.state != NB_NT_OFF && s.level > 0.0 && s.sl > 0.0)
+      {
+         string e = s.estimate ? "ref E " : "ENTRY ";
+         px = e + NbPx(s.entry) + "   SL " + NbPx(s.sl) + "   TP1 " + NbPx(s.tp1) + "   TP2 " + NbPx(s.tp2);
+      }
+      else if(s.level > 0.0)
+         px = "level " + NbPx(s.level);
+   }
+   NbYLabel(id + "_st", x1, y, st, c, fsS, "Arial Bold");
+   bool dim = !gate || s.state == NB_NT_INVALID || s.state == NB_NT_OFF;
+   NbYLabel(id + "_px", xr, y, px, dim ? NB_RGB(95, 105, 120) : NB_RGB(235, 238, 242), fsS, "Arial");
+}
+
+void NbNyStripDraw()
+{
+   if(!InpNyStripShow)
+   {
+      ObjectsDeleteAll(0, NB_PFX_Y);
+      return;
+   }
+   double sc = MathMax(0.7, MathMin(1.6, InpPanelScale));
+   int W = (int)MathRound(760 * sc);
+   int rh = (int)MathRound(15 * sc);
+   int pad = (int)MathRound(6 * sc);
+   int fs = (int)MathRound(9 * sc);
+   int fsS = (int)MathRound(8 * sc);
+   int H = pad * 2 + 4 * rh;
+   int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0);
+   int ch = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS, 0);
+   // the table's own geometry (NbFqDrawTable): same x, sits right on top of it
+   int pw = (int)MathRound(430 * sc);
+   int ox = (cw - W) / 2;
+   if(InpPanelCorner == NB_TOP_LEFT || InpPanelCorner == NB_BOTTOM_LEFT)
+   {
+      if(ox < InpPanelX + pw + 8)
+         ox = InpPanelX + pw + 8;
+   }
+   else if(ox + W > cw - InpPanelX - pw - 8)
+      ox = cw - InpPanelX - pw - 8 - W;
+   if(ox < 0)
+      ox = 0;
+   int tPad = (int)MathRound(10 * sc);
+   int tableH = tPad * 2 + (int)MathRound(26 * sc) + 16 * rh + (int)MathRound(8 * sc);
+   int oy = ch - H - InpFqBottomY;
+   if(InpFqShow && !InpSimpleView)
+      oy = ch - tableH - InpFqBottomY - H;
+   if(oy < 0)
+      oy = 0;
+   int x0 = ox + (int)MathRound(10 * sc);
+   int x1 = ox + (int)MathRound(60 * sc);
+   int xr = ox + (int)MathRound(400 * sc);   // the table's right half
+
+   color cNy = NB_RGB(155, 89, 182);
+   color cKey = NB_RGB(140, 150, 165);
+   color cDim = NB_RGB(95, 105, 120);
+   color cWait = NB_RGB(241, 196, 15);
+   color cExit = NB_RGB(230, 126, 34);
+
+   string lbl = NbFqLabel();
+   bool ok = (lbl != "" && g_ready && g_s5.n > 0 && g_s15.n > 0 && ArraySize(g_nt) == g_s5.n);
+   bool gate = ok && g_fresh;   // STALE DATA IS NEVER A TRAP
+   int i5 = ok ? g_s5.n - 1 : 0;
+   int boss = ok ? g_s15.mode[g_s15.n - 1] : NB_WAIT;
+
+   NbORect(NB_PFX_Y + "bg", ox, oy, W, H, NB_RGB(16, 20, 28), cNy);
+   int y = oy + pad;
+   // row 0: the session, PRE-NY range and what NY has done
+   string when = "NY TRAP";
+   string rng = "---";
+   if(gate && g_nt[i5].sid >= 0)
+   {
+      when = "NY TRAP  " + TimeToString(g_nt[i5].open, TIME_MINUTES) + "-" + TimeToString(g_nt[i5].winEnd, TIME_MINUTES);
+      if(g_nt[i5].rn > 0)
+         rng = "PRE-NY H " + NbPx(g_nt[i5].rh) + "  L " + NbPx(g_nt[i5].rl);
+      else
+         rng = "PRE-NY range from " + TimeToString(g_nt[i5].preStart, TIME_MINUTES);
+      double nh = 0.0;
+      double nl = 0.0;
+      datetime te = 0;
+      if(NbNytSessionHL(i5, nh, nl, te))
+         rng = rng + "     NY H " + NbPx(nh) + "  L " + NbPx(nl);
+   }
+   else if(gate)
+      rng = NbNytWhyText(g_nt[i5].sell.why);
+   NbYLabel("h", x0, y, when, cNy, fs, "Arial Black");
+   NbYLabel("hr", xr, y, rng, gate ? cKey : cDim, fsS, "Arial");
+   y += rh;
+   NbNytSide tS;
+   NbNytSide tB;
+   NbNytSideReset(tS, NB_SELL);
+   NbNytSideReset(tB, NB_BUY);
+   if(ok)
+   {
+      NbNytSideCopy(tS, g_nt[i5].sell);
+      NbNytSideCopy(tB, g_nt[i5].buy);
+   }
+   NbYSide(tS, "s", gate, x0, x1, xr, y, fs, fsS);
+   y += rh;
+   NbYSide(tB, "b", gate, x0, x1, xr, y, fs, fsS);
+   y += rh;
+   // row 3: the trap against the 15M boss - the boss always decides
+   int tDir = 0;
+   if(NbNytLive(tS))
+      tDir = NB_SELL;
+   else if(NbNytLive(tB))
+      tDir = NB_BUY;
+   else if(tS.state == NB_NT_VALID)
+      tDir = NB_SELL;
+   else if(tB.state == NB_NT_VALID)
+      tDir = NB_BUY;
+   bool liveT = false;
+   if(tDir > 0)
+      liveT = NbNytLive(tB);
+   if(tDir < 0)
+      liveT = NbNytLive(tS);
+   string tn = (tDir > 0) ? "NY TRAP BUY" : "NY TRAP SELL";
+   string v = "NY TRAP: nothing in play  -  15M BOSS " + NbModeText(boss);
+   color vc = cDim;
+   if(lbl == "")
+      v = NbFqOnlyText();
+   else if(!ok)
+      v = "NO TRADE  -  MISSING DATA";
+   else if(!g_fresh)
+      v = "NO TRADE  -  DATA STALE / MARKET CLOSED";
+   else if(tDir != 0 && boss == -tDir)
+   {
+      v = "NY TRAP vs 15M BOSS = CONFLICT  -  NO TRADE";
+      vc = cExit;
+   }
+   else if(tDir != 0 && liveT && boss == tDir)
+   {
+      string tSide = (tDir > 0) ? "BUY" : "SELL";
+      v = tn + " + 15M BOSS = " + tSide + " VALID - CLICK " + tSide;
+      vc = NbDirColor(tDir);
+   }
+   else if(tDir != 0 && liveT)
+   {
+      v = tn + " fired, 15M BOSS WAIT  -  NO TRADE";
+      vc = cWait;
+   }
+   else if(tDir != 0)
+   {
+      v = tn + " swept  -  wait for the 5M close back inside";
+      vc = cWait;
+   }
+   NbYLabel("v", x0, y, v, vc, fs, "Arial Bold");
+   NbYLabel("vr", ox + W - (int)MathRound(200 * sc), y, "you place it - NOTHING IS SENT", cDim, fsS, "Arial");
+}
