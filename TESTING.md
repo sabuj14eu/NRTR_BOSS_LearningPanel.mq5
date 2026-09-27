@@ -277,12 +277,14 @@ SESSION INDICATOR (crypto / forex):  151 / 150 passed  (I20: click guard flow + 
 EXISTING PANEL UNCHANGED:            gold / crypto / forex PASS (v1.04 baseline + declared fixes)
 BRIDGE BLOCK CHECK:                  NB_PW NB_BR NB_MK NB_RP NB_SH identical in all 4 files
 MAKE US100 --check:                  PASS (crypto + 59 declared patches, no drift)
-US100 TESTS:                         108 passed  (U0 sessions/symbols, U15 DST per bar all of 2026, U1-U3 map vs reference,
+US100 TESTS:                         112 passed  (U0 sessions/symbols, U15 DST per bar all of 2026, U1-U3 map vs reference,
                                      U4 gap, U5/U6/U12 plans, U7 causal, U8 stale, U9 too far, U10 forming, U11 lots,
                                      U13 own symbol only, U14 news UNKNOWN, U16 no execution / no NY trap)
 BRIDGE PYTHON TESTS:                 12 of 12 (incl. the US100 message)
 ALL SUITES PASSED
-MUTATION TESTS:  89 planted, 89 caught (full run: 81 earlier + 82-89 twins v1.10); US100 90-105: see below
+MUTATION TESTS:  89 planted, 89 caught (full run: 81 earlier + 82-89 twins v1.10)
+                 US100 90-105: first run 14 of 16 - M92 and M98 ESCAPED (real test gaps, closed: 09:25-missing PMH
+                 check, every-bar-gapped fixture); re-run of all 16 on the final tests: see the commit
 MetaEditor F7:   NOT RUN HERE - twins v1.10 and NRTR_BOSS_US100.mq5 v1.11
 ```
 

@@ -340,6 +340,21 @@ int main()
       i5 = g_s5.n - 1;
       CHECK(g_us[(size_t)i5].pdh < spikeH && near(g_us[(size_t)i5].pdl, spikeL), "next day: PDH ignores the pre-market spike, PDL is the regular spike");
       OnDeinit(0);
+      // the last pre-market bar (09:25) missing: PMH / PML are published at the 09:30 bar and must still exclude it
+      UMkt m4;
+      m4.rule = mk.rule;
+      for(const UBar &x : mk.b) if(x.et != U(2026, 9, 22, 9, 25)) m4.b.push_back(x);
+      int k9 = -1;
+      for(size_t q = 0; q < m4.b.size(); q++) if(m4.b[q].et == U(2026, 9, 22, 9, 30)) k9 = (int)q;
+      m4.b[(size_t)k9].h = 31000.0;
+      m4.b[(size_t)k9].l = 11000.0;
+      load(m4, U(2026, 9, 22, 13, 37));   // 09:37: the 09:30 bar closed
+      start();
+      i5 = g_s5.n - 1;
+      CHECK(g_us[(size_t)i5].pmh > 0.0 && g_us[(size_t)i5].pmh < 31000.0 && g_us[(size_t)i5].pml > 11000.0,
+            "09:25 bar missing: PMH / PML published at 09:30 WITHOUT the regular 09:30 bar");
+      CHECK(near(g_us[(size_t)i5].or5h, 31000.0), "that bar is the OR5 high");
+      OnDeinit(0);
    }
    end("U1b");
 
@@ -470,6 +485,19 @@ int main()
          double lv[] = {f.pdh, f.pdl, f.ash, f.asl, f.loh, f.lol};
          for(double L : lv) if(L > 0.0 && NbUsGapped(g_s5.c[(size_t)(i - 1)], g_s5.o[(size_t)i], L)) gapsOverLevels++;
       }
+      // every candidate the table evaluated (not only the plans that became READY)
+      int candB = 0, candS = 0, candGapped = 0;
+      for(int i = 0; i < g_s5.n; i++)
+      {
+         const NbFqBar &f = g_fq[(size_t)i];
+         if(f.forming || f.event < 1 || (f.kind != NB_PK_SWEEP && f.kind != NB_PK_BREAK) || f.level <= 0.0) continue;
+         candB += f.kind == NB_PK_BREAK;
+         candS += f.kind == NB_PK_SWEEP;
+         if(NbUsGapped(g_s5.c[(size_t)(f.event - 1)], g_s5.o[(size_t)f.event], f.level)) candGapped++;
+      }
+      char cmsg[160];
+      std::snprintf(cmsg, sizeof cmsg, "%d break and %d sweep candidates on the table; %d of them start on a gap", candB, candS, candGapped);
+      CHECK(candB > 0 && candS > 0 && candGapped == 0, cmsg);
       char msg[200];
       std::snprintf(msg, sizeof msg, "%d plans (%d sweep, %d break); %d mapped levels were jumped by a gap; %d plans started on a gap",
                     g_nFqPlan, sweeps, breaks, gapsOverLevels, gappedEvents);
@@ -482,6 +510,35 @@ int main()
       int mid = 0, midReady = 0;
       for(int i = 0; i < g_s5.n; i++) if(g_fq[(size_t)i].why == NB_FW_MIDDLE) { mid++; if(g_fq[(size_t)i].status == NB_FQ_READY) midReady++; }
       CHECK(mid > 0 && midReady == 0, "PRICE IN THE MIDDLE - NO ENTRY HERE occurs and is never READY");
+      OnDeinit(0);
+      // a harsh fixture: EVERY bar opens halfway toward its own close, so about half of all level
+      // crossings happen inside a gap. Crypto rules would count them; the US rules must count none.
+      {
+         UMkt hg = mk;
+         for(size_t q = 1; q < hg.b.size(); q++)
+         {
+            UBar &x = hg.b[q];
+            x.o = std::round((hg.b[q - 1].c + 0.5 * (x.c - hg.b[q - 1].c)) * 100.0) / 100.0;
+            x.h = std::max(x.h, x.o);
+            x.l = std::min(x.l, x.o);
+         }
+         load(hg, U(2026, 9, 25, 19, 2));
+         start();
+         int hb = 0, hs = 0, hgap = 0, crossGapped = 0;
+         for(int i = 0; i < g_s5.n; i++)
+         {
+            const NbFqBar &f = g_fq[(size_t)i];
+            double lv[] = {f.pdh, f.pdl, f.ash, f.asl, f.loh, f.lol};
+            if(i > 0) for(double L : lv) if(L > 0.0 && NbUsGapped(g_s5.c[(size_t)(i - 1)], g_s5.o[(size_t)i], L)) crossGapped++;
+            if(f.forming || f.event < 1 || (f.kind != NB_PK_SWEEP && f.kind != NB_PK_BREAK) || f.level <= 0.0) continue;
+            hb += f.kind == NB_PK_BREAK;
+            hs += f.kind == NB_PK_SWEEP;
+            if(NbUsGapped(g_s5.c[(size_t)(f.event - 1)], g_s5.o[(size_t)f.event], f.level)) hgap++;
+         }
+         char hmsg[180];
+         std::snprintf(hmsg, sizeof hmsg, "every bar gapped: %d gapped level crossings; %d break + %d sweep candidates, %d start on a gap", crossGapped, hb, hs, hgap);
+         CHECK(crossGapped > 20 && hb > 0 && hgap == 0, hmsg);
+      }
       bool names = has(NbLvSrcText(NB_LV_ASH), "PRE-MARKET") && has(NbLvSrcText(NB_LV_LOH), "OPENING RANGE") && !has(NbLvSrcText(0xff), "ASIA") &&
                    !has(NbLvSrcText(0xff), "LONDON");
       CHECK(names, "the table names US levels (PRE-MARKET, OPENING RANGE), never Asia / London");

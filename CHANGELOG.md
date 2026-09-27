@@ -28,7 +28,7 @@ files are unchanged, and this is recorded in OPEN_ITEMS.
 
 **No schema change** in the append-only sense: fields were only added.
 
-### Tests - `tests/test_us100.cpp`, 108 checks
+### Tests - `tests/test_us100.cpp`, 112 checks
 
 * The fixture is a synthetic USTEC with real hours: Sunday 18:00 to Friday 17:00 NY and the
   17:00-18:00 daily break. Its server clock follows the broker DST rule.
@@ -45,7 +45,11 @@ files are unchanged, and this is recorded in OPEN_ITEMS.
   * U11: volume steps 1 / 0.1 / 0.01 / 0.005.
   * U13: only its own symbol is read; U14: news is UNKNOWN with decisions identical; U16: no
     execution and no NY trap.
-* 16 US100 mutations; the Python sender test covers the US100 message.
+* 16 US100 mutations. The first run caught 14; two escaped and were real test gaps, now closed:
+  * M92: regular bars leaking into PMH / PML when the 09:25 bar is missing. New check.
+  * M98: a gapped breakout. The table's candidates are now checked on a fixture where every bar
+    gaps.
+* The Python sender test covers the US100 message.
 
 ## v1.10 crypto / forex (2026-09-27): the metals v1.10 parity - click guard, lots, arrow, pending, MARKET chip, pullback watch
 
