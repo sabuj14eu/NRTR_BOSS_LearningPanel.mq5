@@ -119,9 +119,21 @@
 //|    The panel is unchanged.                                       |
 //|  v1.09: three bridge adapters so the shared bridge block stays   |
 //|    identical to the metals file (this file's output unchanged).  |
+//|  v1.10 SAME AS THE METALS PANEL ("give me final crypto"):        |
+//|  * CLICK GUARD: READY - CLICK only while the live price is       |
+//|    within InpClickBandR (0.5) x risk of the entry reference;     |
+//|    else BUY / SELL SETUP - PRICE TOO FAR, WAIT FOR RE-ENTRY. The |
+//|    ENTRY row shows the signal's age and distance.                |
+//|  * Lots: the broker's volume-step decimals, loss tick value.     |
+//|  * No FLIP arrow on the first NRTR-ready bar; "5M AGAINST - WAIT |
+//|    FOR 5M RE-ALIGNMENT" instead of a "---" pending line.         |
+//|  * MARKET chip (symbol line) and the REGIME PULLBACK WATCH (4H / |
+//|    1H / 15M direction, 5M location; shadow only) on the watch    |
+//|    strip and in the bridge. The version shows top right.         |
+//|  The engine, the NY trap and every signal are unchanged.         |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - learning tool"
-#property version     "1.09"
+#property version     "1.10"
 #property description "Crypto NRTR BOSS learning panel: 15M direction, 5M timing, NY-open trap. CUSTOM ATR-NRTR."
 #property description "BTC ETH SOL LTC XRP BNB ADA DOGE AVAX DOT LINK BCH vs USD/USDT/USDC."
 #property description "Visual decision support only - never places, modifies or closes orders."
@@ -173,7 +185,7 @@
 #define NB_MKT_FOREX  2
 // THE ONLY CODE LINE THAT DIFFERS BETWEEN THE TWO TWIN FILES
 #define NB_MARKET NB_MKT_CRYPTO
-#define NB_BR_VERSION "1.09"   // written into the data-bridge file
+#define NB_BR_VERSION "1.10"   // written into the data-bridge file
 
 // decision / trade direction
 #define NB_WAIT   0
@@ -394,7 +406,20 @@ double NbLotsForRisk(double balance, double riskPct, double riskPrice, double ti
       lots = volMax;
    if(lots < volMin - 1e-9)
       return 0.0;
-   lots = NormalizeDouble(lots, 2);
+   // v1.10: normalise to the volume step's own decimals (0.005 needs 3), never to a fixed 2:
+   // NormalizeDouble(0.015, 2) = 0.02 would round the lot UP, above the risk budget
+   int vd = 0;
+   double st = (volStep > 0.0) ? volStep : 0.01;
+   while(vd < 8 && MathAbs(st - MathRound(st)) > 1e-9)
+   {
+      st *= 10.0;
+      vd++;
+   }
+   lots = NormalizeDouble(lots, vd);
+   if(volStep > 0.0 && lots * perLot > budget + 1e-9)   // floating guard: never above the budget
+      lots = NormalizeDouble(lots - volStep, vd);
+   if(lots < volMin - 1e-9)
+      return 0.0;
    moneyAtRisk = lots * perLot;
    return lots;
 }
@@ -3004,6 +3029,517 @@ string NbPwStatusText(int st)
    return "";
 }
 //=== NB_PW_END ===
+
+//=== NB_MK_BEGIN === (market state - identical text in all three files: tests/check_bridge_blocks.py)
+//+------------------------------------------------------------------+
+//| MARKET STATE (metals v1.07). A DESCRIPTION, NOT A SIGNAL: it     |
+//| names what the last CLOSED 15M bars look like and never changes  |
+//| BUY / SELL / WAIT. Only existing measures, no new indicator:     |
+//|   15M boss mode, 5M NRTR, distance from EMA200 in 15M ATRs,      |
+//|   NRTR flips and the high-low width over the last 24 x 15M (6 h).|
+//|   SUPER BULLISH  BUY MODE + 5M bullish + >= 1.5 ATR above EMA200 |
+//|                  + no 15M NRTR flip in 6 h                       |
+//|   TREND UP       BUY MODE (anything less)                        |
+//|   CHOP           boss WAIT + >= 3 NRTR flips in 6 h              |
+//|   RANGE          boss WAIT + 6 h width <= 4 ATR                  |
+//|   TRANSITION     boss WAIT, neither of the above                 |
+//|   TREND DOWN / SUPER BEARISH: the mirror.                        |
+//| The thresholds describe; no backtest has shown an edge for them. |
+//+------------------------------------------------------------------+
+#define NB_MK_UNKNOWN    0
+#define NB_MK_SUPER_BULL 1
+#define NB_MK_TREND_UP   2
+#define NB_MK_RANGE      3
+#define NB_MK_CHOP       4
+#define NB_MK_TRANSITION 5
+#define NB_MK_TREND_DOWN 6
+#define NB_MK_SUPER_BEAR 7
+#define NB_MK_LOOKBACK   24     // closed 15M bars = 6 hours
+#define NB_MK_SUPER_ATR  1.5    // distance from EMA200 for SUPER, in 15M ATRs
+#define NB_MK_CHOP_FLIPS 3      // NRTR flips in the lookback = CHOP
+#define NB_MK_RANGE_ATR  4.0    // lookback high-low width for RANGE, in 15M ATRs
+
+int NbMarketState(const NbSeries &b, int i, int dir5, double &distAtr, int &flips, double &widthAtr)
+{
+   distAtr = 0.0;
+   flips = 0;
+   widthAtr = 0.0;
+   if(i < NB_MK_LOOKBACK || i >= b.n || b.atr[i] <= 0.0 || b.ema[i] <= 0.0)
+      return NB_MK_UNKNOWN;
+   double hi = b.h[i];
+   double lo = b.l[i];
+   for(int j = i - NB_MK_LOOKBACK + 1; j <= i; j++)
+   {
+      if(b.flip[j] != 0)
+         flips++;
+      if(b.h[j] > hi)
+         hi = b.h[j];
+      if(b.l[j] < lo)
+         lo = b.l[j];
+   }
+   widthAtr = (hi - lo) / b.atr[i];
+   distAtr = (b.c[i] - b.ema[i]) / b.atr[i];
+   if(b.mode[i] == NB_BUY)
+      return (dir5 > 0 && distAtr >= NB_MK_SUPER_ATR && flips == 0) ? NB_MK_SUPER_BULL : NB_MK_TREND_UP;
+   if(b.mode[i] == NB_SELL)
+      return (dir5 < 0 && distAtr <= -NB_MK_SUPER_ATR && flips == 0) ? NB_MK_SUPER_BEAR : NB_MK_TREND_DOWN;
+   if(flips >= NB_MK_CHOP_FLIPS)
+      return NB_MK_CHOP;
+   if(widthAtr <= NB_MK_RANGE_ATR)
+      return NB_MK_RANGE;
+   return NB_MK_TRANSITION;
+}
+
+string NbMarketStateText(int m)
+{
+   switch(m)
+   {
+      case NB_MK_SUPER_BULL: return "SUPER BULLISH";
+      case NB_MK_TREND_UP:   return "TREND UP";
+      case NB_MK_RANGE:      return "RANGE";
+      case NB_MK_CHOP:       return "CHOP";
+      case NB_MK_TRANSITION: return "TRANSITION";
+      case NB_MK_TREND_DOWN: return "TREND DOWN";
+      case NB_MK_SUPER_BEAR: return "SUPER BEARISH";
+   }
+   return "---";
+}
+//=== NB_MK_END ===
+
+//=== NB_RP_BEGIN === (regime pullback engine - identical text in all three files: tests/check_bridge_blocks.py)
+//+------------------------------------------------------------------+
+//| REGIME PULLBACK WATCH (metals v1.09). SHADOW ONLY - NEVER A      |
+//| SIGNAL, never an order, never a change to CLICK / WAIT.          |
+//| DIRECTION and ENTRY LOCATION are kept apart:                     |
+//|   DIRECTION = the regime: 4H NRTR bearish + 1H NRTR bearish +    |
+//|   15M boss in SELL MODE (all on CLOSED bars known at the 5M      |
+//|   close). The mirror is the bullish regime.                      |
+//|   LOCATION = where a re-entry WITH that direction would be:      |
+//|   a pull AGAINST the regime (a pull-up in a bearish regime) is a |
+//|   WATCH. It is NEVER turned into a BUY; a BUY needs the normal   |
+//|   independent bullish rules (the main engine).                   |
+//| Per closed 5M bar, bearish regime (the bullish one mirrors it):  |
+//|   TREND        track the leg low                                 |
+//|   PULLBACK     close >= leg low + startAtr x 15M ATR: WATCH.     |
+//|                The bearish structure = the last confirmed 15M    |
+//|                swing high above price (1H swing high = second    |
+//|                level). Monitored:                                |
+//|                1 pull distance / 15M ATR                         |
+//|                2 at structure: pull high within locAtr x 15M ATR |
+//|                  of the 15M (or 1H) swing high                   |
+//|                3 sweep: a wick above a level, close back below   |
+//|                4 rejection: the bar that makes the pull high     |
+//|                  closes in its lower half                        |
+//|                5 bearish close: a later bearish 5M candle closes |
+//|                  below the rejection candle's low                |
+//|                6 SL = pull high + slBufAtr x 5M ATR (outward),   |
+//|                  target = the leg low, R:R >= minRR              |
+//|   CANDIDATE    all six (2 or 3 for location) = SELL PULLBACK /   |
+//|                RE-ENTRY CANDIDATE, fresh for validBars bars,     |
+//|                then "do not chase". Recorded with its outcome    |
+//|                (target / SL / expired after trackBars).          |
+//|   INVALIDATED  a 5M close above the bearish structure = BEARISH  |
+//|                THESIS INVALIDATED until a new leg low; wait for  |
+//|                independent bullish confirmation.                 |
+//| The forming bar is never evaluated. No backtest has shown an     |
+//| edge for any threshold here: it exists to collect evidence.      |
+//+------------------------------------------------------------------+
+#define NB_RP_NONE        0
+#define NB_RP_TREND       1
+#define NB_RP_PULLBACK    2
+#define NB_RP_CANDIDATE   3
+#define NB_RP_INVALIDATED 4
+
+#define NB_RPW_NO_HTF        1    // 1H / 4H data missing
+#define NB_RPW_NOT_ALIGNED   2    // 4H, 1H, 15M do not agree
+#define NB_RPW_WAIT_PULL     3    // regime on, no pull yet
+#define NB_RPW_NO_STRUCTURE  4    // no confirmed 15M swing on the pull side
+#define NB_RPW_WAIT_LOCATION 5    // pulling, not at structure yet
+#define NB_RPW_WAIT_REJECT   6    // at structure / swept, no rejection yet
+#define NB_RPW_WAIT_CLOSE    7    // rejection seen, waiting for the confirming close
+#define NB_RPW_NOT_AT_LEVEL  8    // confirming close came away from structure: not taken
+#define NB_RPW_LOW_RR        9    // confirming close, but R:R below the minimum
+#define NB_RPW_CANDIDATE     10
+#define NB_RPW_NO_CHASE      11   // candidate older than validBars: do not chase
+#define NB_RPW_INVALIDATED   12
+#define NB_RPW_FADED         13   // price went back to the leg extreme without a candidate
+
+#define NB_RPO_OPEN    1
+#define NB_RPO_TARGET  2
+#define NB_RPO_SL      3
+#define NB_RPO_EXPIRED 4
+
+struct NbRpCfg
+{
+   double   startAtr;     // pull distance that starts the WATCH, x 15M ATR
+   double   locAtr;       // "at structure" tolerance, x 15M ATR
+   double   slBufAtr;     // SL buffer beyond the pull extreme, x 5M ATR
+   double   minRR;        // minimum reward to the leg extreme, R
+   int      validBars;    // a candidate is fresh this many closed 5M bars
+   int      trackBars;    // outcome tracking horizon, closed 5M bars
+   double   tick;
+   int      digits;
+};
+
+struct NbRpBar
+{
+   int      regime;       // NB_SELL / NB_BUY / 0
+   int      state;        // NB_RP_*
+   int      why;          // NB_RPW_*
+   double   legExt;       // the leg extreme (low in a bearish regime)
+   double   pbExt;        // the pull extreme (high in a bearish regime)
+   double   level;        // the regime's 15M structure (invalidation)
+   double   level2;       // the 1H structure (0 = none)
+   double   pullAtr;      // pull distance / 15M ATR
+   bool     atLoc;
+   bool     swept;
+   bool     rejected;
+   double   rr;           // last computed R:R (0 = none yet)
+   int      cand;         // record index of the current candidate (-1)
+};
+
+struct NbRpRec
+{
+   int      idx;          // 5M bar of the confirming close
+   int      dir;          // WITH the regime: NB_SELL in a bearish regime
+   double   entry;
+   double   sl;
+   double   target;       // the leg extreme
+   double   rr;
+   int      status;       // NB_RPO_*
+   int      outIdx;
+};
+
+void NbRpBarCopy(NbRpBar &d, const NbRpBar &s)
+{
+   d.regime = s.regime;
+   d.state = s.state;
+   d.why = s.why;
+   d.legExt = s.legExt;
+   d.pbExt = s.pbExt;
+   d.level = s.level;
+   d.level2 = s.level2;
+   d.pullAtr = s.pullAtr;
+   d.atLoc = s.atLoc;
+   d.swept = s.swept;
+   d.rejected = s.rejected;
+   d.rr = s.rr;
+   d.cand = s.cand;
+}
+
+//--- d60 / d240: 1H / 4H NRTR direction of the last CLOSED bar at each 5M
+//    close (0 = unknown); atr15: the 15M ATR there; res / sup: the last
+//    CONFIRMED 15M and 1H swing high / low known there (0 = none).
+int NbRunRp(const NbSeries &s5, const int &d60[], const int &d240[], const double &atr15[], const double &res15[], const double &sup15[],
+            const double &res60[], const double &sup60[], bool lastClosed, const NbRpCfg &C, NbRpBar &rb[], NbRpRec &rec[], int &nInv)
+{
+   int n = s5.n;
+   ArrayResize(rb, n);
+   ArrayResize(rec, 0);
+   int nRec = 0;
+   nInv = 0;
+   int nEvalRp = lastClosed ? n : n - 1;
+   NbRpBar m;
+   m.regime = 0;
+   m.state = NB_RP_NONE;
+   m.why = NB_RPW_NOT_ALIGNED;
+   m.legExt = 0.0;
+   m.pbExt = 0.0;
+   m.level = 0.0;
+   m.level2 = 0.0;
+   m.pullAtr = 0.0;
+   m.atLoc = false;
+   m.swept = false;
+   m.rejected = false;
+   m.rr = 0.0;
+   m.cand = -1;
+   int rejIdx = -1;
+   double rejExt = 0.0;
+   bool armed = true;   // after a candidate, the next WATCH needs a new leg extreme first (one candidate per pull)
+   for(int i = 0; i < n; i++)
+   {
+      if(i >= nEvalRp)
+      {
+         // unfinished candle: carry the last CLOSED answer, never evaluate it
+         NbRpBarCopy(rb[i], m);
+         continue;
+      }
+      double o = s5.o[i];
+      double h = s5.h[i];
+      double l = s5.l[i];
+      double c = s5.c[i];
+      // outcomes of earlier candidates: SL first (tick order unknown), then the target, then expiry
+      for(int k = 0; k < nRec; k++)
+      {
+         if(rec[k].status != NB_RPO_OPEN || i <= rec[k].idx)
+            continue;
+         bool stop = (rec[k].dir < 0) ? (h >= rec[k].sl) : (l <= rec[k].sl);
+         bool tgt = (rec[k].dir < 0) ? (l <= rec[k].target) : (h >= rec[k].target);
+         if(stop)
+            rec[k].status = NB_RPO_SL;
+         else if(tgt)
+            rec[k].status = NB_RPO_TARGET;
+         else if(i - rec[k].idx >= C.trackBars)
+            rec[k].status = NB_RPO_EXPIRED;
+         if(rec[k].status != NB_RPO_OPEN)
+            rec[k].outIdx = i;
+      }
+      // DIRECTION: the regime at this close
+      int reg = 0;
+      if(d240[i] < 0 && d60[i] < 0 && s5.boss[i] == NB_SELL)
+         reg = NB_SELL;
+      else if(d240[i] > 0 && d60[i] > 0 && s5.boss[i] == NB_BUY)
+         reg = NB_BUY;
+      double a15 = atr15[i];
+      if(reg != m.regime)
+      {
+         m.regime = reg;
+         m.state = (reg != 0) ? NB_RP_TREND : NB_RP_NONE;
+         if(reg != 0)
+            m.why = NB_RPW_WAIT_PULL;
+         else
+            m.why = (d240[i] == 0 || d60[i] == 0) ? NB_RPW_NO_HTF : NB_RPW_NOT_ALIGNED;
+         m.legExt = (reg < 0) ? l : h;
+         m.pbExt = 0.0;
+         m.level = 0.0;
+         m.level2 = 0.0;
+         m.pullAtr = 0.0;
+         m.atLoc = false;
+         m.swept = false;
+         m.rejected = false;
+         m.rr = 0.0;
+         m.cand = -1;
+         rejIdx = -1;
+         armed = true;
+         NbRpBarCopy(rb[i], m);
+         continue;
+      }
+      if(reg == 0 || a15 <= 0.0)
+      {
+         if(reg == 0)
+            m.why = (d240[i] == 0 || d60[i] == 0) ? NB_RPW_NO_HTF : NB_RPW_NOT_ALIGNED;
+         NbRpBarCopy(rb[i], m);
+         continue;
+      }
+      int d = reg;
+      bool newLeg = (d < 0) ? (l < m.legExt) : (h > m.legExt);
+      if(m.state == NB_RP_CANDIDATE && m.cand >= 0 && i - rec[m.cand].idx >= C.validBars)
+      {
+         m.state = NB_RP_TREND;
+         m.why = NB_RPW_NO_CHASE;
+      }
+      if(m.state == NB_RP_TREND || m.state == NB_RP_INVALIDATED || m.state == NB_RP_CANDIDATE)
+      {
+         if(newLeg)
+         {
+            m.legExt = (d < 0) ? l : h;
+            armed = true;
+            if(m.state == NB_RP_INVALIDATED)
+            {
+               m.state = NB_RP_TREND;
+               m.why = NB_RPW_WAIT_PULL;
+            }
+         }
+         if(m.state == NB_RP_CANDIDATE)
+         {
+            // a close beyond the structure still invalidates the thesis
+            if((d < 0) ? (c > m.level) : (c < m.level))
+            {
+               m.state = NB_RP_INVALIDATED;
+               m.why = NB_RPW_INVALIDATED;
+               nInv++;
+            }
+            NbRpBarCopy(rb[i], m);
+            continue;
+         }
+         if(m.state == NB_RP_INVALIDATED)
+         {
+            NbRpBarCopy(rb[i], m);
+            continue;
+         }
+         // TREND: has price pulled against the regime far enough?
+         if(!armed)
+         {
+            NbRpBarCopy(rb[i], m);
+            continue;
+         }
+         m.pullAtr = ((d < 0) ? (c - m.legExt) : (m.legExt - c)) / a15;
+         if(m.pullAtr < C.startAtr)
+         {
+            NbRpBarCopy(rb[i], m);
+            continue;
+         }
+         double lv = (d < 0) ? res15[i] : sup15[i];
+         if(lv <= 0.0 || ((d < 0) ? (lv <= c) : (lv >= c)))
+         {
+            m.why = NB_RPW_NO_STRUCTURE;
+            NbRpBarCopy(rb[i], m);
+            continue;
+         }
+         double lv2 = (d < 0) ? res60[i] : sup60[i];
+         if(lv2 > 0.0 && ((d < 0) ? (lv2 <= c) : (lv2 >= c)))
+            lv2 = 0.0;
+         m.state = NB_RP_PULLBACK;
+         m.why = NB_RPW_WAIT_LOCATION;
+         m.level = lv;
+         m.level2 = lv2;
+         m.pbExt = (d < 0) ? h : l;
+         m.atLoc = false;
+         m.swept = false;
+         m.rejected = false;
+         m.rr = 0.0;
+         m.cand = -1;
+         rejIdx = -1;
+      }
+      // PULLBACK: the WATCH (never a trade AGAINST the regime)
+      bool extNew = (d < 0) ? (h >= m.pbExt) : (l <= m.pbExt);
+      if(extNew)
+         m.pbExt = (d < 0) ? h : l;
+      m.pullAtr = ((d < 0) ? (m.pbExt - m.legExt) : (m.legExt - m.pbExt)) / a15;
+      if((d < 0) ? (c > m.level) : (c < m.level))
+      {
+         m.state = NB_RP_INVALIDATED;
+         m.why = NB_RPW_INVALIDATED;
+         nInv++;
+         NbRpBarCopy(rb[i], m);
+         continue;
+      }
+      // 3 sweep: a wick through a level, the close back on the regime side
+      if((d < 0) ? (h > m.level) : (l < m.level))
+         m.swept = true;
+      if(m.level2 > 0.0 && ((d < 0) ? (h > m.level2 && c <= m.level2) : (l < m.level2 && c >= m.level2)))
+         m.swept = true;
+      // 2 at structure
+      double tol = C.locAtr * a15;
+      if(((d < 0) ? (m.level - m.pbExt) : (m.pbExt - m.level)) <= tol)
+         m.atLoc = true;
+      if(m.level2 > 0.0 && MathAbs(m.level2 - m.pbExt) <= tol)
+         m.atLoc = true;
+      // 5 the confirming close (after a rejection on an earlier bar)
+      bool confirmed = false;
+      if(rejIdx >= 0 && i > rejIdx && ((d < 0) ? (c < o && c < rejExt) : (c > o && c > rejExt)))
+      {
+         confirmed = true;
+         if(!m.atLoc && !m.swept)
+         {
+            m.why = NB_RPW_NOT_AT_LEVEL;
+            rejIdx = -1;
+            m.rejected = false;
+         }
+         else
+         {
+            double buf = C.slBufAtr * s5.atr[i];
+            double sl = (d < 0) ? NbRoundTick(m.pbExt + buf, C.tick, C.digits, 1) : NbRoundTick(m.pbExt - buf, C.tick, C.digits, -1);
+            double risk = NormalizeDouble(MathAbs(sl - c), C.digits);
+            double reward = (d < 0) ? (c - m.legExt) : (m.legExt - c);
+            m.rr = (risk > 0.0) ? reward / risk : 0.0;
+            if(risk <= C.tick * 0.5 || reward <= 0.0 || m.rr < C.minRR)
+            {
+               m.why = NB_RPW_LOW_RR;
+               rejIdx = -1;
+               m.rejected = false;
+            }
+            else
+            {
+               ArrayResize(rec, nRec + 1);
+               rec[nRec].idx = i;
+               rec[nRec].dir = d;
+               rec[nRec].entry = c;
+               rec[nRec].sl = sl;
+               rec[nRec].target = m.legExt;
+               rec[nRec].rr = m.rr;
+               rec[nRec].status = NB_RPO_OPEN;
+               rec[nRec].outIdx = -1;
+               m.cand = nRec;
+               nRec++;
+               m.state = NB_RP_CANDIDATE;
+               m.why = NB_RPW_CANDIDATE;
+               rejIdx = -1;
+               armed = false;
+            }
+         }
+      }
+      // 4 rejection: the bar that makes the pull extreme closes back in its regime half
+      if(!confirmed && m.state == NB_RP_PULLBACK)
+      {
+         double rg = h - l;
+         bool extBar = (d < 0) ? (h >= m.pbExt) : (l <= m.pbExt);
+         if(extBar && rg > 0.0 && ((d < 0) ? (c <= l + 0.5 * rg) : (c >= h - 0.5 * rg)))
+         {
+            rejIdx = i;
+            rejExt = (d < 0) ? l : h;
+            m.rejected = true;
+         }
+         else if(extNew)
+         {
+            rejIdx = -1;      // the pull made a new extreme without rejecting: start over
+            m.rejected = false;
+         }
+         // the "not taken" reasons are shown on their own bar only (confirmed bars skip this block)
+         m.why = m.rejected ? NB_RPW_WAIT_CLOSE : ((m.atLoc || m.swept) ? NB_RPW_WAIT_REJECT : NB_RPW_WAIT_LOCATION);
+         // the pull gave up: back at the leg extreme without a candidate
+         if((d < 0) ? (c <= m.legExt) : (c >= m.legExt))
+         {
+            m.state = NB_RP_TREND;
+            m.why = NB_RPW_FADED;
+            rejIdx = -1;
+            m.rejected = false;
+            m.legExt = (d < 0) ? MathMin(m.legExt, l) : MathMax(m.legExt, h);
+         }
+      }
+      NbRpBarCopy(rb[i], m);
+   }
+   return nRec;
+}
+
+void NbRpStats(const NbRpRec &rec[], int cnt, int &n, int &tgt, int &sl, int &ex, double &netR)
+{
+   n = 0;
+   tgt = 0;
+   sl = 0;
+   ex = 0;
+   netR = 0.0;
+   for(int k = 0; k < cnt; k++)
+   {
+      if(rec[k].status == NB_RPO_TARGET)
+      {
+         tgt++;
+         netR += rec[k].rr;
+      }
+      else if(rec[k].status == NB_RPO_SL)
+      {
+         sl++;
+         netR -= 1.0;
+      }
+      else if(rec[k].status == NB_RPO_EXPIRED)
+         ex++;
+      else
+         continue;
+      n++;
+   }
+}
+
+string NbRpWhyText(int w)
+{
+   switch(w)
+   {
+      case NB_RPW_NO_HTF:        return "1H / 4H data missing";
+      case NB_RPW_NOT_ALIGNED:   return "4H, 1H, 15M not aligned";
+      case NB_RPW_WAIT_PULL:     return "waiting for a pullback";
+      case NB_RPW_NO_STRUCTURE:  return "no confirmed 15M swing to retest";
+      case NB_RPW_WAIT_LOCATION: return "pulling - not at structure yet";
+      case NB_RPW_WAIT_REJECT:   return "at structure - wait for 5M rejection";
+      case NB_RPW_WAIT_CLOSE:    return "rejection - wait for the 5M close";
+      case NB_RPW_NOT_AT_LEVEL:  return "close came away from structure - not taken";
+      case NB_RPW_LOW_RR:        return "R:R too small - not taken";
+      case NB_RPW_CANDIDATE:     return "re-entry candidate";
+      case NB_RPW_NO_CHASE:      return "candidate expired - do not chase";
+      case NB_RPW_INVALIDATED:   return "closed beyond the structure";
+      case NB_RPW_FADED:         return "pull faded back to the leg";
+   }
+   return "";
+}
+//=== NB_RP_END ===
 //=== NB_ENGINE_END ===
 
 //+------------------------------------------------------------------+
@@ -3086,6 +3622,12 @@ input bool           InpBridgeOn        = true;        // Write Files\Common\NRT
 input int            InpBridgeCandles   = 18;          // Closed candles per timeframe in the file (5 - 100)
 input int            InpBridgeEverySec  = 10;          // Rewrite the file this often for the forming candle (seconds)
 input bool           InpPwShow          = true;        // Show the COUNTER-TREND WATCH strip (a record, never a signal)
+input group "REGIME PULLBACK WATCH (v1.09 - shadow only: direction 4H/1H/15M, entry location 5M; never a signal)"
+input bool           InpRpShow          = true;        // Show the REGIME PULLBACK rows on the watch strip
+input double         InpRpStartAtr      = 0.5;         // Pull against the regime that starts the WATCH (x 15M ATR)
+input double         InpRpMinRR         = 1.5;         // Minimum R:R to the leg extreme for a re-entry candidate
+input group "CLICK GUARD (v1.10)"
+input double         InpClickBandR      = 0.5;         // READY - CLICK only while price is within this x the signal's risk of its entry
 
 // plot buffers
 double g_bEma[];
@@ -3154,6 +3696,25 @@ NbFqBar  g_fq[];
 NbFqPlan g_fqPlans[];
 int      g_nFqPlan;
 
+
+// v1.09 regime pullback watch state (1H / 4H loaded only for the DIRECTION check)
+NbSeries g_s60;
+NbSeries g_s240;
+NbPivot  g_piv60[];
+bool     g_htfOk;
+int      g_rpD60[];
+int      g_rpD240[];
+double   g_rpAtr15[];
+double   g_rpRes15[];
+double   g_rpSup15[];
+double   g_rpRes60[];
+double   g_rpSup60[];
+NbRpCfg  g_RC;
+NbRpBar  g_rp[];
+NbRpRec  g_rpRec[];
+int      g_nRp;
+int      g_rpInv;
+
 // v1.07 counter-trend watch + data bridge state
 NbPwRec  g_pw[];
 int      g_nPw;
@@ -3214,9 +3775,16 @@ string NbBrSigKind(int k);
 string NbBrMarketState();
 string NbBrRegime();
 string NbBrRegimeKey();
+#define NB_CS_NONE  0   // v1.10 click guard states
+#define NB_CS_READY 1
+#define NB_CS_FAR   2
+int    NbClickState(double &now, double &dist, double &distR, int &age);
 string NbBrAction(int fin);
 string NbBrSigExtra(int cur);
 string NbBrClickKey();
+void   NbRpRecompute();
+void   NbRpRows(string pfx, bool ok, bool gate, int x0, int xr, int y, int rh, int fsS);
+string NbMarketChip(string &detail, color &clr);
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -3257,9 +3825,10 @@ int OnInit()
       Print("NRTR BOSS: invalid inputs - 5-question plan settings out of range");
       return INIT_PARAMETERS_INCORRECT;
    }
-   if(InpBridgeCandles < 5 || InpBridgeCandles > 100 || InpBridgeEverySec < 1 || InpBridgeEverySec > 3600)
+   if(InpClickBandR <= 0.0 || InpClickBandR > 3.0 || InpBridgeCandles < 5 || InpBridgeCandles > 100 || InpBridgeEverySec < 1 ||
+      InpBridgeEverySec > 3600 || InpRpStartAtr <= 0.0 || InpRpStartAtr > 5.0 || InpRpMinRR < 0.5 || InpRpMinRR > 10.0)
    {
-      Print("NRTR BOSS: invalid inputs - bridge candles 5-100, bridge seconds 1-3600");
+      Print("NRTR BOSS: invalid inputs - click band 0-3R, bridge candles 5-100, bridge seconds 1-3600, pullback start 0-5 ATR, R:R 0.5-10");
       return INIT_PARAMETERS_INCORRECT;
    }
 
@@ -3332,6 +3901,11 @@ int OnInit()
    ArrayResize(g_pw, 0);
    g_nPw = 0;
    g_pwCur = -1;
+   ArrayResize(g_rp, 0);
+   ArrayResize(g_rpRec, 0);
+   g_nRp = 0;
+   g_rpInv = 0;
+   g_htfOk = false;
    g_brLast = 0;
    g_brBar = 0;
    g_brStatus = "";
@@ -3470,6 +4044,11 @@ void NbReadSpec()
    if(g_tick <= 0.0)
       g_tick = SymbolInfoDouble(g_sym, SYMBOL_POINT);
    g_tickValue = SymbolInfoDouble(g_sym, SYMBOL_TRADE_TICK_VALUE);
+   // v1.10: a LOSS is valued with MT5's loss tick value when it is larger (cross-currency
+   // symbols can differ) - so lots-for-risk and money-at-SL are never understated
+   double tvLoss = SymbolInfoDouble(g_sym, SYMBOL_TRADE_TICK_VALUE_LOSS);
+   if(tvLoss > g_tickValue)
+      g_tickValue = tvLoss;
    g_volMin = SymbolInfoDouble(g_sym, SYMBOL_VOLUME_MIN);
    g_volStep = SymbolInfoDouble(g_sym, SYMBOL_VOLUME_STEP);
    g_volMax = SymbolInfoDouble(g_sym, SYMBOL_VOLUME_MAX);
@@ -3573,6 +4152,10 @@ void NbRecompute()
       ArrayResize(g_pw, 0);
       g_nPw = 0;
       g_pwCur = -1;
+      ArrayResize(g_rp, 0);
+      ArrayResize(g_rpRec, 0);
+      g_nRp = 0;
+      g_rpInv = 0;
       return;
    }
    NbRun15(g_s15, g_piv15, g_P);
@@ -3586,6 +4169,7 @@ void NbRecompute()
    NbFqRecompute();
    NbFqDrawChart();
    NbPwRecompute();
+   NbRpRecompute();
 }
 
 //--- decide what the panel shows right now
@@ -3777,7 +4361,7 @@ void NbFillBuffers(int rates_total, const datetime &time[], const double &high[]
          ad = (p15 >= 0) ? g_s15.dir[p15] : 0;
       if(ad == 0)
          continue;
-      bool flipHere = (ad != prevAd);
+      bool flipHere = (prevAd != 0 && ad != prevAd);   // v1.10: the first NRTR-ready bar is not a flip
       prevAd = ad;
       if(!flipHere && !InpArrowEveryBar)
          continue;
@@ -4204,11 +4788,19 @@ void NbDrawPanel()
    string title = (g_label == "") ? "NRTR BOSS" : (g_label + " NRTR BOSS");
    title = title + ((NB_MARKET == NB_MKT_CRYPTO) ? "  (CRYPTO + NY TRAP)" : "  (FOREX + NY TRAP)");
    NbLabel("title", ox + kx, y, title, cMkt, fsT, "Arial Black", ANCHOR_LEFT_UPPER);
+   // v1.10: the version, small, so a compiled update is visible at a glance
+   string verTxt = NB_BR_VERSION;
+   NbLabel("ver", ox + W - kx, oy + (int)MathRound(1 * sc), "v" + verTxt, cDim, (int)MathRound(7 * sc), "Arial", ANCHOR_RIGHT_UPPER);
    y += (int)MathRound(rh * 1.4);
    double bid = SymbolInfoDouble(g_sym, SYMBOL_BID);
    g_balance = AccountInfoDouble(ACCOUNT_BALANCE);
    g_equity = AccountInfoDouble(ACCOUNT_EQUITY);
    NbLabel("sym", ox + kx, y, g_sym + "   PRICE " + NbPx(bid), cVal, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
+   // v1.10 MARKET STATE: a description of the last closed 15M bars, never a signal
+   string mkDetail = "";
+   color mkc = cDim;
+   string mk = NbMarketChip(mkDetail, mkc);
+   NbLabel("mk", ox + W - kx, y, mk, mkc, fs, "Arial Black", ANCHOR_RIGHT_UPPER);
    y += rh + (int)MathRound(4 * sc);
 
    bool ok = (g_label != "" && g_ready && g_s15.n > 0 && g_s5.n > 0);
@@ -4221,15 +4813,22 @@ void NbDrawPanel()
    // big state banner
    string st = NbSymDot() + "  WAIT - NO TRADE";
    color bc = cWait;
+   // v1.10: CLICK only while the live price is still near the signal's entry
+   // reference; an older signal the price has left is a SETUP, not a click
+   double csNow = 0.0;
+   double csDist = 0.0;
+   double csR = 0.0;
+   int csAge = 0;
+   int cs = NbClickState(csNow, csDist, csR, csAge);
    if(g_final == NB_BUY)
    {
-      st = NbSymUp() + (liveTrap ? "  CLICK BUY - NY TRAP" : "  CLICK BUY");
-      bc = liveTrap ? cNy : cUp;
+      st = NbSymUp() + ((cs == NB_CS_FAR) ? "  BUY SETUP - PRICE TOO FAR" : (liveTrap ? "  READY - NY TRAP BUY" : "  READY - CLICK BUY"));
+      bc = (cs == NB_CS_FAR) ? cWait : (liveTrap ? cNy : cUp);
    }
    if(g_final == NB_SELL)
    {
-      st = NbSymDown() + (liveTrap ? "  CLICK SELL - NY TRAP" : "  CLICK SELL");
-      bc = liveTrap ? cNy : cDn;
+      st = NbSymDown() + ((cs == NB_CS_FAR) ? "  SELL SETUP - PRICE TOO FAR" : (liveTrap ? "  READY - NY TRAP SELL" : "  READY - CLICK SELL"));
+      bc = (cs == NB_CS_FAR) ? cWait : (liveTrap ? cNy : cDn);
    }
    if(g_final == NB_EXIT)
    {
@@ -4242,7 +4841,7 @@ void NbDrawPanel()
    // blink = a light, not a button: the banner alternates bright / dark
    // while a CLICK state is live. Text never changes, so nothing is lost.
    color bcFill = bc;
-   if(InpBlink && g_blink && (g_final == NB_BUY || g_final == NB_SELL))
+   if(InpBlink && g_blink && (g_final == NB_BUY || g_final == NB_SELL) && cs == NB_CS_READY)
       bcFill = NB_RGB(16, 20, 28);
    NbRect("banner", ox + kx, y, W - 2 * kx, bannerH, bcFill, bc);
    NbLabel("state", ox + W / 2, y + bannerH / 2, st, (bcFill == bc) ? NB_RGB(10, 12, 16) : bc, fsB, "Arial Black", ANCHOR_CENTER);
@@ -4251,7 +4850,13 @@ void NbDrawPanel()
    // reasons
    string r1 = "";
    string r2 = "";
-   if(liveTrap)
+   if((g_final == NB_BUY || g_final == NB_SELL) && cs == NB_CS_FAR)
+   {
+      r1 = "PRICE " + DoubleToString(MathAbs(csDist), g_digits) + " FROM ENTRY (" + DoubleToString(csR, 1) + "R > " +
+           DoubleToString(InpClickBandR, 1) + "R)";
+      r2 = "WAIT FOR RE-ENTRY - DO NOT CHASE";
+   }
+   else if(liveTrap)
    {
       string sideTxt = (g_final == NB_SELL) ? "HIGH" : "LOW";
       r1 = "NY SWEPT PRE-NY " + sideTxt + " " + NbPx(g_sigs[cur].level) + " (to " + NbPx(g_sigs[cur].sweep) + ")";
@@ -4526,6 +5131,22 @@ void NbDrawPanel()
       }
    }
    NbRow("k10", "v10", ox + kx, ox + vx, y, "ENTRY (reference)", vE, cVal, cKey, fs);
+   {
+      // v1.10: the signal's age and how far the live price is from its entry
+      double nNow = 0.0;
+      double nDist = 0.0;
+      double nR = 0.0;
+      int nAge = 0;
+      int ncs = NbClickState(nNow, nDist, nR, nAge);
+      string nTxt = " ";
+      if(ncs != NB_CS_NONE)
+      {
+         string sg = (nDist >= 0.0) ? "+" : "";
+         nTxt = "bar " + IntegerToString(nAge) + "/" + IntegerToString(g_P.validBars) + "  now " + NbPx(nNow) + "  " + sg +
+                DoubleToString(nDist, g_digits) + " (" + DoubleToString(nR, 1) + "R)";
+      }
+      NbLabel("k10n", ox + W - kx, y + (int)MathRound(1 * sc), nTxt, (ncs == NB_CS_FAR) ? cWait : cKey, fsH, "Arial", ANCHOR_RIGHT_UPPER);
+   }
    y += rh;
    NbRow("k11", "v11", ox + kx, ox + vx, y, liveTrap ? "SL (sweep)" : "SL (structure)", vS, live ? cDn : cDim, cKey, fs);
    y += rh;
@@ -4647,7 +5268,17 @@ void NbDrawPanel()
       double up15 = NbNrtrUpper(d15, g_s15.stop[i15], g_s15.ext[i15]);
       double lo15 = NbNrtrLower(d15, g_s15.stop[i15], g_s15.ext[i15]);
       pC = NbDirColor(m15);
-      if(m15 == NB_BUY)
+      if(m15 == NB_BUY && d5 <= 0)
+      {
+         pLim = "5M AGAINST - WAIT FOR 5M BULLISH RE-ALIGNMENT";   // v1.10: no limit price without a bullish 5M
+         pStp = "BUY STOP above 15M channel " + NbPx(up15) + "  (breakout)";
+      }
+      else if(m15 == NB_SELL && d5 >= 0)
+      {
+         pLim = "5M AGAINST - WAIT FOR 5M BEARISH RE-ALIGNMENT";
+         pStp = "SELL STOP below 15M channel " + NbPx(lo15) + "  (breakout)";
+      }
+      else if(m15 == NB_BUY)
       {
          pLim = "BUY LIMIT near 5M NRTR stop " + NbPx(d5 > 0 ? g_s5.stop[i5] : 0.0) + "  (pullback)";
          pStp = "BUY STOP above 15M channel " + NbPx(up15) + "  (breakout)";
@@ -5943,7 +6574,7 @@ void NbPwDrawStrip()
    int pad = (int)MathRound(6 * sc);
    int fs = (int)MathRound(9 * sc);
    int fsS = (int)MathRound(8 * sc);
-   int H = pad * 2 + 2 * rh;
+   int H = pad * 2 + (InpRpShow ? 4 : 2) * rh;   // v1.10: + the two REGIME PULLBACK rows
    int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0);
    int ch = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS, 0);
    // the table's own geometry (NbFqDrawTable): same x, sits right on top of it
@@ -5989,6 +6620,13 @@ void NbPwDrawStrip()
    bool ok = (g_label != "" && g_ready && g_s5.n > 0 && g_s15.n > 0);
    bool gate = ok && g_fresh;   // STALE DATA IS NEVER A WATCH
    int y = oy + pad;
+   if(InpRpShow)
+   {
+      NbRpRows(NB_PFX_W, ok, gate, x0, xr, y, rh, fsS);
+      y += 2 * rh;
+   }
+   else
+      ObjectsDeleteAll(0, NB_PFX_W + "rp");
    string st = "---";
    color stc = cDim;
    if(gate && g_pwCur >= 0 && g_pwCur < g_nPw)
@@ -6074,34 +6712,379 @@ string NbBrSigKind(int k)
    return (g_sigs[k].kind == NB_K_TRAP) ? "\"NY TRAP\"" : "\"FLOW\"";
 }
 
-string NbBrMarketState()
+//=== NB_SH_BEGIN === (v1.10 shared terminal functions - IDENTICAL text in all three files: tests/check_bridge_blocks.py)
+//+------------------------------------------------------------------+
+//| Shared by the metals, crypto and forex panels (each file only    |
+//| supplies NbBrLabel / NbBrSigKind and its strip prefix):          |
+//|   CLICK GUARD     NbClickState, NbBrAction, NbBrSigExtra,        |
+//|                   NbBrClickKey (v1.10)                           |
+//|   REGIME PULLBACK NbRpRecompute, NbRpRows, NbBrRegime,           |
+//|                   NbBrRegimeKey (v1.09, shadow only)             |
+//|   MARKET STATE    NbMarketChip, NbBrMarketState (v1.08)          |
+//| CLICK GUARD: the engine keeps a signal alive for                 |
+//| InpSignalValidBars closed 5M bars (unchanged). What the panel    |
+//| calls it depends on the LIVE price: within InpClickBandR x the   |
+//| signal's risk of its entry reference = READY - CLICK; further    |
+//| away (either side) = SETUP - PRICE TOO FAR, wait for a re-entry. |
+//| No live price = never READY. Display only: no engine state, no   |
+//| alert, no signal changes.                                        |
+//+------------------------------------------------------------------+
+void NbSLabel(string name, int x, int y, string txt, color clr, int size, string font)
 {
-   return "null";   // metals only (so far)
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
+   ObjectSetString(0, name, OBJPROP_TEXT, txt);
+   ObjectSetString(0, name, OBJPROP_FONT, font);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 11);
 }
 
-string NbBrRegime()
+int NbClickState(double &now, double &dist, double &distR, int &age)
 {
-   return "null";   // metals only (so far) - see CHANGELOG v1.09 "notes for the crypto file"
+   now = 0.0;
+   dist = 0.0;
+   distR = 0.0;
+   age = 0;
+   if(!(g_final == NB_BUY || g_final == NB_SELL) || !g_ready || g_s5.n < 1)
+      return NB_CS_NONE;
+   int i5 = g_s5.n - 1;
+   int cur = g_s5.sigOf[i5];
+   if(cur < 0 || cur >= g_nSig || g_sigs[cur].risk <= 0.0)
+      return NB_CS_NONE;
+   double bid = SymbolInfoDouble(g_sym, SYMBOL_BID);
+   double ask = SymbolInfoDouble(g_sym, SYMBOL_ASK);
+   if(ask <= 0.0)
+      ask = bid;
+   now = (g_final == NB_BUY) ? ask : bid;   // the price a click would get
+   age = i5 - g_sigs[cur].idx + 1;
+   if(now <= 0.0)
+      return NB_CS_FAR;
+   dist = now - g_sigs[cur].entry;
+   distR = MathAbs(dist) / g_sigs[cur].risk;
+   return (distR <= InpClickBandR + 1e-9) ? NB_CS_READY : NB_CS_FAR;
 }
 
-string NbBrRegimeKey()
-{
-   return "-";
-}
-
-//--- v1.10 adapters: this file keeps its CLICK wording (the metals click guard
-//    is not ported - see CHANGELOG v1.10 "notes for the crypto file")
 string NbBrAction(int fin)
 {
-   return (fin > 0) ? "CLICK BUY" : "CLICK SELL";
+   double n = 0.0;
+   double d = 0.0;
+   double r = 0.0;
+   int a = 0;
+   bool far = (NbClickState(n, d, r, a) == NB_CS_FAR);
+   if(fin > 0)
+      return far ? "BUY SETUP - PRICE TOO FAR - WAIT FOR RE-ENTRY" : "READY - CLICK BUY";
+   return far ? "SELL SETUP - PRICE TOO FAR - WAIT FOR RE-ENTRY" : "READY - CLICK SELL";
 }
 
 string NbBrSigExtra(int cur)
 {
-   return "";
+   double n = 0.0;
+   double d = 0.0;
+   double r = 0.0;
+   int a = 0;
+   int cs = NbClickState(n, d, r, a);
+   if(cs == NB_CS_NONE)
+      return "";
+   return "," + NbJk("age_bars") + IntegerToString(a) + "," + NbJk("valid_bars") + IntegerToString(g_P.validBars) + "," + NbJk("price_now") +
+          NbJp(n) + "," + NbJk("distance") + NbJd(d, g_digits) + "," + NbJk("distance_r") + NbJd(r, 2) + "," + NbJk("click_band_r") +
+          NbJd(InpClickBandR, 2) + "," + NbJk("click") + ((cs == NB_CS_READY) ? "\"READY\"" : "\"PRICE TOO FAR\"");
 }
 
 string NbBrClickKey()
 {
-   return "-";
+   double n = 0.0;
+   double d = 0.0;
+   double r = 0.0;
+   int a = 0;
+   return IntegerToString(NbClickState(n, d, r, a));
 }
+
+//+------------------------------------------------------------------+
+//| v1.09 REGIME PULLBACK (terminal). DIRECTION: 4H + 1H NRTR on     |
+//| closed bars (the same custom NRTR maths, only applied to 1H/4H)  |
+//| + the 15M boss. LOCATION: 5M. Shadow only.                       |
+//+------------------------------------------------------------------+
+void NbRpRecompute()
+{
+   ArrayResize(g_rp, 0);
+   ArrayResize(g_rpRec, 0);
+   g_nRp = 0;
+   g_rpInv = 0;
+   g_htfOk = false;
+   if(!g_ready || g_s5.n < 1 || g_s15.n < 1)
+      return;
+   int n = g_s5.n;
+   ArrayResize(g_rpD60, n);
+   ArrayResize(g_rpD240, n);
+   ArrayResize(g_rpAtr15, n);
+   ArrayResize(g_rpRes15, n);
+   ArrayResize(g_rpSup15, n);
+   ArrayResize(g_rpRes60, n);
+   ArrayResize(g_rpSup60, n);
+   int why = 0;
+   bool ok60 = NbLoad(PERIOD_H1, g_s60, why);
+   bool ok240 = NbLoad(PERIOD_H4, g_s240, why);
+   g_htfOk = ok60 && ok240;
+   int map60[];
+   int map240[];
+   if(ok60)
+   {
+      NbCalcATR(g_s60.h, g_s60.l, g_s60.c, g_s60.n, g_P.atrPeriod, g_s60.atr);
+      NbCalcNRTR(g_s60.c, g_s60.atr, g_s60.n, g_P.nrtrMult, g_s60.dir, g_s60.stop, g_s60.ext, g_s60.flip);
+      g_s60.np = NbFindPivots(g_s60.h, g_s60.l, g_s60.n, g_P.swing, g_piv60);
+      NbAlign(g_s60.t, g_s60.n, g_s60.sec, g_s5.t, n, g_s5.sec, map60);
+   }
+   if(ok240)
+   {
+      NbCalcATR(g_s240.h, g_s240.l, g_s240.c, g_s240.n, g_P.atrPeriod, g_s240.atr);
+      NbCalcNRTR(g_s240.c, g_s240.atr, g_s240.n, g_P.nrtrMult, g_s240.dir, g_s240.stop, g_s240.ext, g_s240.flip);
+      NbAlign(g_s240.t, g_s240.n, g_s240.sec, g_s5.t, n, g_s5.sec, map240);
+   }
+   int p15 = 0;
+   int p60 = 0;
+   double r15 = 0.0;
+   double s15 = 0.0;
+   double r60 = 0.0;
+   double s60 = 0.0;
+   for(int i = 0; i < n; i++)
+   {
+      int k15 = g_s5.map[i];
+      g_rpAtr15[i] = (k15 >= 0) ? g_s15.atr[k15] : 0.0;
+      while(k15 >= 0 && p15 < g_s15.np && g_piv15[p15].confirmIdx <= k15)
+      {
+         if(g_piv15[p15].kind > 0)
+            r15 = g_piv15[p15].price;
+         else
+            s15 = g_piv15[p15].price;
+         p15++;
+      }
+      g_rpRes15[i] = r15;
+      g_rpSup15[i] = s15;
+      int k60 = ok60 ? map60[i] : -1;
+      g_rpD60[i] = (k60 >= 0) ? g_s60.dir[k60] : 0;
+      while(k60 >= 0 && p60 < g_s60.np && g_piv60[p60].confirmIdx <= k60)
+      {
+         if(g_piv60[p60].kind > 0)
+            r60 = g_piv60[p60].price;
+         else
+            s60 = g_piv60[p60].price;
+         p60++;
+      }
+      g_rpRes60[i] = r60;
+      g_rpSup60[i] = s60;
+      int k240 = ok240 ? map240[i] : -1;
+      g_rpD240[i] = (k240 >= 0) ? g_s240.dir[k240] : 0;
+   }
+   g_RC.startAtr = InpRpStartAtr;
+   g_RC.locAtr = 0.25;
+   g_RC.slBufAtr = InpSlBufferAtr;
+   g_RC.minRR = InpRpMinRR;
+   g_RC.validBars = InpSignalValidBars;
+   g_RC.trackBars = 24;
+   g_RC.tick = g_tick;
+   g_RC.digits = g_digits;
+   g_nRp = NbRunRp(g_s5, g_rpD60, g_rpD240, g_rpAtr15, g_rpRes15, g_rpSup15, g_rpRes60, g_rpSup60, true, g_RC, g_rp, g_rpRec, g_rpInv);
+}
+
+string NbRpDirShort(int d)
+{
+   if(d > 0)
+      return "UP";
+   if(d < 0)
+      return "DN";
+   return "--";
+}
+
+//--- the two strip rows: title / state, then the six checks (or the record)
+void NbRpRows(string pfx, bool ok, bool gate, int x0, int xr, int y, int rh, int fsS)
+{
+   color cKey = NB_RGB(140, 150, 165);
+   color cDim = NB_RGB(95, 105, 120);
+   color cRp = NB_RGB(52, 152, 219);
+   string title = "PULLBACK WATCH - SHADOW ONLY";
+   string st = "---";
+   string c1 = " ";
+   string c2 = " ";
+   color stc = cDim;
+   int i = g_s5.n - 1;
+   if(ok && !gate)
+      st = "---  (data stale - no watch)";
+   else if(gate && ArraySize(g_rp) == g_s5.n && i >= 0)
+   {
+      NbRpBar b;
+      NbRpBarCopy(b, g_rp[i]);
+      string rn = (b.regime < 0) ? "BEARISH" : "BULLISH";
+      string pullW = (b.regime < 0) ? "PULL-UP " : "PULL-DOWN ";
+      string noW = (b.regime < 0) ? "NO BUY" : "NO SELL";
+      stc = cKey;
+      if(b.state == NB_RP_NONE)
+         st = (b.why == NB_RPW_NO_HTF) ? "none - 1H / 4H data missing" :
+              ("none - 4H " + NbRpDirShort(g_rpD240[i]) + "  1H " + NbRpDirShort(g_rpD60[i]) + "  15M " + NbModeText(g_s15.mode[g_s15.n - 1]));
+      else if(b.state == NB_RP_TREND)
+         st = rn + " 4H/1H/15M - " + NbRpWhyText(b.why);
+      else if(b.state == NB_RP_PULLBACK)
+      {
+         st = pullW + DoubleToString(b.pullAtr, 1) + " ATR in " + rn + " regime - WATCH, " + noW;
+         stc = NB_RGB(241, 196, 15);
+      }
+      else if(b.state == NB_RP_CANDIDATE && b.cand >= 0 && b.cand < g_nRp)
+      {
+         title = (b.regime < 0) ? "SELL PULLBACK / RE-ENTRY CANDIDATE" : "BUY PULLBACK / RE-ENTRY CANDIDATE";
+         st = "entry " + NbPx(g_rpRec[b.cand].entry) + "  SL " + NbPx(g_rpRec[b.cand].sl) + "  TP " + NbPx(g_rpRec[b.cand].target) +
+              "  R:R " + DoubleToString(g_rpRec[b.cand].rr, 1);
+         stc = NbDirColor(b.regime);
+      }
+      else if(b.state == NB_RP_INVALIDATED)
+      {
+         title = (b.regime < 0) ? "BEARISH THESIS INVALIDATED" : "BULLISH THESIS INVALIDATED";
+         string wantW = (b.regime < 0) ? " - wait for bullish confirmation" : " - wait for bearish confirmation";
+         string beyondW = (b.regime < 0) ? "closed above " : "closed below ";
+         st = beyondW + NbPx(b.level) + wantW;
+         stc = NB_RGB(230, 126, 34);
+      }
+      if(b.state == NB_RP_PULLBACK || b.state == NB_RP_CANDIDATE)
+      {
+         string lvN = (b.regime < 0) ? "15M high " : "15M low ";
+         string yes = "YES";
+         string no = "no";
+         c1 = "1 pull " + DoubleToString(b.pullAtr, 1) + " ATR   2 at " + lvN + NbPx(b.level) + ": " + (b.atLoc ? yes : no);
+         c2 = "3 sweep " + (b.swept ? yes : no) + "   4 reject " + ((b.rejected || b.state == NB_RP_CANDIDATE) ? yes : no) + "   5 close " +
+              ((b.state == NB_RP_CANDIDATE) ? yes : no) + "   6 R:R " + ((b.rr > 0.0) ? DoubleToString(b.rr, 1) : "--");
+      }
+      else
+      {
+         int rn2 = 0;
+         int tg = 0;
+         int sl = 0;
+         int ex = 0;
+         double net = 0.0;
+         NbRpStats(g_rpRec, g_nRp, rn2, tg, sl, ex, net);
+         string sg = (net >= 0.0) ? "+" : "";
+         c1 = "shadow record n=" + IntegerToString(rn2) + ": target " + IntegerToString(tg) + " / SL " + IntegerToString(sl) + " / exp " +
+              IntegerToString(ex) + "  net " + sg + DoubleToString(net, 1) + "R";
+         c2 = "invalidated " + IntegerToString(g_rpInv) + "   (" + ((rn2 < 20) ? "n<20 = luck" : ((rn2 < 100) ? "~100 to judge" : "judge it")) + ")";
+      }
+   }
+   NbSLabel(pfx + "rph", x0, y, title, cRp, fsS, "Arial Black");
+   NbSLabel(pfx + "rpst", xr, y, st, stc, fsS, "Arial Bold");
+   NbSLabel(pfx + "rpc1", x0, y + rh, c1, cKey, fsS, "Arial");
+   NbSLabel(pfx + "rpc2", xr, y + rh, c2, cKey, fsS, "Arial");
+}
+
+//--- the bridge: DIRECTION and LOCATION kept apart; stale = suppressed
+string NbBrRegime()
+{
+   string rule = "shadow only: direction = 4H + 1H NRTR + 15M boss; location = 5M pull to structure, rejection, confirming close, R:R";
+   if(!g_ready || g_s5.n < 1 || ArraySize(g_rp) != g_s5.n)
+      return "{" + NbJk("applicable") + "true," + NbJk("not_a_signal") + "true," + NbJk("state") + "\"NO DATA\"," + NbJk("rule") + NbJs(rule) + "}";
+   int i = g_s5.n - 1;
+   NbRpBar b;
+   NbRpBarCopy(b, g_rp[i]);
+   int tn = 0;
+   int tg = 0;
+   int tsl = 0;
+   int tex = 0;
+   double net = 0.0;
+   NbRpStats(g_rpRec, g_nRp, tn, tg, tsl, tex, net);
+   string recJ = "{" + NbJk("n") + IntegerToString(tn) + "," + NbJk("target") + IntegerToString(tg) + "," + NbJk("sl") + IntegerToString(tsl) + "," +
+                 NbJk("expired") + IntegerToString(tex) + "," + NbJk("net_r") + NbJd(net, 1) + "," + NbJk("invalidated") + IntegerToString(g_rpInv) +
+                 "," + NbJk("evidence") + NbJs((tn < 20) ? "n<20 = luck" : ((tn < 100) ? "~100 to judge" : "enough to judge")) + "}";
+   string j = "{" + NbJk("applicable") + "true," + NbJk("not_a_signal") + "true," + NbJk("fresh") + (g_fresh ? "true" : "false");
+   string dirs = "{" + NbJk("regime") + ((b.regime < 0) ? "\"BEARISH\"" : ((b.regime > 0) ? "\"BULLISH\"" : "\"NONE\"")) + "," + NbJk("h4") +
+                 NbJDir(g_rpD240[i]) + "," + NbJk("h1") + NbJDir(g_rpD60[i]) + "," + NbJk("m15_boss") + NbJs(NbModeText(g_s15.mode[g_s15.n - 1])) +
+                 "," + NbJk("m5") + NbJDir(g_s5.dir[i]) + "}";
+   j = j + "," + NbJk("direction") + dirs;
+   if(!g_fresh)
+      return j + "," + NbJk("state") + "\"SUPPRESSED - DATA STALE\"," + NbJk("location") + "null," + NbJk("candidate") + "null," +
+             NbJk("record") + recJ + "," + NbJk("rule") + NbJs(rule) + "}";
+   string stN = "NO REGIME";
+   if(b.state == NB_RP_TREND)
+      stN = "REGIME - WAITING FOR A PULLBACK";
+   else if(b.state == NB_RP_PULLBACK)
+      stN = (b.regime < 0) ? "PULL-UP WATCH (NO BUY)" : "PULL-DOWN WATCH (NO SELL)";
+   else if(b.state == NB_RP_CANDIDATE)
+      stN = (b.regime < 0) ? "SELL PULLBACK / RE-ENTRY CANDIDATE" : "BUY PULLBACK / RE-ENTRY CANDIDATE";
+   else if(b.state == NB_RP_INVALIDATED)
+      stN = (b.regime < 0) ? "BEARISH THESIS INVALIDATED" : "BULLISH THESIS INVALIDATED";
+   j = j + "," + NbJk("state") + NbJs(stN) + "," + NbJk("why") + NbJs(NbRpWhyText(b.why));
+   bool watching = (b.state == NB_RP_PULLBACK || b.state == NB_RP_CANDIDATE || b.state == NB_RP_INVALIDATED);
+   string loc = "null";
+   if(watching)
+      loc = "{" + NbJk("pull_atr") + NbJd(b.pullAtr, 2) + "," + NbJk("leg_extreme") + NbJp(b.legExt) + "," + NbJk("pull_extreme") + NbJp(b.pbExt) + "," +
+            NbJk("structure_15m") + NbJp(b.level) + "," + NbJk("structure_1h") + NbJp(b.level2) + "," + NbJk("at_structure") +
+            (b.atLoc ? "true" : "false") + "," + NbJk("swept") + (b.swept ? "true" : "false") + "," + NbJk("rejection") +
+            ((b.rejected || b.state == NB_RP_CANDIDATE) ? "true" : "false") + "," + NbJk("confirming_close") +
+            ((b.state == NB_RP_CANDIDATE) ? "true" : "false") + "," + NbJk("rr") + ((b.rr > 0.0) ? NbJd(b.rr, 2) : "null") + "," + NbJk("min_rr") +
+            NbJd(InpRpMinRR, 2) + "}";
+   string cand = "null";
+   if(b.state == NB_RP_CANDIDATE && b.cand >= 0 && b.cand < g_nRp)
+      cand = "{" + NbJk("side") + NbJSide(g_rpRec[b.cand].dir) + "," + NbJk("bar") + NbJt(g_s5.t[g_rpRec[b.cand].idx]) + "," + NbJk("entry") +
+             NbJp(g_rpRec[b.cand].entry) + "," + NbJk("sl") + NbJp(g_rpRec[b.cand].sl) + "," + NbJk("target") + NbJp(g_rpRec[b.cand].target) + "," +
+             NbJk("rr") + NbJd(g_rpRec[b.cand].rr, 2) + "," + NbJk("note") + NbJs("shadow - with the regime only; never chase after the fresh bars") + "}";
+   return j + "," + NbJk("location") + loc + "," + NbJk("candidate") + cand + "," + NbJk("record") + recJ + "," + NbJk("rule") + NbJs(rule) + "}";
+}
+
+string NbBrRegimeKey()
+{
+   if(!g_fresh || g_s5.n < 1 || ArraySize(g_rp) != g_s5.n)
+      return "-";
+   int i = g_s5.n - 1;
+   return IntegerToString(g_rp[i].regime) + "." + IntegerToString(g_rp[i].state) + "." + IntegerToString(g_rp[i].cand);
+}
+
+//--- v1.07 MARKET chip for the left box: text, detail, colour. Stale data
+//    = no state (Freshness Law), never the last known one.
+string NbMarketChip(string &detail, color &clr)
+{
+   clr = NB_RGB(95, 105, 120);
+   detail = "";
+   if(NbBrLabel() == "" || !g_ready || g_s15.n < 1 || g_s5.n < 1)
+      return "MARKET ---";
+   if(!g_fresh)
+   {
+      detail = "data stale - no market state";
+      return "MARKET ---";
+   }
+   double dist = 0.0;
+   int flips = 0;
+   double width = 0.0;
+   int m = NbMarketState(g_s15, g_s15.n - 1, g_s5.dir[g_s5.n - 1], dist, flips, width);
+   if(m == NB_MK_UNKNOWN)
+   {
+      detail = "not enough 15M history";
+      return "MARKET ---";
+   }
+   switch(m)
+   {
+      case NB_MK_SUPER_BULL: clr = NB_RGB(0, 230, 118); break;
+      case NB_MK_TREND_UP:   clr = NB_RGB(46, 204, 113); break;
+      case NB_MK_RANGE:      clr = NB_RGB(241, 196, 15); break;
+      case NB_MK_CHOP:       clr = NB_RGB(230, 126, 34); break;
+      case NB_MK_TREND_DOWN: clr = NB_RGB(231, 76, 60); break;
+      case NB_MK_SUPER_BEAR: clr = NB_RGB(255, 40, 40); break;
+      default:               clr = NB_RGB(140, 150, 165); break;
+   }
+   string sg = (dist >= 0.0) ? "+" : "";
+   detail = "6h: " + IntegerToString(flips) + " flips  width " + DoubleToString(width, 1) + " ATR  EMA " + sg + DoubleToString(dist, 1) + " ATR";
+   return "MARKET: " + NbMarketStateText(m);
+}
+
+//--- v1.07 the market state for the bridge file (a description, never a signal)
+string NbBrMarketState()
+{
+   string detail = "";
+   color c = clrWhite;
+   string chip = NbMarketChip(detail, c);
+   string st = (StringFind(chip, "MARKET: ") == 0) ? StringSubstr(chip, 8) : "---";
+   return "{" + NbJk("state") + NbJs(st) + "," + NbJk("detail") + NbJs(detail) + "," + NbJk("note") +
+          NbJs("a description of the last closed 15M bars - never a signal") + "}";
+}
+//=== NB_SH_END ===

@@ -404,7 +404,8 @@ int main()
 #ifdef METALS
       CHECK(has(j, "\"regime_pullback\":{\"applicable\":true,\"not_a_signal\":true"), "metals: the regime pullback, not a signal");
 #else
-      CHECK(has(j, "\"market_state\":null,\"regime_pullback\":null"), "twins: null, not invented");
+      CHECK(has(j, "\"market_state\":{\"state\":") && has(j, "\"regime_pullback\":{\"applicable\":true,\"not_a_signal\":true"),
+            "twins v1.10: the market state and the regime pullback, the same as metals");
 #endif
       bool ascii = true;
       for(unsigned char ch : j) if(ch > 126 || (ch < 32 && ch != '\n')) ascii = false;

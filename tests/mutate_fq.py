@@ -214,7 +214,26 @@ MUTATIONS = [
     ("gold", "v1.10 pending: a '---' limit line when the 5M is against the boss",
      "      if(m15 == NB_BUY && d5 <= 0)", "      if(false && m15 == NB_BUY && d5 <= 0)"),
     ("gold", "v1.07 lines: NY HIGH / LOW keep counting after the NY window",
-     "      if(g_s5.t[k] >= g_nt[i].winEnd)\n         continue;\n", ""),
+     "      if(g_s5.t[k] >= g_nt[i].winEnd)\n         continue;\n", ""),    # ---- v1.10 twins: the metals fixes ported to crypto / forex ----
+    ("crypto", "v1.10 twins click guard: the proximity band ignored",
+     "   return (distR <= InpClickBandR + 1e-9) ? NB_CS_READY : NB_CS_FAR;", "   return NB_CS_READY;"),
+    ("crypto", "v1.10 twins click guard: the banner ignores it (flow and trap)",
+     "      st = NbSymUp() + ((cs == NB_CS_FAR) ? \"  BUY SETUP - PRICE TOO FAR\" : (liveTrap ? \"  READY - NY TRAP BUY\" : \"  READY - CLICK BUY\"));",
+     "      st = NbSymUp() + (liveTrap ? \"  READY - NY TRAP BUY\" : \"  READY - CLICK BUY\");"),
+    ("crypto", "v1.10 twins click guard: the TOO FAR reasons replaced by the trap reasons",
+     "   if((g_final == NB_BUY || g_final == NB_SELL) && cs == NB_CS_FAR)\n   {\n      r1 = \"PRICE \"",
+     "   if(false)\n   {\n      r1 = \"PRICE \""),
+    ("crypto", "v1.10 twins click guard: the bridge / Telegram ignores it",
+     "   bool far = (NbClickState(n, d, r, a) == NB_CS_FAR);", "   bool far = (NbClickState(n, d, r, a) == -1);"),
+    ("crypto", "v1.10 twins lots: rounded to 2 decimals whatever the volume step",
+     "   lots = NormalizeDouble(lots, vd);\n   if(volStep > 0.0 && lots * perLot > budget + 1e-9)   // floating guard: never above the budget\n      lots = NormalizeDouble(lots - volStep, vd);",
+     "   lots = NormalizeDouble(lots, 2);"),
+    ("crypto", "v1.10 twins lots: the loss tick value ignored",
+     "   if(tvLoss > g_tickValue)\n      g_tickValue = tvLoss;", "   if(false)\n      g_tickValue = tvLoss;"),
+    ("crypto", "v1.10 twins MARKET chip: shown on stale data",
+     "   if(!g_fresh)\n   {\n      detail = \"data stale - no market state\";\n      return \"MARKET ---\";\n   }\n", ""),
+    ("crypto", "v1.10 twins regime watch: missing 1H / 4H not said",
+     "         st = (b.why == NB_RPW_NO_HTF) ? \"none - 1H / 4H data missing\" :", "         st = (false) ? \"none - 1H / 4H data missing\" :"),
 ]
 
 
@@ -246,7 +265,7 @@ def build_and_test(target, src_text, tag):
         open(os.path.join(d, "full_ladder.inc"), "w").write(inc)
         tests += [("test_nyt", []), ("test_nyt_ladder", ["-DNYT_LADDER", '-DNYT_INC="full_ladder.inc"']), ("test_bridge", [])]
     if target == "crypto":   # v1.07 data bridge + counter-trend watch (twins)
-        tests += [("test_bridge", [])]
+        tests += [("test_bridge", []), ("test_session_indicator", [])]   # v1.10: the twin panel (click guard, chip, watch)
     for test, extra in tests:
         exe = os.path.join(d, test)
         srcf = "tests/test_nyt.cpp" if test.startswith("test_nyt") else "tests/%s.cpp" % test

@@ -24,7 +24,7 @@ def block(text, name):
 def main() -> int:
     t = {k: open(v, encoding="ascii").read() for k, v in FILES.items()}
     bad = 0
-    for name in ("NB_PW", "NB_BR"):
+    for name in ("NB_PW", "NB_BR", "NB_MK", "NB_RP", "NB_SH"):
         blocks = {k: block(v, name) for k, v in t.items()}
         if None in blocks.values():
             print(f"  FAIL {name} missing in {[k for k, v in blocks.items() if v is None]}")
@@ -40,7 +40,7 @@ def main() -> int:
     if bad:
         print(f"BRIDGE BLOCK CHECK: FAIL ({bad})")
         return 1
-    print(f"BRIDGE BLOCK CHECK: PASS - NB_PW and NB_BR identical in all 3 files; {len(ADAPTERS)} adapters defined in each")
+    print(f"BRIDGE BLOCK CHECK: PASS - NB_PW, NB_BR, NB_MK, NB_RP, NB_SH identical in all 3 files; {len(ADAPTERS)} bridge functions defined in each")
     return 0
 
 

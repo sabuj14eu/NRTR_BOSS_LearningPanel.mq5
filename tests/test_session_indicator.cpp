@@ -188,7 +188,10 @@ int main()
          SIM.now = now;
          CHECK(start() == INIT_SUCCEEDED, "init ok");
          CHECK(has(txt("title"), LABEL), "title carries the symbol label");
-         CHECK(has(txt("state"), side == 0 ? "CLICK BUY" : "CLICK SELL") && !has(txt("state"), "TRAP"), "banner (flow, not trap)");
+         SIM.bid = r.s.entry;   // v1.10: READY - CLICK needs the live price near the entry reference
+         SIM.ask = 0.0;
+         OnTimer();
+         CHECK(has(txt("state"), side == 0 ? "READY - CLICK BUY" : "READY - CLICK SELL") && !has(txt("state"), "TRAP"), "banner (flow, not trap): READY - CLICK at the entry price");
          CHECK(has(txt("v10"), DoubleToString(r.s.entry, DIGITS)), "entry printed with the symbol's digits");
          CHECK(has(txt("v11"), DoubleToString(r.s.sl, DIGITS)) && has(txt("v11"), "5M swing"), "SL from structure");
          CHECK(has(txt("v12"), DoubleToString(r.s.tp1, DIGITS)) && has(txt("v12"), "1.0R"), "TP1 = 1R");
@@ -228,7 +231,10 @@ int main()
          load(mk, SYM, BASE, QUOTE, DIGITS, TICK);
          SIM.now = now;
          start();
-         CHECK(has(txt("state"), side == 0 ? "CLICK SELL - NY TRAP" : "CLICK BUY - NY TRAP"), "banner says NY TRAP");
+         SIM.bid = r.s.entry;   // v1.10: at the entry price the trap is READY
+         SIM.ask = 0.0;
+         OnTimer();
+         CHECK(has(txt("state"), side == 0 ? "READY - NY TRAP SELL" : "READY - NY TRAP BUY"), "banner says READY - NY TRAP");
          CHECK(has(txt("r1"), side == 0 ? "NY SWEPT PRE-NY HIGH" : "NY SWEPT PRE-NY LOW") && has(txt("r1"), DoubleToString(r.s.level, DIGITS)), "reason: which level was swept");
          CHECK(has(txt("r2"), "FADE THE TRAP") && has(txt("r2"), "15M WAS"), "reason: fade, and what the 15M said");
          CHECK(has(txt("v10"), DoubleToString(r.s.entry, DIGITS)), "entry");
@@ -326,6 +332,7 @@ int main()
          SIM.now = now;
          start();
          std::string s1 = txt("state"), e1 = txt("v10"), t1 = txt("vn4");
+         int f1 = g_final;
          OnDeinit(0);
          load(mk, SYM, BASE, QUOTE, DIGITS, TICK);
          SIM.now = now;
@@ -333,7 +340,9 @@ int main()
             for(auto &b : *ser)
                if(b.time <= now && b.time + (ser == &SIM.m5 ? 300 : 900) > now) { b.low -= PRICE * 0.05; b.close -= PRICE * 0.05; b.high += PRICE * 0.05; }
          start();
-         CHECK(txt("state") == s1 && txt("v10") == e1 && txt("vn4") == t1, "an unfinished crash/spike candle changes nothing");
+         // v1.10: the ENGINE's signal is untouched; only the live-price label may now honestly say TOO FAR (same side)
+         bool sameSide = (txt("state") == s1) || has(txt("state"), f1 > 0 ? "BUY SETUP - PRICE TOO FAR" : "SELL SETUP - PRICE TOO FAR");
+         CHECK(g_final == f1 && sameSide && txt("v10") == e1 && txt("vn4") == t1, "an unfinished crash/spike candle changes no signal (only the live-price label)");
          OnDeinit(0);
       }
    }
@@ -389,6 +398,96 @@ int main()
       OnDeinit(0);
    }
    end("I9");
+
+   begin("I20 v1.10 parity with metals: click guard, lots, loss tick value, MARKET chip, regime watch, version");
+   {
+      auto wtxt = [](const std::string &id) { return SIM.objs.count("NBSP_W_" + id) ? SIM.objs["NBSP_W_" + id].s[OBJPROP_TEXT] : std::string("<missing>"); };
+      long long nows[2] = {findNow(mk, [](const Ref &r) { return r.state == NB_BUY && r.s.kind == NB_K_FLOW; }),
+                           findNow(mk, [](const Ref &r) { return r.state == NB_SELL && r.s.kind == NB_K_TRAP; })};
+      for(int k = 0; k < 2; k++)
+      {
+         long long now = nows[k];
+         CHECK(now > 0, k == 0 ? "fixture has a flow BUY" : "fixture has a trap SELL");
+         if(now == 0) continue;
+         Ref r = reference(mk, now);
+         bool buy = r.state == NB_BUY;
+         double risk = std::fabs(r.s.entry - r.s.sl);
+         load(mk, SYM, BASE, QUOTE, DIGITS, TICK);
+         SIM.now = now;
+         start();
+         SIM.bid = r.s.entry;
+         SIM.ask = 0.0;
+         OnTimer();
+         int f1 = g_final;
+         std::string key1, key2;
+         std::string j1 = NbBrBuild(key1);
+         CHECK(has(txt("state"), "READY - "), "at the entry price: READY");
+         CHECK(has(txt("k10n"), "bar ") && has(txt("k10n"), "(0.0R)"), "ENTRY row: signal age and distance 0.0R");
+         CHECK(has(j1, "\"click\":\"READY\"") && has(j1, buy ? "\"READY - CLICK BUY\"" : "\"READY - CLICK SELL\""), "bridge: click READY, action READY");
+         SIM.bid = r.s.entry + (buy ? 0.8 : -0.8) * risk;
+         OnTimer();
+         std::string j2 = NbBrBuild(key2);
+         CHECK(has(txt("state"), buy ? "BUY SETUP - PRICE TOO FAR" : "SELL SETUP - PRICE TOO FAR") && !has(txt("state"), "READY"),
+               "0.8R past the entry: PRICE TOO FAR, never READY");
+         CHECK(has(txt("r1"), "FROM ENTRY (0.8R > 0.5R)") && has(txt("r2"), "DO NOT CHASE"), "reasons say how far and not to chase");
+         CHECK(has(txt("k10n"), "(0.8R)"), "ENTRY row distance 0.8R");
+         CHECK(g_final == f1, "the engine's signal is unchanged (display only)");
+         CHECK(has(j2, "\"click\":\"PRICE TOO FAR\"") && has(j2, "SETUP - PRICE TOO FAR - WAIT FOR RE-ENTRY"), "bridge: PRICE TOO FAR - WAIT FOR RE-ENTRY");
+         CHECK(key1 != key2, "change_key differs: Telegram posts the change once");
+         SIM.bid = r.s.entry - (buy ? 0.8 : -0.8) * risk;
+         OnTimer();
+         CHECK(has(txt("state"), "PRICE TOO FAR"), "0.8R on the other side (toward SL): also TOO FAR");
+         SIM.bid = r.s.entry + (buy ? 0.3 : -0.3) * risk;
+         OnTimer();
+         CHECK(has(txt("state"), "READY - "), "back inside the 0.5R band: READY again");
+         CHECK(txt("ver") == "v1.10", "version label v1.10");
+         double dist = 0.0, width = 0.0;
+         int flips = 0;
+         int m = NbMarketState(g_s15, g_s15.n - 1, g_s5.dir[g_s5.n - 1], dist, flips, width);
+         CHECK(m == NB_MK_UNKNOWN ? has(txt("mk"), "MARKET ---") : txt("mk") == "MARKET: " + NbMarketStateText(m), "MARKET chip = the engine's market state");
+         CHECK(has(j2, "\"market_state\":{\"state\":"), "bridge carries market_state");
+         CHECK(has(wtxt("rph"), "PULLBACK WATCH") && has(wtxt("rpst"), "1H / 4H data missing"),
+               "no 1H / 4H history: the watch says so, never substitutes");
+         OnDeinit(0);
+         // with 1H / 4H history: a real regime reading, marked not a signal
+         load(mk, SYM, BASE, QUOTE, DIGITS, TICK);
+         SIM.m60 = toRates(agg(mk.m5, 3600));
+         SIM.m240 = toRates(agg(mk.m5, 14400));
+         SIM.now = now;
+         start();
+         CHECK(!has(wtxt("rpst"), "data missing") && wtxt("rpst") != "---", "with 1H / 4H: the watch reads the regime");
+         std::printf("    regime watch: %s | %s\n", wtxt("rph").c_str(), wtxt("rpst").c_str());
+         CHECK(!has(wtxt("rph") + wtxt("rpst"), "BUY PULLBACK / RE-ENTRY") || buy, "never a BUY re-entry against a SELL setup's regime text");
+         std::string k3;
+         std::string j3 = NbBrBuild(k3);
+         CHECK(has(j3, "\"regime_pullback\":{\"applicable\":true,\"not_a_signal\":true"), "bridge: regime_pullback applicable, not a signal");
+         CHECK(!has(j3, "OrderSend") && has(j3, "\"mt5_order_action\":\"NONE\""), "no execution: mt5_order_action NONE");
+         OnDeinit(0);
+         load(mk, SYM, BASE, QUOTE, DIGITS, TICK);
+         SIM.m60 = toRates(agg(mk.m5, 3600));
+         SIM.m240 = toRates(agg(mk.m5, 14400));
+         SIM.now = mk.m5.back().t + 30 * 3600;
+         start();
+         CHECK(has(wtxt("rpst"), "data stale - no watch"), "stale feed: no watch shown");
+         CHECK(has(txt("mk"), "MARKET ---"), "stale feed: no market state");
+         OnDeinit(0);
+      }
+      double atRisk = 0.0;
+      CHECK(std::fabs(NbLotsForRisk(1000, 1, 2.6667, 0.01, 1, 0.005, 0.005, 100, atRisk) - 0.035) < 1e-9, "lots keep the step's decimals (0.035, not 0.04)");
+      load(mk, SYM, BASE, QUOTE, DIGITS, TICK);
+      SIM.now = mk.m5[12 * 288 + 50].t + 320;
+      SIM.tickValueLoss = SIM.tickValue * 1.25;
+      start();
+      CHECK(std::fabs(g_tickValue - SIM.tickValue * 1.25) < 1e-12, "a larger loss tick value is used");
+      OnDeinit(0);
+      load(mk, SYM, BASE, QUOTE, DIGITS, TICK);
+      SIM.now = mk.m5[12 * 288 + 50].t + 320;
+      SIM.tickValueLoss = SIM.tickValue * 0.8;
+      start();
+      CHECK(std::fabs(g_tickValue - SIM.tickValue) < 1e-12, "a smaller one is not (conservative)");
+      OnDeinit(0);
+   }
+   end("I20");
 
    std::printf("\nSESSION INDICATOR TESTS (%s): %d checks passed, %d failed\n", NB_MARKET == NB_MKT_CRYPTO ? "crypto" : "forex", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;

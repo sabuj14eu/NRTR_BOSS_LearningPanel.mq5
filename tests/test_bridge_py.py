@@ -186,8 +186,11 @@ class BridgeFile(unittest.TestCase):
                 self.assertEqual(s["action"], "NO TRADE - DATA STALE / MARKET CLOSED")
                 self.assertIsNone(s["signal"])
                 self.assertEqual(s["pullback_watch"]["state"], "NONE")
-                if s.get("market_state") is not None:   # metals: no market state and no NY prices from stale data
-                    self.assertEqual(s["market_state"]["state"], "---")
+                # v1.10: every file - no market state and no regime pullback from stale data
+                self.assertEqual(s["market_state"]["state"], "---")
+                self.assertEqual(s["regime_pullback"]["state"], "SUPPRESSED - DATA STALE")
+                self.assertIsNone(s["regime_pullback"]["candidate"])
+                if tag in ("gold", "silver"):   # the metals NY trap layer: no NY prices from stale data
                     self.assertIsNone(s["ny"]["sell"])
                     self.assertIn("DATA STALE", s["ny"]["verdict"])
 

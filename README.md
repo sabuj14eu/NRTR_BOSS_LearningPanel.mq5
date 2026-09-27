@@ -35,6 +35,12 @@ conditions are aligned for the educational setup*. It is **not** a profit signal
 
 Personal tool. No SignalMesh, no Telegram, no network, no DLLs, no files.
 
+## v1.10 crypto / forex: the same as gold / silver
+
+The crypto and forex files now have everything below: the click guard (also for READY - NY TRAP),
+the lots fix, the MARKET chip on the symbol line, the two PULLBACK WATCH rows on top of the watch
+strip (shadow only, needs MT5's 1H / 4H history) and the `v1.10` label at the top right.
+
 ## v1.10: the click guard (gold / silver)
 
 * **READY - CLICK BUY / SELL** only while the live price is within 0.5 x the signal's risk of its

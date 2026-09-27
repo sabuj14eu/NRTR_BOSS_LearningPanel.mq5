@@ -33,6 +33,16 @@ PATCHES = {
          pLim = "BUY LIMIT near 5M NRTR stop "'''),
     ],
 }
+# the crypto / forex twins (v1.10, "give me final crypto"): the same three declared fixes
+_TWIN = [
+    ("      bool flipHere = (ad != prevAd);",
+     "      bool flipHere = (prevAd != 0 && ad != prevAd);   // v1.10: the first NRTR-ready bar is not a flip"),
+    ('(liveTrap ? "  CLICK BUY - NY TRAP" : "  CLICK BUY")', '(liveTrap ? "  READY - NY TRAP BUY" : "  READY - CLICK BUY")'),
+    ('(liveTrap ? "  CLICK SELL - NY TRAP" : "  CLICK SELL")', '(liveTrap ? "  READY - NY TRAP SELL" : "  READY - CLICK SELL")'),
+    PATCHES["gold"][3],
+]
+PATCHES["crypto"] = _TWIN
+PATCHES["forex"] = _TWIN
 
 
 def main() -> int:

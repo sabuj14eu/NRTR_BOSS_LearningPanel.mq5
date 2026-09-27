@@ -42,7 +42,8 @@ SUPER BEARISH: a description, never a signal). The message prints them in the co
 * Every candle: `forming` (false for closed, true for the forming one), `confirmed`,
   `real_volume` (null when the broker reports none, which is normal for CFDs).
 * The forming candles: `age_seconds`, `seconds_left`, `FORMING / PREVIEW ONLY / NEVER A SIGNAL`.
-* `mt5_signal.market_state` and `mt5_signal.regime_pullback`: metals; `null` in crypto / forex.
+* `mt5_signal.market_state` and `mt5_signal.regime_pullback`: in all three files since v1.10
+  (they were `null` in crypto / forex before).
 * The Telegram message may show fewer candles than the file. It always says `FULL DATA: JSON = 18
   CLOSED + FORMING per timeframe (M5, M15)`.
 

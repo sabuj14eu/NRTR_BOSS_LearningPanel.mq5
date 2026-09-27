@@ -1,5 +1,42 @@
 # CHANGELOG
 
+## v1.10 crypto / forex (2026-09-27): the metals v1.10 parity - click guard, lots, arrow, pending, MARKET chip, pullback watch
+
+Shyam: "finish crypto and Forex file together similar metal". The engine is unchanged in both twins:
+same NRTR, same NY trap, same 5-question plan, same signals and alerts. Forex is regenerated from
+crypto (`tests/make_twin.py`). **A small `v1.10` now sits at the top right of the left box.**
+
+| # | What | How |
+|---|---|---|
+| 1 | **CLICK GUARD** (flow and NY trap) | `READY - CLICK BUY / SELL` and `READY - NY TRAP BUY / SELL` only while the live price (ask for BUY, bid for SELL) is within `InpClickBandR` (0.5) x risk of the entry. Otherwise `BUY / SELL SETUP - PRICE TOO FAR` with "PRICE x FROM ENTRY (0.8R > 0.5R)" and "WAIT FOR RE-ENTRY - DO NOT CHASE"; no blink. ENTRY row: `bar 4/6  now ...  +... (0.8R)`. Bridge: action READY / TOO FAR, `click`, `distance_r`, ...; the change_key includes it. Display only. |
+| 2 | Lots | Volume-step decimals + budget guard; the larger of the profit / loss tick value. |
+| 3 | Arrows | No FLIP arrow on the first NRTR-ready bar. |
+| 4 | Pending line | "5M AGAINST - WAIT FOR 5M BULLISH / BEARISH RE-ALIGNMENT" instead of `---`. |
+| 5 | **MARKET chip** | On the symbol line, right side: SUPER BULLISH ... SUPER BEARISH / RANGE / CHOP. Stale data = `MARKET ---`. A description, never a signal. |
+| 6 | **PULLBACK WATCH (shadow only)** | Two rows on top of the watch strip, the same engine as metals: direction = 4H + 1H NRTR + 15M boss; location = 5M pull, rejection, confirming close, R:R. A pull-up in a bearish regime is WATCH, NO BUY. Missing 1H / 4H history is said, never substituted. Stale = no watch. `InpRpShow`, `InpRpStartAtr`, `InpRpMinRR`. |
+| 7 | Bridge JSON | `mt5_signal.market_state` and `mt5_signal.regime_pullback` are now filled in the twins too (they were `null`). |
+
+**Shared code.** The market state (`NB_MK`), the regime engine (`NB_RP`) and the terminal functions
+(`NB_SH`: click state, chip, watch rows, bridge adapters) are byte-identical in all three files,
+checked by `tests/check_bridge_blocks.py`.
+
+**No schema change** in the append-only sense: fields were only added. No order is ever sent
+(`mt5_order_action: "NONE"`).
+
+### Tests - ALL SUITES PASSED
+
+* `test_session_indicator.cpp` **I20** (crypto and forex): READY at the entry for a flow BUY and a
+  trap SELL; TOO FAR at +0.8R and -0.8R with the reasons and the ENTRY-row distance; READY again at
+  0.3R; the engine signal untouched; the bridge action / click / change_key; the version label; the
+  MARKET chip equals the engine's state; the watch says "1H / 4H data missing" without history,
+  reads the regime with it, is marked `not_a_signal`, and is withheld on stale data; lots 0.035 at
+  step 0.005; the loss tick value.
+* I2 / I3 / I7 updated to the v1.10 wording; B1 and the Python stale test expect the filled
+  sections.
+* "Existing panel unchanged" (crypto, forex): identical to the v1.04 baseline + the declared fixes
+  (`tests/baseline_patches.py` `_TWIN`: arrow, READY wording flow / trap, pending wording).
+* 8 new mutations (82-89, crypto target, which now also runs `test_session_indicator`).
+
 ## v1.10 metals (2026-09-27): the four audit fixes - click guard, broker-safe lots, first-bar arrow, pending wording
 
 The engine is unchanged: same signals, same alerts, same NRTR / NY trap / 5-question / regime logic.
