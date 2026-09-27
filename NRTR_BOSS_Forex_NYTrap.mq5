@@ -117,9 +117,11 @@
 //|    (null when MT5 has none), fresh, mt5_order_action = NONE,     |
 //|    market_state / regime_pullback = null here (metals only).     |
 //|    The panel is unchanged.                                       |
+//|  v1.09: three bridge adapters so the shared bridge block stays   |
+//|    identical to the metals file (this file's output unchanged).  |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - learning tool"
-#property version     "1.08"
+#property version     "1.09"
 #property description "Forex NRTR BOSS learning panel: 15M direction, 5M timing, NY-open trap. CUSTOM ATR-NRTR."
 #property description "EURUSD USDJPY GBPUSD and the other pairs of USD EUR GBP JPY CHF AUD NZD CAD ..."
 #property description "Visual decision support only - never places, modifies or closes orders."
@@ -171,7 +173,7 @@
 #define NB_MKT_FOREX  2
 // THE ONLY CODE LINE THAT DIFFERS BETWEEN THE TWO TWIN FILES
 #define NB_MARKET NB_MKT_FOREX
-#define NB_BR_VERSION "1.08"   // written into the data-bridge file
+#define NB_BR_VERSION "1.09"   // written into the data-bridge file
 
 // decision / trade direction
 #define NB_WAIT   0
@@ -3212,6 +3214,9 @@ string NbBrSigKind(int k);
 string NbBrMarketState();
 string NbBrRegime();
 string NbBrRegimeKey();
+string NbBrAction(int fin);
+string NbBrSigExtra(int cur);
+string NbBrClickKey();
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -5516,7 +5521,8 @@ void NbFqDrawTable()
 //| top level; mt5_order_action = NONE; market_state and             |
 //| regime_pullback (null where a file has none). Per-file adapters: |
 //| NbBrLabel, NbBrSigKind, NbBrSource, NbBrMarket, NbBrNy,          |
-//| NbBrNyKey, NbBrMarketState, NbBrRegime, NbBrRegimeKey.           |
+//| NbBrNyKey, NbBrMarketState, NbBrRegime, NbBrRegimeKey, (v1.10)   |
+//| NbBrAction, NbBrSigExtra, NbBrClickKey.                          |
 //+------------------------------------------------------------------+
 string NbJs(string s)
 {
@@ -5749,17 +5755,15 @@ string NbBrBuild(string &key)
    string action = "WAIT - NO TRADE";
    if(!g_fresh)
       action = "NO TRADE - DATA STALE / MARKET CLOSED";
-   else if(g_final == NB_BUY)
-      action = "CLICK BUY";
-   else if(g_final == NB_SELL)
-      action = "CLICK SELL";
+   else if(g_final == NB_BUY || g_final == NB_SELL)
+      action = NbBrAction(g_final);   // v1.10 adapter: metals says READY / PRICE TOO FAR
    string sig = "null";
    if(live)
    {
       sig = "{" + NbJk("kind") + NbBrSigKind(cur) + "," + NbJk("side") +
             NbJSide(g_sigs[cur].dir) + "," + NbJk("bar") + NbJt(g_s5.t[g_sigs[cur].idx]) + "," + NbJk("entry") + NbJp(g_sigs[cur].entry) +
             "," + NbJk("sl") + NbJp(g_sigs[cur].sl) + "," + NbJk("tp1") + NbJp(g_sigs[cur].tp1) + "," + NbJk("tp2") + NbJp(g_sigs[cur].tp2) +
-            "," + NbJk("status") + NbJs(NbSignalStatusText(g_sigs[cur].status)) + "}";
+            "," + NbJk("status") + NbJs(NbSignalStatusText(g_sigs[cur].status)) + NbBrSigExtra(cur) + "}";
    }
    // the 5-question pending plan
    string fq = "null";
@@ -5800,7 +5804,7 @@ string NbBrBuild(string &key)
    string fk = g_fresh ? "F" : "S";
    key = fk + "|" + IntegerToString(g_final) + "|" + (live ? (IntegerToString(cur) + "." + IntegerToString(g_sigs[cur].status)) : "-") +
          "|" + IntegerToString(g_s15.mode[i15]) + "|" + IntegerToString(g_s5.state[i5]) + "|" + fqKey + "|" +
-         (pOpen ? IntegerToString(g_pw[g_pwCur].idx) : "-") + "|" + NbBrNyKey() + "|" + IntegerToString(g_buyCnt + g_sellCnt) + "|" + NbBrRegimeKey();
+         (pOpen ? IntegerToString(g_pw[g_pwCur].idx) : "-") + "|" + NbBrNyKey() + "|" + IntegerToString(g_buyCnt + g_sellCnt) + "|" + NbBrRegimeKey() + "|" + NbBrClickKey();
    string sgn = "{" + NbJk("note") + NbJs("MT5 CONCLUSION - separate from the raw data. Read only; you decide and you place the order.") +
                 "," + NbJk("fresh") + (g_fresh ? "true" : "false") + "," + NbJk("freshness") + NbJs(NbFreshText(g_freshCode)) + "," +
                 NbJk("boss_15m") + NbJs(NbModeText(g_s15.mode[i15])) + "," + NbJk("timing_5m") + NbJSide(g_s5.state[i5]) + "," +
@@ -6081,6 +6085,23 @@ string NbBrRegime()
 }
 
 string NbBrRegimeKey()
+{
+   return "-";
+}
+
+//--- v1.10 adapters: this file keeps its CLICK wording (the metals click guard
+//    is not ported - see CHANGELOG v1.10 "notes for the crypto file")
+string NbBrAction(int fin)
+{
+   return (fin > 0) ? "CLICK BUY" : "CLICK SELL";
+}
+
+string NbBrSigExtra(int cur)
+{
+   return "";
+}
+
+string NbBrClickKey()
 {
    return "-";
 }

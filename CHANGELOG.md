@@ -1,5 +1,85 @@
 # CHANGELOG
 
+## v1.10 metals (2026-09-27): the four audit fixes - click guard, broker-safe lots, first-bar arrow, pending wording
+
+The engine is unchanged: same signals, same alerts, same NRTR / NY trap / 5-question / regime logic.
+The crypto / forex files only got three pass-through bridge adapters (their output is unchanged).
+**A small `v1.10` label now sits at the top right of the gold / silver left box**, so a compiled
+update is visible.
+
+### The findings (Shyam's audit, 2026-09-27) - all four confirmed in the code first
+
+1. **CLICK could be stale.** The engine keeps a signal alive for `InpSignalValidBars` (6) closed
+   5M bars, and the banner kept saying CLICK BUY with the old 5M entry price however far price had
+   moved. "CLICK BUY 4300" at 4320 is not a safe click.
+2. **Lots were not broker-safe.**
+   * `NormalizeDouble(lots, 2)` after flooring to the volume step can round **up** for a step
+     like 0.005 (0.035 -> 0.04, above the risk budget).
+   * The risk used `SYMBOL_TRADE_TICK_VALUE` only, never MT5's loss tick value.
+3. **The first NRTR-ready bar got a FLIP arrow** (`prevAd = 0 -> +/-1` counted as a flip).
+4. **The pending-order line printed `---`** when the 15M boss had a direction but the 5M NRTR was
+   against it. The calculation was consistent; the wording was misleading.
+
+### The fixes
+
+| # | Fix | Where |
+|---|---|---|
+| 1 | **CLICK GUARD.** New `InpClickBandR` = 0.5. The banner says **READY - CLICK BUY / SELL** only while the live price (ask for BUY, bid for SELL) is within 0.5 x the signal's risk of its entry reference, on either side. Otherwise it says **BUY / SELL SETUP - PRICE TOO FAR**, with the reason "PRICE x FROM ENTRY (0.8R > 0.5R)" and "WAIT FOR RE-ENTRY - DO NOT CHASE"; the banner does not blink. No live price = never READY. The ENTRY row gets `bar 4/6  now 4320.00  +20.00 (0.8R)`. The bridge `action` reads `READY - CLICK BUY` or `BUY SETUP - PRICE TOO FAR - WAIT FOR RE-ENTRY`, and `signal` gains `age_bars`, `valid_bars`, `price_now`, `distance`, `distance_r`, `click_band_r` and `click`. The change_key includes the click state, so Telegram posts once when READY turns TOO FAR (and back). The ladder (optional) follows the same rule. **Display only: `g_final`, alerts and signals are untouched.** | `NbClickState`, `NbDrawPanel` banner / reasons / ENTRY row, `NbLadderDraw`, adapters `NbBrAction`, `NbBrSigExtra`, `NbBrClickKey` |
+| 2 | Lots are normalised to the **volume step's own decimals** (0.005 -> 3), with a guard that the result never exceeds the budget. `g_tickValue` = max(`SYMBOL_TRADE_TICK_VALUE`, `SYMBOL_TRADE_TICK_VALUE_LOSS`), so lots for x% risk and money at the SL are never understated. It is still an estimate: `OrderCalcProfit` is not available to indicators. | `NbLotsForRisk`, `NbReadSpec` |
+| 3 | `flipHere = (prevAd != 0 && ad != prevAd)`: the first NRTR-ready bar is not a flip. | `NbFillBuffers` |
+| 4 | 15M BUY + 5M not bullish: PULLBACK = `5M AGAINST - WAIT FOR 5M BULLISH RE-ALIGNMENT` (the BREAKOUT line keeps its price). The SELL mirror is the same. | `NbDrawPanel` pending rows |
+
+### Tests (`./run_tests.sh`) - ALL SUITES PASSED
+
+* **"Existing panel unchanged" (gold)** now compares against the v1.04 baseline **with the declared
+  fixes applied** (`tests/baseline_patches.py`: arrow start, READY wording, pending wording; each
+  anchored exactly once). Result: **identical** over 53 scenarios, apart from the new `k10n` and
+  `ver` labels. So nothing else in the left box moved. The fixture has no TOO FAR moment; that
+  state is tested directly (V2).
+* `test_nyt.cpp`: **184 checks**.
+  * **V1** checks lots at step 0.005 = 0.035 (not 0.04), steps 0.01 and 0.1, and that a minimum
+    lot that risks too much gives 0.
+  * **V2 (gold and silver)** proves that an active signal **cannot stay READY - CLICK when the
+    price moves away**:
+    * at the entry and at +0.3R it is READY;
+    * at +0.8R it says SETUP - PRICE TOO FAR, the word CLICK is gone and the reason is shown;
+    * the engine signal is untouched;
+    * the bridge says PRICE TOO FAR and never READY, and the change_key changes;
+    * at -0.8R it is also too far;
+    * with no price it is never READY;
+    * the age and distance appear on the ENTRY row.
+  * **V3** checks the RE-ALIGNMENT wording, and that the limit keeps its price when aligned.
+  * **V4** checks the loss tick value, larger vs smaller.
+* `test_indicator.cpp`, updated to the new rules:
+  * I2 puts the price at the entry to expect READY.
+  * I6: an unfinished crash candle changes no signal (the banner may honestly say TOO FAR).
+  * I9's reference no longer counts the first ready bar as a flip. It had the same bug the fix
+    removes.
+* `test_bridge*`: the metals action wording is allowed (READY / SETUP only with a BUY / SELL
+  final).
+* Mutations: **8 new, all caught**: band ignored, no price = READY, banner ignores the guard,
+  bridge ignores it, 2-decimal lots, loss tick value ignored, first-bar flip, the `---` pending
+  line.
+  * The first run had M76 NOT RUNNABLE (an unused variable under `-Werror`). It was rewritten to
+    compile and is CAUGHT.
+  * M45 was re-anchored to the new bridge action code and is CAUGHT.
+  * Run: `python3 tests/mutate_fq.py 45 73-80`. The other 72 were not re-run for this change.
+
+### Notes for the crypto file (found, NOT changed)
+
+The crypto / forex engine has **the same stale-CLICK behaviour** (a 6-bar signal, the old entry
+reference), the same `NormalizeDouble(lots, 2)` and the same first-bar arrow. The fixes are
+written so they can be ported. That is Shyam's call.
+
+### Asked in the same message, NOT built: session-specific TP / SL (Asia, London, London-NY, NY)
+
+Different TP / SL per session is a **strategy change**. The Evidence Law says: no live logic change
+without data. The honest first step is to **measure** it. Label every shadow record (NY trap,
+regime pullback, counter-trend watch) and the bridge with its session (Asia / London /
+London-NY overlap / NY), then report per session the typical 5M ATR, MFE / MAE and how often TP1
+/ SL is reached. After the 2-day window (and n >= 20 per session), the numbers can propose
+per-session TP / SL. Waiting for Shyam's go.
+
 ## v1.09 metals / v1.08 twins (2026-09-27): REGIME PULLBACK WATCH (shadow) + the completed bridge schema
 
 ### What was asked (Shyam, 2026-09-27)

@@ -134,9 +134,21 @@
 //|  * Bridge schema identical in all three files: forming / confirmed |
 //|    on every candle, real_volume, ask, spread (null when MT5 has   |
 //|    none), fresh, mt5_order_action = NONE.                        |
+//|  v1.10 AUDIT FIXES (the engine is unchanged):                    |
+//|  * CLICK GUARD: an active signal says READY - CLICK only while   |
+//|    the live price is within InpClickBandR (0.5) x its risk of    |
+//|    the entry reference; otherwise BUY / SELL SETUP - PRICE TOO   |
+//|    FAR, WAIT FOR RE-ENTRY. The ENTRY row shows age + distance.   |
+//|  * Lots: rounded to the broker's own volume-step decimals (never |
+//|    up past the budget); a loss uses MT5's loss tick value when   |
+//|    it is larger.                                                 |
+//|  * The first NRTR-ready bar no longer gets a FLIP arrow.         |
+//|  * 5M against the 15M boss: "WAIT FOR 5M RE-ALIGNMENT" instead   |
+//|    of a pending line with "---".                                 |
+//|  * The version is shown small, top right of the left box.       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - learning tool"
-#property version     "1.09"
+#property version     "1.10"
 #property description "Gold/Silver NRTR BOSS learning panel: 15M direction, 5M timing. CUSTOM ATR-NRTR."
 #property description "Visual decision support only - never places, modifies or closes orders."
 #property indicator_chart_window
@@ -368,7 +380,20 @@ double NbLotsForRisk(double balance, double riskPct, double riskPrice, double ti
       lots = volMax;
    if(lots < volMin - 1e-9)
       return 0.0;
-   lots = NormalizeDouble(lots, 2);
+   // v1.10: normalise to the volume step's own decimals (0.005 needs 3), never to a fixed 2:
+   // NormalizeDouble(0.015, 2) = 0.02 would round the lot UP, above the risk budget
+   int vd = 0;
+   double st = (volStep > 0.0) ? volStep : 0.01;
+   while(vd < 8 && MathAbs(st - MathRound(st)) > 1e-9)
+   {
+      st *= 10.0;
+      vd++;
+   }
+   lots = NormalizeDouble(lots, vd);
+   if(volStep > 0.0 && lots * perLot > budget + 1e-9)   // floating guard: never above the budget
+      lots = NormalizeDouble(lots - volStep, vd);
+   if(lots < volMin - 1e-9)
+      return 0.0;
    moneyAtRisk = lots * perLot;
    return lots;
 }
@@ -3563,7 +3588,7 @@ const string NB_PFX_Q = "NBLP_Q_";   // v1.05: the bottom-middle 5-question tabl
 const string NB_PFX_F = "NBLP_F_";   // v1.05: its chart drawing (S/R lines, zones, plan)
 const string NB_PFX_N = "NBLP_N_";   // v1.06: NY trap lines on the chart
 const string NB_PFX_L = "NBLP_L_";   // v1.06: the decision ladder panel (top right, off by default since v1.07)
-#define NB_BR_VERSION "1.09"   // written into the data-bridge file
+#define NB_BR_VERSION "1.10"   // written into the data-bridge file
 const string NB_PFX_Y = "NBLP_Y_";   // v1.07: the NY trap rows docked on top of the bottom-middle table
 #define NB_RGB(r, g, b) ((color)((r) | ((g) << 8) | ((b) << 16)))
 
@@ -3632,6 +3657,8 @@ input int            InpBridgeEverySec  = 10;          // Rewrite the file this 
 input bool           InpPwShow          = true;        // Show the COUNTER-TREND WATCH rows (a record, never a signal)
 input group "REGIME PULLBACK WATCH (v1.09 - shadow only: direction 4H/1H/15M, entry location 5M; never a signal)"
 input bool           InpRpShow          = true;        // Show the REGIME PULLBACK rows on the NY strip
+input group "CLICK GUARD (v1.10)"
+input double         InpClickBandR      = 0.5;         // READY - CLICK only while price is within this x the signal's risk of its entry
 input double         InpRpStartAtr      = 0.5;         // Pull against the regime that starts the WATCH (x 15M ATR)
 input double         InpRpMinRR         = 1.5;         // Minimum R:R to the leg extreme for a re-entry candidate
 input bool           InpNytDraw         = true;        // Draw the NY TRAP BUY / SELL lines
@@ -3800,6 +3827,13 @@ string NbMarketChip(string &detail, color &clr);
 string NbBrMarketState();
 string NbBrRegime();
 string NbBrRegimeKey();
+#define NB_CS_NONE  0   // v1.10 click guard states
+#define NB_CS_READY 1
+#define NB_CS_FAR   2
+int    NbClickState(double &now, double &dist, double &distR, int &age);
+string NbBrAction(int fin);
+string NbBrSigExtra(int cur);
+string NbBrClickKey();
 void   NbRpRows(bool ok, bool gate, int x0, int xr, int y, int rh, int fsS);
 
 //+------------------------------------------------------------------+
@@ -3851,7 +3885,7 @@ int OnInit()
       Print("NRTR BOSS: invalid inputs - the pre-NY range would start before broker midnight");
       return INIT_PARAMETERS_INCORRECT;
    }
-   if(InpBridgeCandles < 5 || InpBridgeCandles > 100 || InpBridgeEverySec < 1 || InpBridgeEverySec > 3600 || InpRpStartAtr <= 0.0 ||
+   if(InpClickBandR <= 0.0 || InpClickBandR > 3.0 || InpBridgeCandles < 5 || InpBridgeCandles > 100 || InpBridgeEverySec < 1 || InpBridgeEverySec > 3600 || InpRpStartAtr <= 0.0 ||
       InpRpStartAtr > 5.0 || InpRpMinRR < 0.5 || InpRpMinRR > 10.0)
    {
       Print("NRTR BOSS: invalid inputs - bridge candles 5-100, bridge seconds 1-3600, pullback start 0-5 ATR, R:R 0.5-10");
@@ -4115,6 +4149,11 @@ void NbReadSpec()
    if(g_tick <= 0.0)
       g_tick = SymbolInfoDouble(g_sym, SYMBOL_POINT);
    g_tickValue = SymbolInfoDouble(g_sym, SYMBOL_TRADE_TICK_VALUE);
+   // v1.10: a LOSS is valued with MT5's loss tick value when it is larger (cross-currency
+   // symbols can differ) - so lots-for-risk and money-at-SL are never understated
+   double tvLoss = SymbolInfoDouble(g_sym, SYMBOL_TRADE_TICK_VALUE_LOSS);
+   if(tvLoss > g_tickValue)
+      g_tickValue = tvLoss;
    g_volMin = SymbolInfoDouble(g_sym, SYMBOL_VOLUME_MIN);
    g_volStep = SymbolInfoDouble(g_sym, SYMBOL_VOLUME_STEP);
    g_volMax = SymbolInfoDouble(g_sym, SYMBOL_VOLUME_MAX);
@@ -4405,7 +4444,7 @@ void NbFillBuffers(int rates_total, const datetime &time[], const double &high[]
          ad = (p15 >= 0) ? g_s15.dir[p15] : 0;
       if(ad == 0)
          continue;
-      bool flipHere = (ad != prevAd);
+      bool flipHere = (prevAd != 0 && ad != prevAd);   // v1.10: the first NRTR-ready bar is not a flip
       prevAd = ad;
       if(!flipHere && !InpArrowEveryBar)
          continue;
@@ -4734,6 +4773,9 @@ void NbDrawPanel()
    if(g_metal == NB_METAL_SILVER)
       title = "SILVER NRTR BOSS";
    NbLabel("title", ox + kx, y, title, cMetal, fsT, "Arial Black", ANCHOR_LEFT_UPPER);
+   // v1.10: the version, small, so a compiled update is visible at a glance
+   string verTxt = NB_BR_VERSION;
+   NbLabel("ver", ox + W - kx, oy + (int)MathRound(1 * sc), "v" + verTxt, cDim, (int)MathRound(7 * sc), "Arial", ANCHOR_RIGHT_UPPER);
    // v1.07 MARKET STATE: a description of the last closed 15M bars, never a signal
    string mkDetail = "";
    color mkc = cDim;
@@ -4750,15 +4792,22 @@ void NbDrawPanel()
    // big state banner
    string st = NbSymDot() + "  WAIT - NO TRADE";
    color bc = cWait;
+   // v1.10: CLICK only while the live price is still near the signal's entry
+   // reference; an older signal the price has left is a SETUP, not a click
+   double csNow = 0.0;
+   double csDist = 0.0;
+   double csR = 0.0;
+   int csAge = 0;
+   int cs = NbClickState(csNow, csDist, csR, csAge);
    if(g_final == NB_BUY)
    {
-      st = NbSymUp() + "  CLICK BUY";
-      bc = cUp;
+      st = NbSymUp() + ((cs == NB_CS_FAR) ? "  BUY SETUP - PRICE TOO FAR" : "  READY - CLICK BUY");
+      bc = (cs == NB_CS_FAR) ? cWait : cUp;
    }
    if(g_final == NB_SELL)
    {
-      st = NbSymDown() + "  CLICK SELL";
-      bc = cDn;
+      st = NbSymDown() + ((cs == NB_CS_FAR) ? "  SELL SETUP - PRICE TOO FAR" : "  READY - CLICK SELL");
+      bc = (cs == NB_CS_FAR) ? cWait : cDn;
    }
    if(g_final == NB_EXIT)
    {
@@ -4771,7 +4820,7 @@ void NbDrawPanel()
    // blink = a light, not a button: the banner alternates bright / dark
    // while a CLICK state is live. Text never changes, so nothing is lost.
    color bcFill = bc;
-   if(InpBlink && g_blink && (g_final == NB_BUY || g_final == NB_SELL))
+   if(InpBlink && g_blink && (g_final == NB_BUY || g_final == NB_SELL) && cs == NB_CS_READY)
       bcFill = NB_RGB(16, 20, 28);
    NbRect("banner", ox + kx, y, W - 2 * kx, bannerH, bcFill, bc);
    NbLabel("state", ox + W / 2, y + bannerH / 2, st, (bcFill == bc) ? NB_RGB(10, 12, 16) : bc, fsB, "Arial Black", ANCHOR_CENTER);
@@ -4780,7 +4829,13 @@ void NbDrawPanel()
    // reasons
    string r1 = "";
    string r2 = "";
-   if(g_final == NB_BUY)
+   if((g_final == NB_BUY || g_final == NB_SELL) && cs == NB_CS_FAR)
+   {
+      r1 = "PRICE " + DoubleToString(MathAbs(csDist), g_digits) + " FROM ENTRY (" + DoubleToString(csR, 1) + "R > " +
+           DoubleToString(InpClickBandR, 1) + "R)";
+      r2 = "WAIT FOR RE-ENTRY - DO NOT CHASE";
+   }
+   else if(g_final == NB_BUY)
    {
       r1 = "15M BULLISH + HH/HL + ABOVE EMA200";
       r2 = "5M NRTR BULLISH + CANDLE CLOSED";
@@ -4959,6 +5014,22 @@ void NbDrawPanel()
       }
    }
    NbRow("k10", "v10", ox + kx, ox + vx, y, "ENTRY (reference)", vE, cVal, cKey, fs);
+   {
+      // v1.10: the signal's age and how far the live price is from its entry
+      double nNow = 0.0;
+      double nDist = 0.0;
+      double nR = 0.0;
+      int nAge = 0;
+      int ncs = NbClickState(nNow, nDist, nR, nAge);
+      string nTxt = " ";
+      if(ncs != NB_CS_NONE)
+      {
+         string sg = (nDist >= 0.0) ? "+" : "";
+         nTxt = "bar " + IntegerToString(nAge) + "/" + IntegerToString(g_P.validBars) + "  now " + NbPx(nNow) + "  " + sg +
+                DoubleToString(nDist, g_digits) + " (" + DoubleToString(nR, 1) + "R)";
+      }
+      NbLabel("k10n", ox + W - kx, y + (int)MathRound(1 * sc), nTxt, (ncs == NB_CS_FAR) ? cWait : cKey, fsH, "Arial", ANCHOR_RIGHT_UPPER);
+   }
    y += rh;
    NbRow("k11", "v11", ox + kx, ox + vx, y, "SL (structure)", vS, live ? cDn : cDim, cKey, fs);
    y += rh;
@@ -5080,7 +5151,17 @@ void NbDrawPanel()
       double up15 = NbNrtrUpper(d15, g_s15.stop[i15], g_s15.ext[i15]);
       double lo15 = NbNrtrLower(d15, g_s15.stop[i15], g_s15.ext[i15]);
       pC = NbDirColor(m15);
-      if(m15 == NB_BUY)
+      if(m15 == NB_BUY && d5 <= 0)
+      {
+         pLim = "5M AGAINST - WAIT FOR 5M BULLISH RE-ALIGNMENT";   // v1.10: no limit price without a bullish 5M
+         pStp = "BUY STOP above 15M channel " + NbPx(up15) + "  (breakout)";
+      }
+      else if(m15 == NB_SELL && d5 >= 0)
+      {
+         pLim = "5M AGAINST - WAIT FOR 5M BEARISH RE-ALIGNMENT";
+         pStp = "SELL STOP below 15M channel " + NbPx(lo15) + "  (breakout)";
+      }
+      else if(m15 == NB_BUY)
       {
          pLim = "BUY LIMIT near 5M NRTR stop " + NbPx(d5 > 0 ? g_s5.stop[i5] : 0.0) + "  (pullback)";
          pStp = "BUY STOP above 15M channel " + NbPx(up15) + "  (breakout)";
@@ -6509,9 +6590,20 @@ void NbLadderDraw()
    {
       int cur = g_s5.sigOf[i5];
       aDir = g_final;
+      double lNow = 0.0;
+      double lDist = 0.0;
+      double lR = 0.0;
+      int lAge = 0;
+      bool lFar = (NbClickState(lNow, lDist, lR, lAge) == NB_CS_FAR);   // v1.10
       act = (aDir > 0) ? "BUY VALID - CLICK BUY" : "SELL VALID - CLICK SELL";
       src = "15M BOSS " + NbModeText(boss) + " + 5M CONFIRMED CLOSE";
       ac = NbDirColor(aDir);
+      if(lFar)
+      {
+         act = (aDir > 0) ? "BUY SETUP - PRICE TOO FAR" : "SELL SETUP - PRICE TOO FAR";
+         src = "price " + DoubleToString(lR, 1) + "R from the entry - WAIT FOR RE-ENTRY";
+         ac = NB_RGB(241, 196, 15);
+      }
       if(cur >= 0)
       {
          aEntry = g_sigs[cur].entry;
@@ -6527,7 +6619,7 @@ void NbLadderDraw()
                                 DoubleToString(InpRiskPercent, 1) + "%)") : "SKIP - min lot risks too much";
          numsLive = true;
       }
-      foot = "CLICK IT YOURSELF - NOTHING IS SENT";
+      foot = lFar ? "DO NOT CHASE - NOTHING IS SENT" : "CLICK IT YOURSELF - NOTHING IS SENT";
    }
    else if(tDir != 0 && ((tDir > 0) ? NbNytLive(tB) : NbNytLive(tS)))
    {
@@ -6925,7 +7017,8 @@ string NbNytVerdict(color &vc)
 //| top level; mt5_order_action = NONE; market_state and             |
 //| regime_pullback (null where a file has none). Per-file adapters: |
 //| NbBrLabel, NbBrSigKind, NbBrSource, NbBrMarket, NbBrNy,          |
-//| NbBrNyKey, NbBrMarketState, NbBrRegime, NbBrRegimeKey.           |
+//| NbBrNyKey, NbBrMarketState, NbBrRegime, NbBrRegimeKey, (v1.10)   |
+//| NbBrAction, NbBrSigExtra, NbBrClickKey.                          |
 //+------------------------------------------------------------------+
 string NbJs(string s)
 {
@@ -7158,17 +7251,15 @@ string NbBrBuild(string &key)
    string action = "WAIT - NO TRADE";
    if(!g_fresh)
       action = "NO TRADE - DATA STALE / MARKET CLOSED";
-   else if(g_final == NB_BUY)
-      action = "CLICK BUY";
-   else if(g_final == NB_SELL)
-      action = "CLICK SELL";
+   else if(g_final == NB_BUY || g_final == NB_SELL)
+      action = NbBrAction(g_final);   // v1.10 adapter: metals says READY / PRICE TOO FAR
    string sig = "null";
    if(live)
    {
       sig = "{" + NbJk("kind") + NbBrSigKind(cur) + "," + NbJk("side") +
             NbJSide(g_sigs[cur].dir) + "," + NbJk("bar") + NbJt(g_s5.t[g_sigs[cur].idx]) + "," + NbJk("entry") + NbJp(g_sigs[cur].entry) +
             "," + NbJk("sl") + NbJp(g_sigs[cur].sl) + "," + NbJk("tp1") + NbJp(g_sigs[cur].tp1) + "," + NbJk("tp2") + NbJp(g_sigs[cur].tp2) +
-            "," + NbJk("status") + NbJs(NbSignalStatusText(g_sigs[cur].status)) + "}";
+            "," + NbJk("status") + NbJs(NbSignalStatusText(g_sigs[cur].status)) + NbBrSigExtra(cur) + "}";
    }
    // the 5-question pending plan
    string fq = "null";
@@ -7209,7 +7300,7 @@ string NbBrBuild(string &key)
    string fk = g_fresh ? "F" : "S";
    key = fk + "|" + IntegerToString(g_final) + "|" + (live ? (IntegerToString(cur) + "." + IntegerToString(g_sigs[cur].status)) : "-") +
          "|" + IntegerToString(g_s15.mode[i15]) + "|" + IntegerToString(g_s5.state[i5]) + "|" + fqKey + "|" +
-         (pOpen ? IntegerToString(g_pw[g_pwCur].idx) : "-") + "|" + NbBrNyKey() + "|" + IntegerToString(g_buyCnt + g_sellCnt) + "|" + NbBrRegimeKey();
+         (pOpen ? IntegerToString(g_pw[g_pwCur].idx) : "-") + "|" + NbBrNyKey() + "|" + IntegerToString(g_buyCnt + g_sellCnt) + "|" + NbBrRegimeKey() + "|" + NbBrClickKey();
    string sgn = "{" + NbJk("note") + NbJs("MT5 CONCLUSION - separate from the raw data. Read only; you decide and you place the order.") +
                 "," + NbJk("fresh") + (g_fresh ? "true" : "false") + "," + NbJk("freshness") + NbJs(NbFreshText(g_freshCode)) + "," +
                 NbJk("boss_15m") + NbJs(NbModeText(g_s15.mode[i15])) + "," + NbJk("timing_5m") + NbJSide(g_s5.state[i5]) + "," +
@@ -7667,4 +7758,74 @@ string NbBrRegimeKey()
       return "-";
    int i = g_s5.n - 1;
    return IntegerToString(g_rp[i].regime) + "." + IntegerToString(g_rp[i].state) + "." + IntegerToString(g_rp[i].cand);
+}
+
+//+------------------------------------------------------------------+
+//| v1.10 CLICK GUARD. The engine keeps a signal alive for           |
+//| InpSignalValidBars closed 5M bars (unchanged). What the panel    |
+//| calls it now depends on the LIVE price: within InpClickBandR x   |
+//| the signal's risk of its entry reference = READY - CLICK;        |
+//| further away (either side) = SETUP - PRICE TOO FAR, wait for a   |
+//| re-entry. No live price = never READY. Display only: it changes  |
+//| no engine state, no alert, no signal.                            |
+//+------------------------------------------------------------------+
+
+int NbClickState(double &now, double &dist, double &distR, int &age)
+{
+   now = 0.0;
+   dist = 0.0;
+   distR = 0.0;
+   age = 0;
+   if(!(g_final == NB_BUY || g_final == NB_SELL) || !g_ready || g_s5.n < 1)
+      return NB_CS_NONE;
+   int i5 = g_s5.n - 1;
+   int cur = g_s5.sigOf[i5];
+   if(cur < 0 || cur >= g_nSig || g_sigs[cur].risk <= 0.0)
+      return NB_CS_NONE;
+   double bid = SymbolInfoDouble(g_sym, SYMBOL_BID);
+   double ask = SymbolInfoDouble(g_sym, SYMBOL_ASK);
+   if(ask <= 0.0)
+      ask = bid;
+   now = (g_final == NB_BUY) ? ask : bid;   // the price a click would get
+   age = i5 - g_sigs[cur].idx + 1;
+   if(now <= 0.0)
+      return NB_CS_FAR;
+   dist = now - g_sigs[cur].entry;
+   distR = MathAbs(dist) / g_sigs[cur].risk;
+   return (distR <= InpClickBandR + 1e-9) ? NB_CS_READY : NB_CS_FAR;
+}
+
+string NbBrAction(int fin)
+{
+   double n = 0.0;
+   double d = 0.0;
+   double r = 0.0;
+   int a = 0;
+   bool far = (NbClickState(n, d, r, a) == NB_CS_FAR);
+   if(fin > 0)
+      return far ? "BUY SETUP - PRICE TOO FAR - WAIT FOR RE-ENTRY" : "READY - CLICK BUY";
+   return far ? "SELL SETUP - PRICE TOO FAR - WAIT FOR RE-ENTRY" : "READY - CLICK SELL";
+}
+
+string NbBrSigExtra(int cur)
+{
+   double n = 0.0;
+   double d = 0.0;
+   double r = 0.0;
+   int a = 0;
+   int cs = NbClickState(n, d, r, a);
+   if(cs == NB_CS_NONE)
+      return "";
+   return "," + NbJk("age_bars") + IntegerToString(a) + "," + NbJk("valid_bars") + IntegerToString(g_P.validBars) + "," + NbJk("price_now") +
+          NbJp(n) + "," + NbJk("distance") + NbJd(d, g_digits) + "," + NbJk("distance_r") + NbJd(r, 2) + "," + NbJk("click_band_r") +
+          NbJd(InpClickBandR, 2) + "," + NbJk("click") + ((cs == NB_CS_READY) ? "\"READY\"" : "\"PRICE TOO FAR\"");
+}
+
+string NbBrClickKey()
+{
+   double n = 0.0;
+   double d = 0.0;
+   double r = 0.0;
+   int a = 0;
+   return IntegerToString(NbClickState(n, d, r, a));
 }

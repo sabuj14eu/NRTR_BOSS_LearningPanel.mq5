@@ -106,7 +106,7 @@ def format_message(d: dict, stale: bool, candles: int = 18) -> str:
     """Telegram HTML text: the MT5 CONCLUSION first, then the raw data, kept apart."""
     sym = d.get("symbol", "?")
     _DIGITS[0] = int(d.get("digits", 2)) if str(d.get("digits", "")).isdigit() else 2
-    head = f"NRTR BOSS  {sym}  ({d.get('market', '?')})  {d.get('written_server', '')} server"
+    head = f"NRTR BOSS  {sym}  ({d.get('market', '?')} v{d.get('version', '?')})  {d.get('written_server', '')} server"
     if stale:
         body = (f"<b>{html.escape(head)}</b>\n<b>DATA STALE</b> - MT5 has not rewritten this file lately "
                 f"(chart closed, terminal off, or no ticks). Treat everything as NO TRADE until it comes back.")

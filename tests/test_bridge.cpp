@@ -614,7 +614,9 @@ int main()
             if(W("st") != want) bad++;
             if(!has(j, "\"ref_entry\":" + px(p.entry)) || !has(j, "\"ref_sl\":" + px(p.sl)) || !has(j, "\"ref_tp1\":" + px(p.tp1))) bad++;
             // the watch never drives the conclusion: CLICK only when the main engine says BUY / SELL
-            if((has(j, "\"action\":\"CLICK") != (g_final == NB_BUY || g_final == NB_SELL))) clickFromWatch++;
+            // a BUY / SELL action (twins: CLICK..., metals v1.10: READY - CLICK... or ...SETUP - PRICE TOO FAR) only from the main engine
+            bool actOn = has(j, "\"action\":\"CLICK") || has(j, "\"action\":\"READY - CLICK") || has(j, "SETUP - PRICE TOO FAR - WAIT");
+            if(actOn != (g_final == NB_BUY || g_final == NB_SELL)) clickFromWatch++;
          }
          else if(!has(W("st"), "none - ")) bad++;
          for(auto &kv : SIM.objs)

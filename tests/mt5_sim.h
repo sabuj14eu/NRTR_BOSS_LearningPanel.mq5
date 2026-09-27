@@ -41,7 +41,8 @@ enum { PLOT_EMPTY_VALUE = 1, PLOT_DRAW_TYPE = 2, PLOT_ARROW = 3, PLOT_ARROW_SHIF
 enum { DRAW_NONE = 0, DRAW_LINE = 1, DRAW_COLOR_LINE = 2, DRAW_ARROW = 3, DRAW_COLOR_ARROW = 4 };
 enum { INDICATOR_SHORTNAME = 1, INDICATOR_DIGITS = 2 };
 enum { SYMBOL_TIME = 99, SYMBOL_DIGITS = 1, SYMBOL_TRADE_TICK_SIZE, SYMBOL_POINT, SYMBOL_TRADE_TICK_VALUE, SYMBOL_VOLUME_MIN, SYMBOL_VOLUME_STEP, SYMBOL_VOLUME_MAX,
-       SYMBOL_BID, SYMBOL_CURRENCY_BASE, SYMBOL_CURRENCY_PROFIT, SYMBOL_ASK, SYMBOL_TRADE_CONTRACT_SIZE, SYMBOL_SPREAD };
+       SYMBOL_BID, SYMBOL_CURRENCY_BASE, SYMBOL_CURRENCY_PROFIT, SYMBOL_ASK, SYMBOL_TRADE_CONTRACT_SIZE, SYMBOL_SPREAD,
+       SYMBOL_TRADE_TICK_VALUE_LOSS };
 enum { ACCOUNT_CURRENCY = 1 };
 enum { ACCOUNT_BALANCE = 1, ACCOUNT_EQUITY = 2 };
 enum { POSITION_SYMBOL = 1, POSITION_TYPE, POSITION_VOLUME, POSITION_TIME, POSITION_PRICE_OPEN, POSITION_SL, POSITION_TP };
@@ -85,6 +86,7 @@ struct SimState
    std::vector<MqlRates> m60, m240;     // v1.09: 1H / 4H (empty = MT5 has none: the indicator must say so, never substitute)
    bool askMissing = false;             // v1.09: MT5 gives no ask (SYMBOL_ASK = 0)
    long long spreadPts = 25;            // SYMBOL_SPREAD in points
+   double tickValueLoss = 0.0;          // v1.10: 0 = MT5 gives none (the profit tick value is used)
    bool moveFail = false;               // v1.09: FileMove fails (the old .json must survive whole)
    datetime now = 0;
    long long gmtOff = 3 * 3600;   // server clock ahead of GMT (EEST); TimeGMT() = now - gmtOff
@@ -219,6 +221,7 @@ inline double SymbolInfoDouble(const string &, int prop)
       case SYMBOL_TRADE_TICK_SIZE: return SIM.tick;
       case SYMBOL_POINT: return SIM.tick;
       case SYMBOL_TRADE_TICK_VALUE: return SIM.tickValue;
+      case SYMBOL_TRADE_TICK_VALUE_LOSS: return SIM.tickValueLoss;
       case SYMBOL_VOLUME_MIN: return SIM.volMin;
       case SYMBOL_VOLUME_STEP: return SIM.volStep;
       case SYMBOL_VOLUME_MAX: return SIM.volMax;

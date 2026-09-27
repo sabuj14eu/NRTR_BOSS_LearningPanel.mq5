@@ -79,7 +79,8 @@ static bool added(const std::string &name)
           name.compare(0, 7, PFX "N_") == 0 || name.compare(0, 7, PFX "L_") == 0 ||   // v1.06 metals: NY trap + ladder
           name.compare(0, 7, PFX "Y_") == 0 ||   // v1.07 metals: NY rows on top of the table
           name.compare(0, 7, PFX "W_") == 0 ||   // v1.07 twins: counter-trend watch strip
-          name == PFX "P_mk" || name == PFX "P_mkd";   // v1.07 metals: the MARKET chip + detail (only new labels in the left box)
+          name == PFX "P_mk" || name == PFX "P_mkd" ||
+          name == PFX "P_k10n" || name == PFX "P_ver";   // v1.10 metals: signal age + distance next to ENTRY; the version   // v1.07 metals: the MARKET chip + detail (only new labels in the left box)
 }
 static void dump(const char *label)
 {

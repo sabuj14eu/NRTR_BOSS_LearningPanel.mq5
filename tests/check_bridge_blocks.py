@@ -10,7 +10,8 @@ import re
 import sys
 
 FILES = {"crypto": "NRTR_BOSS_Crypto_NYTrap.mq5", "forex": "NRTR_BOSS_Forex_NYTrap.mq5", "metals": "NRTR_BOSS_LearningPanel.mq5"}
-ADAPTERS = ["NbBrLabel", "NbBrSigKind", "NbBrSource", "NbBrMarket", "NbBrNy", "NbBrNyKey", "NbBrMarketState", "NbBrRegime", "NbBrRegimeKey"]
+ADAPTERS = ["NbBrLabel", "NbBrSigKind", "NbBrSource", "NbBrMarket", "NbBrNy", "NbBrNyKey", "NbBrMarketState", "NbBrRegime", "NbBrRegimeKey",
+            "NbBrAction", "NbBrSigExtra", "NbBrClickKey"]
 
 
 def block(text, name):

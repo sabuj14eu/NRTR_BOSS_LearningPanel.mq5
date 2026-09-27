@@ -35,6 +35,18 @@ conditions are aligned for the educational setup*. It is **not** a profit signal
 
 Personal tool. No SignalMesh, no Telegram, no network, no DLLs, no files.
 
+## v1.10: the click guard (gold / silver)
+
+* **READY - CLICK BUY / SELL** only while the live price is within 0.5 x the signal's risk of its
+  entry (`InpClickBandR`). Further away it reads **BUY / SELL SETUP - PRICE TOO FAR - WAIT FOR
+  RE-ENTRY**. The ENTRY row shows the signal's age and distance, e.g.
+  `bar 4/6  now 4320.00  +20.00 (0.8R)`.
+* Lots for x% risk use the broker's own volume step and the larger of MT5's profit / loss tick
+  value.
+* No FLIP arrow on the first NRTR-ready candle. "5M AGAINST - WAIT FOR 5M RE-ALIGNMENT" replaces a
+  pending line with `---`.
+* The version is shown small at the top right of the left box.
+
 ## v1.09: REGIME PULLBACK WATCH (gold / silver) - shadow only
 
 **Direction and entry location are separate.**

@@ -270,6 +270,17 @@ the session engine tests (two of them by the indicator tests as well):
 | Clock accepted whatever the PC said (no half-hour check) | yes |
 | The forming 5M bar evaluated for a trap | yes |
 
+## Results (2026-09-27, v1.10 metals: audit fixes)
+
+```
+NY TRAP + STRIP + PULLBACK + v1.10 (metals):  184 passed, 0 failed  (V1 lots, V2 click guard gold/silver, V3 pending wording, V4 loss tick value)
+INDICATOR TESTS (metals):                     124 passed (I2 / I6 / I9 updated to the v1.10 rules)
+EXISTING PANEL UNCHANGED (gold):              PASS vs the v1.04 baseline + 4 declared fixes (tests/baseline_patches.py)
+ALL OTHER SUITES:                             PASS
+MUTATION TESTS:  8 new (73-80) + re-anchored 45: all caught
+MetaEditor F7:   metals v1.10 NOT YET - look for the small "v1.10" at the top right of the left box
+```
+
 ## Results (2026-09-27, v1.09 metals / v1.08 twins: regime pullback + completed bridge schema)
 
 ```

@@ -131,8 +131,8 @@ MUTATIONS = [
      "         if(stopHit)\n            rec[open].status = NB_PW_SL;\n         else if(tpHit)\n            rec[open].status = NB_PW_TP1;",
      "         if(tpHit)\n            rec[open].status = NB_PW_TP1;\n         else if(stopHit)\n            rec[open].status = NB_PW_SL;"),
     ("crypto", "v1.07 watch: an open watch shown as CLICK in the bridge",
-     "   else if(g_final == NB_BUY)\n      action = \"CLICK BUY\";",
-     "   else if(g_final == NB_BUY || (g_pwCur >= 0 && g_pwCur < g_nPw && g_pw[g_pwCur].dir > 0))\n      action = \"CLICK BUY\";"),
+     "   else if(g_final == NB_BUY || g_final == NB_SELL)\n      action = NbBrAction(g_final);",
+     "   else if(g_final == NB_BUY || g_final == NB_SELL || (g_pwCur >= 0 && g_pwCur < g_nPw))\n      action = NbBrAction((g_final != 0) ? g_final : g_pw[g_pwCur].dir);"),
     ("crypto", "v1.07 bridge: the forming candle counted as closed",
      "   int endClosed = hasForming ? last - 1 : last;", "   int endClosed = last;"),
     ("crypto", "v1.07 bridge: 19 closed candles instead of 18 (off by one)",
@@ -194,6 +194,25 @@ MUTATIONS = [
      "   bool quotes = (bidNow > 0.0 && askNow > 0.0 && askNow >= bidNow);", "   bool quotes = (bidNow > 0.0);"),
     ("crypto", "v1.09 bridge: written straight into the .json (not atomic)",
      "   int h = FileOpen(tmp, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON);", "   int h = FileOpen(fin, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON);"),
+    # ---- v1.10 metals audit fixes ----
+    ("gold", "v1.10 click guard: the proximity band ignored (READY however far the price went)",
+     "   return (distR <= InpClickBandR + 1e-9) ? NB_CS_READY : NB_CS_FAR;", "   return NB_CS_READY;"),
+    ("gold", "v1.10 click guard: no live price treated as READY",
+     "   if(now <= 0.0)\n      return NB_CS_FAR;", "   if(now <= 0.0)\n      return NB_CS_READY;"),
+    ("gold", "v1.10 click guard: the banner ignores it",
+     "      st = NbSymUp() + ((cs == NB_CS_FAR) ? \"  BUY SETUP - PRICE TOO FAR\" : \"  READY - CLICK BUY\");",
+     "      st = NbSymUp() + \"  READY - CLICK BUY\";"),
+    ("gold", "v1.10 click guard: the bridge / Telegram ignores it",
+     "   bool far = (NbClickState(n, d, r, a) == NB_CS_FAR);", "   bool far = (NbClickState(n, d, r, a) == -1);"),
+    ("gold", "v1.10 lots: rounded to 2 decimals whatever the volume step (can round UP)",
+     "   lots = NormalizeDouble(lots, vd);\n   if(volStep > 0.0 && lots * perLot > budget + 1e-9)   // floating guard: never above the budget\n      lots = NormalizeDouble(lots - volStep, vd);",
+     "   lots = NormalizeDouble(lots, 2);"),
+    ("gold", "v1.10 lots: the loss tick value ignored",
+     "   if(tvLoss > g_tickValue)\n      g_tickValue = tvLoss;", "   if(false)\n      g_tickValue = tvLoss;"),
+    ("gold", "v1.10 arrows: the first NRTR-ready bar marked as a flip again",
+     "      bool flipHere = (prevAd != 0 && ad != prevAd);", "      bool flipHere = (ad != prevAd);"),
+    ("gold", "v1.10 pending: a '---' limit line when the 5M is against the boss",
+     "      if(m15 == NB_BUY && d5 <= 0)", "      if(false && m15 == NB_BUY && d5 <= 0)"),
     ("gold", "v1.07 lines: NY HIGH / LOW keep counting after the NY window",
      "      if(g_s5.t[k] >= g_nt[i].winEnd)\n         continue;\n", ""),
 ]
@@ -256,6 +275,8 @@ def baseline(target):
     bd = os.path.join("build", "mut", "base_" + target)
     os.makedirs(bd, exist_ok=True)
     open(os.path.join(bd, src), "w").write(base.stdout)
+    if run([sys.executable, "tests/baseline_patches.py", target, os.path.join(bd, src)]).returncode != 0:
+        return "the declared baseline patches do not apply"
     run([sys.executable, "tests/mql2cpp.py", os.path.join(bd, src), os.path.join(bd, full), "full"])
     r = run(["g++"] + FLAGS + ["-I" + bd, "-DNB_TEST_MARKET=" + mk, '-DDUMP_INC="%s"' % full, "tests/dump_objects.cpp",
              "-o", os.path.join(bd, "dump")])

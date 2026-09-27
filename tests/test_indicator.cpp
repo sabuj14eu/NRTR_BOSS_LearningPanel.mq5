@@ -182,7 +182,11 @@ int main()
          SIM.now = now;
          CHECK(start() == INIT_SUCCEEDED, "init ok");
          CHECK(has(txt("title"), "GOLD NRTR BOSS"), "gold title");
-         CHECK(has(txt("state"), side == 0 ? "CLICK BUY" : "CLICK SELL"), "banner");
+         // v1.10: READY - CLICK needs the live price near the entry reference - put it there
+         SIM.bid = r.s.entry;
+         SIM.ask = 0.0;
+         OnTimer();
+         CHECK(has(txt("state"), side == 0 ? "READY - CLICK BUY" : "READY - CLICK SELL"), "banner: READY - CLICK at the entry price");
          CHECK(has(txt("v10"), DoubleToString(r.s.entry, 2)), "entry printed with 2 digits");
          CHECK(has(txt("v11"), DoubleToString(r.s.sl, 2)), "SL");
          CHECK(has(txt("v12"), DoubleToString(r.s.tp1, 2)) && has(txt("v12"), "1.0R"), "TP1 = 1R");
@@ -333,6 +337,7 @@ int main()
       SIM.now = now;
       start();
       std::string s1 = txt("state"), e1 = txt("v10"), m1 = txt("v6");
+      int f1 = g_final;
       std::vector<double> ema1 = *SIM.bufs[0];
       OnDeinit(0);
       // wreck the forming 5M and 15M bars: a crash candle that has not closed
@@ -342,7 +347,9 @@ int main()
          for(auto &b : *ser)
             if(b.time <= now && b.time + (ser == &SIM.m5 ? 300 : 900) > now) { b.low -= 50; b.close -= 50; }
       start();
-      CHECK(txt("state") == s1 && txt("v10") == e1 && txt("v6") == m1, "an unfinished crash candle changes nothing");
+      // v1.10: the ENGINE's signal is untouched; the banner may say the live price is now too far - same side, never a new signal
+      bool sameSide = (txt("state") == s1) || has(txt("state"), "BUY SETUP - PRICE TOO FAR");
+      CHECK(g_final == f1 && sameSide && txt("v10") == e1 && txt("v6") == m1, "an unfinished crash candle changes no signal (only the live-price label)");
       std::vector<double> ema2 = *SIM.bufs[0];
       CHECK(ema1 == ema2, "EMA buffer identical, incl. the forming chart bar");
       OnDeinit(0);
@@ -458,7 +465,8 @@ int main()
       int flips = 0;
       {
          int prev = 0;
-         for(int k = 0; k < g_s5.n; k++) { if(g_s5.dir[(size_t)k] != 0 && g_s5.dir[(size_t)k] != prev) { flips++; prev = g_s5.dir[(size_t)k]; } }
+         // v1.10: a flip needs a previous direction - the first NRTR-ready bar is not one
+         for(int k = 0; k < g_s5.n; k++) { if(g_s5.dir[(size_t)k] != 0) { if(prev != 0 && g_s5.dir[(size_t)k] != prev) flips++; prev = g_s5.dir[(size_t)k]; } }
       }
       CHECK(arrows > 0 && arrows == flips && both == 0, "one arrow per NRTR flip candle, none elsewhere");
       CHECK(countPrefix("NBLP_V_") == 1 && has(txt("vpv"), "IF IT CLOSED NOW"), "preview marker + row on the forming candle");

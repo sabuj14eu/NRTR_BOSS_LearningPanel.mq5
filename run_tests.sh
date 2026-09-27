@@ -14,6 +14,7 @@ unchanged() {   # $1 = tag, $2 = source file, $3 = NB_TEST_MARKET, $4 = full .in
    local m=$1 src=$2 mk=$3 inc=$4
    if git cat-file -e "$BASELINE:$src" 2>/dev/null; then
       git show "$BASELINE:$src" > build/baseline_$m.mq5
+      python3 tests/baseline_patches.py $m build/baseline_$m.mq5 || rc=1
       python3 tests/mql2cpp.py build/baseline_$m.mq5 build/baseline_$m.inc full
       if g++ $FLAGS -Ibuild -DNB_TEST_MARKET=$mk -DDUMP_INC="\"baseline_$m.inc\"" tests/dump_objects.cpp -o build/dump_base_$m &&
          g++ $FLAGS -Ibuild -DNB_TEST_MARKET=$mk -DDUMP_INC="\"$inc\"" tests/dump_objects.cpp -o build/dump_new_$m; then

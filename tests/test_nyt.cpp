@@ -919,6 +919,128 @@ int main()
       end(title);
    }
 
+   //============================================================ v1.10 audit fixes
+   begin("V1 v1.10 lots never round UP past the risk budget (volume step 0.005)");
+   {
+      double atRisk = 0.0;
+      // budget 10.00, 266.67 per lot at the SL -> 0.0375 lots -> floor to the 0.005 step = 0.035
+      double lots = NbLotsForRisk(1000.0, 1.0, 2.6667, 0.01, 1.0, 0.005, 0.005, 100.0, atRisk);
+      CHECK(near(lots, 0.035) && atRisk <= 10.0 + 1e-9, "0.035 lots (a fixed 2-decimal round would give 0.04 = 10.67 at risk)");
+      lots = NbLotsForRisk(1000.0, 1.0, 2.6667, 0.01, 1.0, 0.01, 0.01, 100.0, atRisk);
+      CHECK(near(lots, 0.03) && atRisk <= 10.0, "step 0.01: 0.03 (unchanged)");
+      lots = NbLotsForRisk(100000.0, 1.0, 0.5, 0.01, 1.0, 0.1, 0.1, 100.0, atRisk);
+      CHECK(near(lots, 20.0) && atRisk <= 1000.0 + 1e-6, "step 0.1: 20.0");
+      lots = NbLotsForRisk(1000.0, 1.0, 50.0, 0.01, 1.0, 0.01, 0.01, 100.0, atRisk);
+      CHECK(lots == 0.0 && atRisk == 0.0, "the minimum lot risks too much: 0 (SKIP), never rounded up to the minimum");
+   }
+   end("V1");
+
+   for(int mi = 0; mi < 2; mi++)
+   {
+      Metal m = makeMetal(mi == 1, mi == 1 ? 11 : 7);
+      const char *tag = m.silver ? "XAGUSD" : "XAUUSD";
+      char title[180];
+      std::snprintf(title, sizeof title, "V2 %s: an active signal is READY - CLICK only near its entry; price moved away = SETUP - PRICE TOO FAR", tag);
+      begin(title);
+      {
+         long long now = findNow(m, [](const Ref &r) { return r.state != NB_WAIT && r.nSig > 0; }, 11 * 288, 1);
+         CHECK(now > 0, "fixture has an active signal");
+         if(now > 0)
+         {
+            Ref r;
+            reference(m, now, r);
+            const NbSignal &g = r.sig[(size_t)r.s5.sigOf.back()];
+            int age = r.s5.n - 1 - g.idx + 1;
+            std::string buyW = g.dir > 0 ? "BUY" : "SELL";
+            load(m);
+            SIM.now = now;
+            start();
+            auto at = [&](double px0) { SIM.bid = px0; SIM.ask = 0.0; OnTimer(); };
+            auto key = [&]() { const std::string &j = SIM.files[std::string("NRTR_BRIDGE\\") + m.sym + ".json"]; size_t a = j.find("\"change_key\""); return j.substr(a, j.find('}', a) - a); };
+            at(g.entry);
+            CHECK(P("state").find("READY - CLICK " + buyW) != std::string::npos, "price at the entry: READY - CLICK");
+            CHECK(has(P("k10n"), "bar " + std::to_string(age) + "/" + std::to_string(InpSignalValidBars)) && has(P("k10n"), "(0.0R)"),
+                  "the ENTRY row shows the signal's age and the distance");
+            at(g.entry + g.dir * 0.3 * g.risk);
+            CHECK(has(P("state"), "READY - CLICK " + buyW) && has(P("k10n"), "(0.3R)"), "0.3R in its favour: still READY (inside the 0.5R band)");
+            SIM.now += InpBridgeEverySec + 1;
+            OnTimer();
+            std::string jReady = SIM.files[std::string("NRTR_BRIDGE\\") + m.sym + ".json"];
+            std::string kReady = key();
+            CHECK(has(jReady, "\"action\":\"READY - CLICK " + buyW + "\"") && has(jReady, "\"click\":\"READY\""), "bridge: READY - CLICK");
+            at(g.entry + g.dir * 0.8 * g.risk);
+            std::string st = P("state");
+            CHECK(has(st, buyW + " SETUP - PRICE TOO FAR") && !has(st, "CLICK"), "0.8R away: SETUP - PRICE TOO FAR, the word CLICK is gone");
+            CHECK(has(P("r1"), "FROM ENTRY (0.8R > 0.5R)") && has(P("r2"), "WAIT FOR RE-ENTRY - DO NOT CHASE"), "the reason says why");
+            CHECK(g_final == g.dir, "the ENGINE's signal is untouched (display only)");
+            SIM.now += InpBridgeEverySec + 1;
+            OnTimer();
+            std::string jFar = SIM.files[std::string("NRTR_BRIDGE\\") + m.sym + ".json"];
+            CHECK(has(jFar, "\"action\":\"" + buyW + " SETUP - PRICE TOO FAR - WAIT FOR RE-ENTRY\"") && has(jFar, "\"click\":\"PRICE TOO FAR\"") &&
+                  !has(jFar, "\"action\":\"READY"), "bridge: PRICE TOO FAR, never READY");
+            CHECK(key() != kReady, "the change_key changes: Telegram posts the TOO FAR once");
+            at(g.entry - g.dir * 0.8 * g.risk);
+            CHECK(has(P("state"), "PRICE TOO FAR"), "0.8R against it (toward the SL): also too far - the band is both sides");
+            SIM.bid = 0.0; SIM.askMissing = true;
+            OnTimer();
+            CHECK(!has(P("state"), "READY"), "no live price: never READY");
+            OnDeinit(0);
+         }
+      }
+      end(title);
+
+      std::snprintf(title, sizeof title, "V3 %s: 15M boss with a direction but 5M against = WAIT FOR 5M RE-ALIGNMENT, never a '---' limit", tag);
+      begin(title);
+      {
+         long long nAgainst = findNow(m, [](const Ref &r) { return (r.boss == NB_BUY && r.s5.dir.back() <= 0) || (r.boss == NB_SELL && r.s5.dir.back() >= 0); }, 11 * 288, 1);
+         long long nWith = findNow(m, [](const Ref &r) { return (r.boss == NB_BUY && r.s5.dir.back() > 0) || (r.boss == NB_SELL && r.s5.dir.back() < 0); }, 11 * 288, 1);
+         CHECK(nAgainst > 0 && nWith > 0, "fixture has both");
+         if(nAgainst > 0)
+         {
+            Ref r;
+            reference(m, nAgainst, r);
+            load(m);
+            SIM.now = nAgainst;
+            start();
+            if(g_fresh)
+               CHECK(P("v19") == std::string(r.boss > 0 ? "5M AGAINST - WAIT FOR 5M BULLISH RE-ALIGNMENT" : "5M AGAINST - WAIT FOR 5M BEARISH RE-ALIGNMENT") &&
+                     !has(P("v19"), "---"), "PULLBACK row: wait for the 5M re-alignment");
+            OnDeinit(0);
+         }
+         if(nWith > 0)
+         {
+            Ref r;
+            reference(m, nWith, r);
+            load(m);
+            SIM.now = nWith;
+            start();
+            if(g_fresh)
+               CHECK(has(P("v19"), (r.boss > 0 ? "BUY LIMIT near 5M NRTR stop " : "SELL LIMIT near 5M NRTR stop ") + px(r.s5.stop.back(), m.digits)),
+                     "5M with the boss: the limit near the 5M NRTR stop, with its price");
+            OnDeinit(0);
+         }
+      }
+      end(title);
+
+      std::snprintf(title, sizeof title, "V4 %s: a loss is valued with MT5's loss tick value when it is larger", tag);
+      begin(title);
+      {
+         load(m);
+         SIM.now = m.m5[12 * 288 + 50].t + 320;
+         SIM.tickValueLoss = m.tickValue * 1.25;
+         start();
+         CHECK(near(g_tickValue, m.tickValue * 1.25), "loss tick value larger: used (lots and money at SL are not understated)");
+         OnDeinit(0);
+         load(m);
+         SIM.now = m.m5[12 * 288 + 50].t + 320;
+         SIM.tickValueLoss = m.tickValue * 0.8;
+         start();
+         CHECK(near(g_tickValue, m.tickValue), "loss tick value smaller: the larger one stays (conservative)");
+         OnDeinit(0);
+      }
+      end(title);
+   }
+
    //============================================================ v1.07: MARKET chip, clock, PC time
    for(int mi = 0; mi < 2; mi++)
    {

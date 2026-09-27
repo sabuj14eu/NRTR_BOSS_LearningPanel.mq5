@@ -97,8 +97,10 @@ class BridgeFile(unittest.TestCase):
         self.assertEqual(s["timing_5m"], SIDE[e["state"]])
         self.assertEqual(d["structure"]["m15"]["boss"], MODE[e["boss"]])
         self.assertTrue(s["fresh"])
-        self.assertIn(s["action"], ("CLICK BUY", "CLICK SELL", "WAIT - NO TRADE"))
-        self.assertEqual(s["action"].startswith("CLICK"), s["final"] in ("BUY", "SELL"))
+        allowed = ("CLICK BUY", "CLICK SELL", "WAIT - NO TRADE", "READY - CLICK BUY", "READY - CLICK SELL",
+                   "BUY SETUP - PRICE TOO FAR - WAIT FOR RE-ENTRY", "SELL SETUP - PRICE TOO FAR - WAIT FOR RE-ENTRY")
+        self.assertIn(s["action"], allowed)
+        self.assertEqual(s["action"] != "WAIT - NO TRADE", s["final"] in ("BUY", "SELL"), "a BUY / SELL action only with a BUY / SELL final")
         pw = s["pullback_watch"]
         self.assertIs(pw["not_a_signal"], True)
         for k in ("n", "tp1", "sl", "expired"):
