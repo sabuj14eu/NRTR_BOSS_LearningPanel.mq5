@@ -284,7 +284,7 @@ BRIDGE PYTHON TESTS:                 12 of 12 (incl. the US100 message)
 ALL SUITES PASSED
 MUTATION TESTS:  89 planted, 89 caught (full run: 81 earlier + 82-89 twins v1.10)
                  US100 90-105: first run 14 of 16 - M92 and M98 ESCAPED (real test gaps, closed: 09:25-missing PMH
-                 check, every-bar-gapped fixture); re-run of all 16 on the final tests: see the commit
+                 check, every-bar-gapped fixture); re-run of all 16 on the final tests: 16 of 16 CAUGHT
 MetaEditor F7:   NOT RUN HERE - twins v1.10 and NRTR_BOSS_US100.mq5 v1.11
 ```
 
