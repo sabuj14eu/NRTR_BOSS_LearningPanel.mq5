@@ -270,6 +270,27 @@ the session engine tests (two of them by the indicator tests as well):
 | Clock accepted whatever the PC said (no half-hour check) | yes |
 | The forming 5M bar evaluated for a trap | yes |
 
+## Results (2026-09-27, v1.10 crypto / forex parity + v1.11 US100)
+
+```
+SESSION INDICATOR (crypto / forex):  151 / 150 passed  (I20: click guard flow + trap, lots, loss tick value, MARKET chip, pullback watch, version)
+EXISTING PANEL UNCHANGED:            gold / crypto / forex PASS (v1.04 baseline + declared fixes)
+BRIDGE BLOCK CHECK:                  NB_PW NB_BR NB_MK NB_RP NB_SH identical in all 4 files
+MAKE US100 --check:                  PASS (crypto + 59 declared patches, no drift)
+US100 TESTS:                         108 passed  (U0 sessions/symbols, U15 DST per bar all of 2026, U1-U3 map vs reference,
+                                     U4 gap, U5/U6/U12 plans, U7 causal, U8 stale, U9 too far, U10 forming, U11 lots,
+                                     U13 own symbol only, U14 news UNKNOWN, U16 no execution / no NY trap)
+BRIDGE PYTHON TESTS:                 12 of 12 (incl. the US100 message)
+ALL SUITES PASSED
+MUTATION TESTS:  89 planted, 89 caught (full run: 81 earlier + 82-89 twins v1.10); US100 90-105: see below
+MetaEditor F7:   NOT RUN HERE - twins v1.10 and NRTR_BOSS_US100.mq5 v1.11
+```
+
+**Manual check (US100):** F7 `NRTR_BOSS_US100.mq5`, drop it on USTEC M5. The top right shows
+`v1.11`, the title says `(US INDEX)`, and the US SESSION MAP rows show PDH / PDL, ONH/ONL PMH/PML,
+the open / gap and the opening range in New York time. If the session row's NY time is one hour off,
+set `InpUsServerDst` to EU (or NONE) for your broker.
+
 ## Results (2026-09-27, v1.10 metals: audit fixes)
 
 ```
