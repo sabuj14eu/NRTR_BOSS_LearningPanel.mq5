@@ -92,6 +92,8 @@ struct SimState
    std::vector<std::string> alerts;
    std::vector<std::string> sounds;
    int chartW = 1400, chartH = 900;   // chart size in pixels
+   long long seq = 0;                           // object creation counter
+   std::map<std::string, long long> seqOf;      // name -> creation order (MT5 draws later objects on top)
 };
 static SimState SIM;
 static std::string _Symbol = "XAUUSD";
@@ -222,6 +224,7 @@ inline bool ObjectCreate(long, const string &name, int type, int, datetime t1, d
    (void)t2; (void)p2;
    SimObj o;
    o.type = type;
+   SIM.seqOf[name] = ++SIM.seq;
    o.i[OBJPROP_TIME] = t1;
    o.d[OBJPROP_PRICE] = p1;
    SIM.objs[name] = o;

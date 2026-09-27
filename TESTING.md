@@ -270,6 +270,29 @@ the session engine tests (two of them by the indicator tests as well):
 | Clock accepted whatever the PC said (no half-hour check) | yes |
 | The forming 5M bar evaluated for a trap | yes |
 
+## Results (2026-09-27, v1.06 twins + v1.05 metals)
+
+```
+FQ BLOCK CHECK:  PASS  (NB_FQ 1150 lines, NB_FQT 692 lines, identical in all three files)
+FIVE-QUESTION ENGINE TESTS:    metals 106 / crypto 106 / forex 106 passed, 0 failed
+FIVE-QUESTION INDICATOR TESTS: metals 122 / crypto 115 / forex 115 passed, 0 failed
+EXISTING PANEL UNCHANGED:      gold 16431 / crypto 17596 / forex 17382 object records, 53 scenarios each
+MUTATION TESTS:  python3 tests/mutate_fq.py -> 22 planted (17 crypto, 5 metals), 22 caught
+MetaEditor F7:   v1.05 twins compiled and ran in the user's MT5 (2026-09-27); v1.06 and metals v1.05 NOT YET
+```
+
+New: **Q9** (7000+ texts on 78 chart moments: none over MT5's 63-character label limit; chart texts
+in the background; the table is created after the main panel's markers, checked after the next
+closed candle), **Q10** (silver on the metals panel: the wider stop is in the SL, and the footer names
+the settings), **Q3** (the map row equals the engine's PDH / Asia / London values), and **F19** (silver
+options, NET R, witness clock, level tags). The first mutation run found a weak test (M17 escaped
+because Q9 only looked at startup). Q9 was strengthened, and M17 is now caught. Details and the list
+of existing main-panel labels that MT5 already cuts are in [CHANGELOG.md](CHANGELOG.md).
+
+**Manual check:** F7 all three files. Attach the metals file to XAUUSD M5 and XAGUSD M5. On
+silver the table's footer must read `SILVER: stop x2.0, confirm +0.25 ATR`. No chart marker may
+cover either table. Nothing on the table may end in the middle of a word.
+
 ## Results (2026-09-26, v1.05 five-question table)
 
 ```

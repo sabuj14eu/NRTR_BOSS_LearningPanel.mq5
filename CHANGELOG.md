@@ -1,6 +1,160 @@
 # CHANGELOG
 
+## v1.06 twins + v1.05 metals (2026-09-27): screenshot fixes, and the table on the gold / silver panel
+
+This is the full audit record of this change. Every claim below has a command that reproduces it.
+
+### What was asked (Shyam, 2026-09-27, with an MT5 screenshot of BTCUSD M5)
+
+"Do you think ok? Then update metal - NRTR_BOSS_LearningPanel. I use pending order also, I want
+scalp gold and silver."
+
+### What the screenshot showed (read before trusting anything else here)
+
+1. **It compiled and ran in MT5.** This is the first real-terminal evidence for v1.05.
+2. **The table's own history says the plan lost on that BTC chart:** `106 plans - TP1 8 / SL 36 /
+   not filled 62`. 44 plans were filled, and 36 of them hit SL. That is above the n >= 20 floor, so
+   it is evidence, not luck. **Do not trade this rule on BTC as it stands.** The table was built to
+   produce exactly this kind of answer, and "no edge" is a valid result. v1.06 adds **NET R** to that
+   row so the sign is visible at a glance.
+3. **MT5 cuts object text at 63 characters.** The screenshot shows `... ran to TP1 wi`,
+   `... not filled 62` (the rest missing) and `... typed by you. A`. The simulator had no such limit, so
+   no test could see it. **This was a real bug in v1.05**, and it is now tested (Q9).
+4. **Chart markers were drawn over the tables** (`▲ BUY` over row 4 of the new table,
+   `PLAN BUY (SWEEP)` over the main panel's LIVE BOX), and `LOTS 1.0%` overlapped its value.
+5. `SKIP - NO MAPPED TARGET BEYOND - REWARD UNKNOWN` was correct. Price was above every mapped
+   level, so there was no target, and the table refused to guess one.
+
+### What changed
+
+**Twins `NRTR_BOSS_Crypto_NYTrap.mq5` / `NRTR_BOSS_Forex_NYTrap.mq5`, v1.05 → v1.06**
+
+* Every table and chart label is now at or under 63 characters. Long rows became two labels (a left
+  half and a right half at a fixed x). NEXT now takes two lines. Level names shorten to codes when
+  long (`NbLvName`, `NbLvTag`: at most two codes plus a count, strongest source first).
+* Chart texts of the table's drawing are drawn in the **background** (`NbFText` sets
+  `OBJPROP_BACK`), so they never cover a panel.
+* `NbFqDrawChart` deletes the table's objects after redrawing the markers, and the same refresh
+  recreates them. The table is therefore created **after** the main panel's chart markers and drawn
+  on top of them (MT5 draws later objects above earlier ones; tested with a creation counter in the
+  simulator).
+* The history row shows **NET R** (TP1 = +its R, SL = -1, not filled = 0), coloured once n >= 20.
+* `LOTS` key shortened; the value reads `0.20   (7.74 USD = 1.0%)`.
+* Engine: two per-asset settings in `NbFqCfg`, **neutral in the twins** (`slBufMult` 1.0, `confirmAtr`
+  0.0). They are proven neutral: the synthetic run still makes exactly the same 53 plans.
+* **Code organisation:** the engine part is now between `//=== NB_FQ_BEGIN ===` and
+  `//=== NB_FQ_END ===`, and the terminal part between `//=== NB_FQT_BEGIN ===` and
+  `//=== NB_FQT_END ===`. Both blocks are **byte-identical in all three files**
+  (`tests/check_fq_blocks.py`). Only five small adapters per file differ: `NbFqLabel`,
+  `NbFqOnlyText`, `NbFqAccent`, `NbFqClock` and `NbFqAsset`.
+
+**Metals `NRTR_BOSS_LearningPanel.mq5`, v1.04 → v1.05 (new: the five-question table)**
+
+* The same table and the same big support / resistance lines as the twins (the same two blocks,
+  byte for byte), at the bottom middle. **The existing gold panel is unchanged.** The v1.04 file
+  from git and this file give byte-identical objects, buffers, alerts and log lines over 53 scenarios
+  (16431 object records).
+* **Pending orders:** READY = a BUY LIMIT / SELL LIMIT at the level (the retest), exactly as in the
+  twins. SL goes beyond the structure, TP1 / TP2 are the next mapped levels, and lots come from the SL
+  distance.
+* **Scalping:** the timing is the 5M chart with the 15M as the map, the same as the twins.
+* **Gold vs silver** (from your framework: "silver is more explosive and prone to false breaks,
+  so require stronger confirmation and/or wider volatility-adjusted stops"):
+  * GOLD: the plain rules.
+  * SILVER: SL buffer x `InpFqSilverSlMult` (default **2.0**), and the confirmation close (and a
+    breakout close) must pass the level / trigger by `InpFqSilverConfirmAtr` x 5M ATR (default
+    **0.25**). The table's footer states which setting is in force.
+  * These two numbers are **explicit choices, not validated values.** Change them only with evidence.
+* **Clock:** this file has no session clock of its own, so Asia / London use the broker offset
+  only when two witnesses agree (`NbFqWitnessClock`: server vs PC GMT, on a half hour within 5 min).
+  Otherwise those two levels are not shown. The day levels and swings always work.
+* The metals daily break (00:00-01:00 server) and the weekend make the main panel's DATA CLOCK
+  say STALE, and then the table says NO TRADE.
+
+### Every change to the source files (line numbers in the NEW files)
+
+`git diff 3f046ef -- <file> | grep '^-' | grep -v '^---'` prints only the `#property version` line
+for all three files. Everything else is inserted.
+
+| | Metals (`NRTR_BOSS_LearningPanel.mq5`) | Crypto (`..._Crypto_NYTrap.mq5`) |
+|---|---|---|
+| header comment | 69-80 | 82-100 (v1.05 + v1.06 paragraphs) |
+| `#property version` | 83: `1.04` → `1.05` | 103: `1.04` → `1.06` |
+| engine block `NB_FQ` | 1211-2360 (`NbRunFq` 1811) | 1689-2838 (`NbRunFq` 2289) |
+| object prefixes | 2370-2371 (`NBLP_Q_`, `NBLP_F_`) | 2848-2849 (`NBSP_Q_`, `NBSP_F_`) |
+| inputs (new group at the end) | 2414-2427 (incl. 2 silver inputs) | 2903-2914 |
+| globals | 2490-2495 | 2977-2982 |
+| prototypes | 2519-2528 | 3009-3018 |
+| `OnInit` validation / init | 2558-2566 / 2632-2635 | 3051-3058 / 3122-3125 |
+| `OnChartEvent`, `NbUpdate` | 2672, 2711 (`NbFqDrawTable();`) | 3160, 3199 |
+| `NbRecompute` | 2856-2859, 2866-2867 | 3351-3354, 3365-3366 |
+| adapters | 3845-3890 | 4547-4582 |
+| terminal block `NB_FQT` | 3892-4583 (`NbFqDrawChart` 3981, `NbFqDrawTable` 4151) | 4584-5275 (4673, 4843) |
+
+Forex = crypto (twin check: 5276 lines, 4 differ).
+
+### Tests (`./run_tests.sh`, 2026-09-27)
+
+```
+existing suites (unchanged, all pass): gold 145 + 124, crypto 106 + 104, forex 104 + 103, safety x3
+TWIN CHECK: PASS          FQ BLOCK CHECK: PASS (NB_FQ 1150 lines, NB_FQT 692 lines, identical x3)
+FIVE-QUESTION ENGINE TESTS:    metals 106 / crypto 106 / forex 106 passed, 0 failed
+FIVE-QUESTION INDICATOR TESTS: metals 122 / crypto 115 / forex 115 passed, 0 failed
+EXISTING PANEL UNCHANGED:      gold 16431 / crypto 17596 / forex 17382 object records, 53 scenarios each
+python3 tests/mutate_fq.py:    22 planted (17 crypto, 5 metals), 22 caught
+MetaEditor F7: v1.05 twins compiled and ran in the user's MT5 (screenshot 2026-09-27); v1.06 / metals v1.05 NOT YET
+```
+
+New checks:
+* **Q9:** every table and chart text over 78 chart moments (39 times x 2 chart widths; ~7000 texts) is at most 63 characters,
+  counted in code points as MT5 does. Every chart text of the drawing is in the background. After
+  the next closed candle, the table is created after the main panel's markers. **Mutation M17 first
+  escaped:** Q9 only looked at startup, and the ordering bug appears at the next candle. Q9 was
+  strengthened, and M17 is now caught.
+* **Q10 (metals):** on a silver market the READY SL equals sweep extreme -/+ 0.10 x 5M ATR x 2.0, the
+  table shows it, and the footer states the silver settings. On gold there is no silver note.
+* **Q3:** the 15M map row shows the engine's PDH, Asia and London values (catches a guessed clock:
+  M20).
+* **F19:** the silver options change the answer exactly where they should (stop 99.52; a confirmation
+  that needs +0.6 ATR stays SETTING UP; a stricter breakout is refused). Also covered: NET R
+  arithmetic, the witness clock, and level tags.
+
+Mutations added: M15 (a row over 63 characters), M16 (markers in the foreground), M17 (table not
+recreated), M18 / M19 (silver stop / confirmation ignored), M20 (clock assumed instead of
+witnessed), M21 (existing gold panel touched), M22 (metals stale gate removed). All caught.
+
+### Found, NOT changed (the existing main panel; your decision)
+
+These **existing** main-panel labels are longer than 63 characters, so MT5 cuts them today (measured
+from the simulator dump):
+
+| File | Label | Length | Text starts |
+|---|---|---|---|
+| all | `g1` ... `g4` (HOW TO READ) | 79-90 | `NRTR CHANNEL: thick stop line ...`, `ZIGZAG (blue) ...`, `EMA200 ...`, `ARROW = NRTR flip ...` |
+| all | `hb` (LIVE BOX header) | 64 | `LIVE BOX  -  BOTH SIDES FROM THE SAME RULES  -  THE GATE DECIDES` |
+| all | `vd6` (STALE THRESHOLD) | 64 | `tick > 120s  or  forming bar > 2 bars old ...` |
+| twins | `g5`, `f1` | 97, 75 | `NY TRAP (purple) ...`, `Learning tool. Aligned conditions ...` |
+| twins | `vpv2` (preview line 2) | up to 65 | `price 65728.41 is above the 5M stop ...` |
+
+You asked not to change the existing panel, so they are left as they are. Fixing them means
+shortening those strings. Say the word and it will be a separate, tested change.
+
+### Honest limits (in addition to the v1.05 list below)
+
+* The BTC count in the screenshot (8 TP1 / 36 SL) is the only real-market evidence so far, and it
+  is negative. Gold and silver have no count yet. Treat the table as a counter until the metals
+  history row shows n >= 20 with a positive NET R, and then check it again at ~100.
+* Do not tune the rules to make those 10 days look good. That is the "best of N" trap. A changed
+  rule is a new version, and it gets counted from zero.
+* The silver multipliers (2.0 / 0.25) are judgement defaults from the framework, not fitted values.
+* Draw order: MT5 draws objects in creation order, and the simulator checks the creation order.
+  Please confirm on your chart that no marker covers the tables.
+
+---
+
 ## v1.05 (2026-09-26): FIVE-QUESTION PLAN table for the crypto (and forex) twin
+
+(Line numbers in this section refer to commit `86a8ee2`; v1.06 above moved them.)
 
 This is the full audit record of this change. Every edit to the `.mq5` is listed below with its
 line numbers, and every claim has a command that reproduces it. Nothing here was checked in

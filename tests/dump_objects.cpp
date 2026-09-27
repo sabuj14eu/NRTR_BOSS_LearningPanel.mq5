@@ -13,14 +13,24 @@
 #include <cstring>
 
 static const long long T0 = 1788220800LL;
-#if NB_TEST_MARKET == 2
+#if NB_TEST_MARKET == 0
+#define PFX "NBLP_"
+static const char *SYM = "XAUUSD", *BASE = "XAU", *QUOTE = "USD";
+static const int DIGITS = 2;
+static const double TICK = 0.01, PRICE = 2400.0, VOL = 0.8;
+static const char *OTHER = "EURUSD", *OTHERB = "EUR";
+#elif NB_TEST_MARKET == 2
+#define PFX "NBSP_"
 static const char *SYM = "EURUSD", *BASE = "EUR", *QUOTE = "USD";
 static const int DIGITS = 5;
 static const double TICK = 0.00001, PRICE = 1.08, VOL = 0.0004;
+static const char *OTHER = "BTCUSD", *OTHERB = "BTC";
 #else
+#define PFX "NBSP_"
 static const char *SYM = "BTCUSD", *BASE = "BTC", *QUOTE = "USD";
 static const int DIGITS = 2;
 static const double TICK = 0.01, PRICE = 60000.0, VOL = 40.0;
+static const char *OTHER = "EURUSD", *OTHERB = "EUR";
 #endif
 
 static std::vector<MqlRates> toRates(const std::vector<SBar> &v)
@@ -64,7 +74,7 @@ static unsigned long long fnv(const void *p, size_t n, unsigned long long h = 14
 }
 static bool added(const std::string &name)
 {
-   return name.compare(0, 7, "NBSP_Q_") == 0 || name.compare(0, 7, "NBSP_F_") == 0;
+   return name.compare(0, 7, PFX "Q_") == 0 || name.compare(0, 7, PFX "F_") == 0;
 }
 static void dump(const char *label)
 {
@@ -132,7 +142,7 @@ int main()
    SIM.copyFail = true;
    OnInit(); calc(); dump("missing"); SIM.copyFail = false; OnTimer(); dump("recovered"); OnDeinit(0); scen++;
    // unsupported symbol
-   load((NB_MARKET == NB_MKT_CRYPTO) ? "EURUSD" : "BTCUSD", (NB_MARKET == NB_MKT_CRYPTO) ? "EUR" : "BTC");
+   load(OTHER, OTHERB);
    SIM.now = g5[3000].t + 20;
    OnInit(); calc(); dump("unsupported"); OnDeinit(0); scen++;
    std::fprintf(stderr, "%d scenarios dumped\n", scen);

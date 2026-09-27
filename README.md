@@ -5,7 +5,7 @@ compile with F7, drag onto the chart. None of them ever places, modifies or clos
 
 | File | Market | Extra |
 |---|---|---|
-| `NRTR_BOSS_LearningPanel.mq5` | Gold, Silver | the original 15M-boss / 5M-trigger panel |
+| `NRTR_BOSS_LearningPanel.mq5` | Gold, Silver | the original 15M-boss / 5M-trigger panel **+ 5-question table (v1.05)** |
 | `NRTR_BOSS_Crypto_NYTrap.mq5` | BTC ETH SOL LTC XRP BNB ADA DOGE AVAX DOT LINK BCH (USD, USDT, USDC) | **+ NY-open trap module + 5-question table (v1.05)** |
 | `NRTR_BOSS_Forex_NYTrap.mq5` | EURUSD USDJPY GBPUSD and every pair of USD EUR GBP JPY CHF AUD NZD CAD SGD NOK SEK DKK PLN ZAR MXN HKD CNH | **+ NY-open trap module + 5-question table (v1.05)** |
 
@@ -394,7 +394,21 @@ Tests and exact results: see [TESTING.md](TESTING.md).
 
 ---
 
-# 3. v1.05: the FIVE-QUESTION PLAN table (crypto & forex twins)
+# 3. v1.05 / v1.06: the FIVE-QUESTION PLAN table (all three files)
+
+**Gold / silver panel (v1.05 of `NRTR_BOSS_LearningPanel.mq5`) has the same table** at the bottom
+middle. The code is the same text in all three files, and a test proves it. It works with pending
+orders (READY = a BUY LIMIT / SELL LIMIT at the level) and scalps on 5M timing with the 15M as the
+map. **Silver** gets a wider stop (SL buffer x 2.0) and a stronger confirmation (the close must pass by
++0.25 x 5M ATR), because silver false-breaks more. Both numbers are inputs and are shown on the
+table. Asia / London levels appear only when the broker clock and your PC clock agree on a
+half-hour offset.
+
+**v1.06 (after the first MT5 screenshot):** MT5 cuts object text at 63 characters, so every label
+now fits (tested). The table's chart markers are drawn behind the candles, so they never cover the
+panels. The history row shows **NET R**. Read that row: on the first BTC screenshot it said
+`TP1 8 / SL 36`, which means **no edge there, do not trade it** until a new count says otherwise.
+
 
 A **new table at the bottom middle of the chart**. The main panel on the left is unchanged: a
 test builds the v1.04 file from git and requires every one of its objects to be identical.

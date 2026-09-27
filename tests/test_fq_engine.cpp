@@ -5,7 +5,9 @@
 // synthetic 16-day market checked against an independent session oracle,
 // plan invariants and no-repaint cut points (F15-F18).
 #include "../tests/mql_shim.h"
-#if NB_TEST_MARKET == 2
+#if NB_TEST_MARKET == 0
+#include "engine.inc"
+#elif NB_TEST_MARKET == 2
 #include "engine_forex.inc"
 #else
 #include "engine_crypto.inc"
@@ -35,6 +37,7 @@ static NbFqCfg cfg(bool clockOk = false, long offset = 0)
    NbFqCfg C;
    C.zoneAtr = 0.25; C.window = 12; C.minRR = 1.5; C.validBars = 12; C.openMax = NB_FQ_OPEN_MAX;
    C.asiaStart = 0; C.asiaEnd = 7; C.lonStart = 7; C.lonEnd = 12; C.clockOk = clockOk; C.offset = offset;
+   C.slBufMult = 1.0; C.confirmAtr = 0.0;
    return C;
 }
 
@@ -161,12 +164,22 @@ static void fill(NbSeries &s, const std::vector<SBar> &v, int sec)
    s.sec = sec;
    for(size_t i = 0; i < v.size(); i++) { s.t[i] = v[i].t; s.o[i] = v[i].o; s.h[i] = v[i].h; s.l[i] = v[i].l; s.c[i] = v[i].c; }
 }
+#if NB_TEST_MARKET != 0
 static NbSessCfg sessCfg()
 {
    NbSessCfg S;
    S.clockMode = NB_CLK_AUTO; S.clockOk = true; S.offset = 3 * 3600; S.manualOpenSec = 0;
    S.preHours = 4; S.winMin = 90; S.minRangeBars = 12; S.pauseFlow = true;
    return S;
+}
+#endif
+static const char *mktName()
+{
+#if NB_TEST_MARKET == 0
+   return "METALS";
+#else
+   return NB_MARKET == NB_MKT_CRYPTO ? "CRYPTO" : "FOREX";
+#endif
 }
 static void runAt(Run &r, const std::vector<SBar> &m5, const std::vector<SBar> &m15, int last5, const NbParams &P,
                   const NbFqCfg &C)
@@ -178,7 +191,11 @@ static void runAt(Run &r, const std::vector<SBar> &m5, const std::vector<SBar> &
    fill(r.s5, a, 300);
    fill(r.s15, b, 900);
    NbRun15(r.s15, r.p15, P);
+#if NB_TEST_MARKET == 0
+   NbRun5(r.s5, r.p5, r.s15, true, P, r.sigs, r.nSig);
+#else
    NbRun5(r.s5, r.p5, r.s15, true, P, sessCfg(), r.sigs, r.nSig);
+#endif
    NbRunFq(r.s5, r.s15, r.p15, r.s15.np, r.p5, r.s5.np, true, P, C, r.fq, r.pl, r.npl);
 }
 static bool sameBar(const NbFqBar &a, const NbFqBar &b)
@@ -195,7 +212,7 @@ static bool onGrid(double x, double tick) { return std::fabs(x / tick - std::rou
 
 int main()
 {
-   std::printf("market under test: %s\n", NB_MARKET == NB_MKT_CRYPTO ? "CRYPTO" : "FOREX");
+   std::printf("market under test: %s\n", mktName());
    NbParams P = params(0.01, 2);
    NbFqCfg C = cfg();
 
@@ -512,11 +529,64 @@ int main()
    }
    end("F14");
 
+   begin("F19 v1.06: silver options (wider stop, stronger confirmation), NET R, witness clock, short level tags");
+   {
+      NbFqCfg Cs = C;
+      Cs.slBufMult = 2.0;
+      Fx f;
+      swing15(f, -1, 100.0); swing15(f, 1, 103.0);
+      buySweep(f);
+      runFx(f, Cs, P);
+      CHECK(f.fq[5].status == NB_FQ_READY && near(f.fq[5].sl, 99.52), "stop buffer x2: SL 99.60 - 2 x 0.04 = 99.52");
+      Cs = C;
+      Cs.confirmAtr = 0.25;   // close must pass 100.20 + 0.25 x 0.4 = 100.30; bar 5 closes 100.40
+      Fx g;
+      swing15(g, -1, 100.0); swing15(g, 1, 103.0);
+      buySweep(g);
+      runFx(g, Cs, P);
+      CHECK(g.fq[5].status == NB_FQ_READY, "confirmation +0.25 ATR: 100.40 > 100.30 still confirms");
+      Cs.confirmAtr = 0.6;    // needs 100.44
+      Fx h;
+      swing15(h, -1, 100.0); swing15(h, 1, 103.0);
+      buySweep(h);
+      runFx(h, Cs, P);
+      CHECK(h.fq[5].status == NB_FQ_SETUP && h.npl == 0, "confirmation +0.6 ATR: 100.40 < 100.44 is not enough - still SETTING UP");
+      Cs.confirmAtr = 1.0;    // a breakout close must clear 103.00 + 0.40
+      Fx k;
+      swing15(k, -1, 100.0); swing15(k, 1, 103.0); swing15(k, 1, 104.5);
+      swing5(k, -1, 102.4, 0, 1);
+      bar(k, 102.5, 102.8, 102.4, 102.7);
+      bar(k, 102.7, 102.9, 102.6, 102.8);
+      bar(k, 102.8, 103.4, 102.7, 103.3);
+      runFx(k, Cs, P);
+      CHECK(k.fq[2].kind == NB_PK_NONE && k.npl == 0, "breakout close 103.30 < 103.40: not a breakout for the stricter asset");
+      std::vector<NbFqPlan> pl(3);
+      pl[0].status = NB_PO_TP1; pl[0].rr1 = 2.5;
+      pl[1].status = NB_PO_SL; pl[1].rr1 = 3.0;
+      pl[2].status = NB_PO_EXPIRED; pl[2].rr1 = 4.0;
+      CHECK(near(NbFqNetR(pl, 3), 1.5), "NET R: +2.5 (TP1) - 1 (SL) + 0 (not filled) = +1.5");
+      long off = 0;
+      CHECK(NbFqWitnessClock(1000000 + 3 * 3600 + 100, 1000000, off) && off == 3 * 3600, "witness clock: +3h with 100 s drift");
+      CHECK(!NbFqWitnessClock(1000000 + 3 * 3600 + 600, 1000000, off) && off == 0, "witness clock: 10 min off a half hour = unknown");
+      CHECK(!NbFqWitnessClock(0, 1000000, off), "witness clock: a missing witness = unknown");
+      CHECK(NbLvTag(NB_LV_PDH | NB_LV_ASH | NB_LV_SWH | NB_LV_LOL) == "PDH+LDN L+2" && NbLvTag(NB_LV_SWL) == "SWING L", "short tags: two codes and a count");
+      CHECK(NbLvName(NB_LV_PDH | NB_LV_LOH | NB_LV_ASH | NB_LV_SWH) == NbLvSrcShort(NB_LV_PDH | NB_LV_LOH | NB_LV_ASH | NB_LV_SWH) &&
+            NbLvName(NB_LV_PDH) == "PREV DAY HIGH", "chart names: long when short enough, codes otherwise");
+   }
+   end("F19");
+
    // ---- synthetic market -------------------------------------------------
+#if NB_TEST_MARKET == 0
+   double tick = 0.01;
+   int digits = 2;
+   double price = 2400.0;
+   double vol = 0.8;
+#else
    double tick = (NB_MARKET == NB_MKT_CRYPTO) ? 0.01 : 0.00001;
    int digits = (NB_MARKET == NB_MKT_CRYPTO) ? 2 : 5;
    double price = (NB_MARKET == NB_MKT_CRYPTO) ? 60000.0 : 1.08;
    double vol = (NB_MARKET == NB_MKT_CRYPTO) ? 40.0 : 0.0004;
+#endif
    NbParams PS = params(tick, digits);
    NbFqCfg CS = cfg(true, 3 * 3600);
    std::vector<SBar> m5 = gen5m(7, 16 * 288, D0, price, tick, vol);
@@ -641,6 +711,6 @@ int main()
    }
    end("F18");
 
-   std::printf("\nFIVE-QUESTION ENGINE TESTS (%s): %d checks passed, %d failed\n", NB_MARKET == NB_MKT_CRYPTO ? "crypto" : "forex", g_pass, g_fail);
+   std::printf("\nFIVE-QUESTION ENGINE TESTS (%s): %d checks passed, %d failed\n", mktName(), g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
 }

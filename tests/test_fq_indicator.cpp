@@ -4,10 +4,15 @@
 // from the objects the indicator created and compared with an independent
 // run of the engine functions on the same bars.
 #include "../tests/mt5_sim.h"
-#if NB_TEST_MARKET == 2
+#if NB_TEST_MARKET == 0
+#include "full.inc"
+#define PFX "NBLP_"
+#elif NB_TEST_MARKET == 2
 #include "full_forex.inc"
+#define PFX "NBSP_"
 #else
 #include "full_crypto.inc"
+#define PFX "NBSP_"
 #endif
 #include "../tests/synth.h"
 #include <cstdio>
@@ -22,16 +27,27 @@ static void begin(const char *n) { g_sec = g_fail; std::printf("[ RUN  ] %s\n", 
 static void end(const char *n) { std::printf("[ %s ] %s\n", g_fail == g_sec ? " OK " : "FAIL", n); }
 
 static const long long T0 = 1788220800LL;
-#if NB_TEST_MARKET == 2
+#if NB_TEST_MARKET == 0
+static const char *SYM = "XAUUSD", *BASE = "XAU", *QUOTE = "USD";
+static const int DIGITS = 2;
+static const double TICK = 0.01, PRICE = 2400.0, VOL = 0.8;
+static const char *ONLY = "GOLD / SILVER ONLY";
+static const char *OTHER = "EURUSD", *OTHERB = "EUR";
+static const char *MKT = "METALS";
+#elif NB_TEST_MARKET == 2
 static const char *SYM = "EURUSD", *BASE = "EUR", *QUOTE = "USD";
 static const int DIGITS = 5;
 static const double TICK = 0.00001, PRICE = 1.08, VOL = 0.0004;
 static const char *ONLY = "FOREX ONLY";
+static const char *OTHER = "BTCUSD", *OTHERB = "BTC";
+static const char *MKT = "FOREX";
 #else
 static const char *SYM = "BTCUSD", *BASE = "BTC", *QUOTE = "USD";
 static const int DIGITS = 2;
 static const double TICK = 0.01, PRICE = 60000.0, VOL = 40.0;
 static const char *ONLY = "CRYPTO ONLY";
+static const char *OTHER = "EURUSD", *OTHERB = "EUR";
+static const char *MKT = "CRYPTO";
 #endif
 
 static std::vector<MqlRates> toRates(const std::vector<SBar> &v)
@@ -75,8 +91,8 @@ static void calc()
    OnTimer();
 }
 static int start() { int rc = OnInit(); calc(); return rc; }
-static std::string q(const std::string &id) { return SIM.objs.count("NBSP_Q_" + id) ? SIM.objs["NBSP_Q_" + id].s[OBJPROP_TEXT] : "<missing>"; }
-static std::string ptxt(const std::string &id) { return SIM.objs.count("NBSP_P_" + id) ? SIM.objs["NBSP_P_" + id].s[OBJPROP_TEXT] : "<missing>"; }
+static std::string q(const std::string &id) { return SIM.objs.count(PFX "Q_" + id) ? SIM.objs[PFX "Q_" + id].s[OBJPROP_TEXT] : "<missing>"; }
+static std::string ptxt(const std::string &id) { return SIM.objs.count(PFX "P_" + id) ? SIM.objs[PFX "P_" + id].s[OBJPROP_TEXT] : "<missing>"; }
 static bool has(const std::string &s, const std::string &sub) { return s.find(sub) != std::string::npos; }
 static int countPrefix(const std::string &p)
 {
@@ -84,10 +100,13 @@ static int countPrefix(const std::string &p)
    for(auto &kv : SIM.objs) if(kv.first.compare(0, p.size(), p) == 0) n++;
    return n;
 }
-static std::string ftxt(const std::string &id) { return SIM.objs.count("NBSP_F_" + id) ? SIM.objs["NBSP_F_" + id].s[OBJPROP_TEXT] : "<missing>"; }
-static double fprice(const std::string &id) { return SIM.objs.count("NBSP_F_" + id) ? SIM.objs["NBSP_F_" + id].d[OBJPROP_PRICE * 100 + 0] : -1.0; }
-static long long fint(const std::string &id, int prop) { return SIM.objs.count("NBSP_F_" + id) ? SIM.objs["NBSP_F_" + id].i[prop] : -999; }
+static std::string ftxt(const std::string &id) { return SIM.objs.count(PFX "F_" + id) ? SIM.objs[PFX "F_" + id].s[OBJPROP_TEXT] : "<missing>"; }
+static double fprice(const std::string &id) { return SIM.objs.count(PFX "F_" + id) ? SIM.objs[PFX "F_" + id].d[OBJPROP_PRICE * 100 + 0] : -1.0; }
+static long long fint(const std::string &id, int prop) { return SIM.objs.count(PFX "F_" + id) ? SIM.objs[PFX "F_" + id].i[prop] : -999; }
 
+#if NB_TEST_MARKET == 0
+static bool g_refSilver = false;   // metals file: reference run with the silver settings
+#endif
 //--- independent engine run on the bars the terminal would load at `now`
 struct Ref
 {
@@ -107,13 +126,19 @@ static void reference(const Market &m, long long now, Ref &r)
    P.atrPeriod = InpNrtrAtrPeriod; P.nrtrMult = InpNrtrMultiplier; P.emaPeriod = InpEmaPeriod;
    P.swing = InpSwingStrength; P.slBufAtr = InpSlBufferAtr; P.tp1R = InpTp1R; P.tp2R = InpTp2R;
    P.validBars = InpSignalValidBars; P.tick = TICK; P.digits = DIGITS;
+#if NB_TEST_MARKET != 0
    NbSessCfg S;
    S.clockMode = NB_CLK_AUTO; S.clockOk = true; S.offset = 3 * 3600; S.manualOpenSec = 0;
    S.preHours = InpPreNyRangeHours; S.winMin = InpNyWindowMinutes; S.minRangeBars = InpMinRangeBars; S.pauseFlow = InpNyPauseFlow;
+#endif
    NbFqCfg C;
    C.zoneAtr = InpFqZoneAtr; C.window = InpFqWindowBars; C.minRR = InpFqMinRR; C.validBars = InpFqValidBars;
    C.openMax = NB_FQ_OPEN_MAX; C.asiaStart = InpFqAsiaStartUtc; C.asiaEnd = InpFqAsiaEndUtc;
    C.lonStart = InpFqLondonStartUtc; C.lonEnd = InpFqLondonEndUtc; C.clockOk = true; C.offset = 3 * 3600;
+   C.slBufMult = 1.0; C.confirmAtr = 0.0;
+#if NB_TEST_MARKET == 0
+   if(g_refSilver) { C.slBufMult = InpFqSilverSlMult; C.confirmAtr = InpFqSilverConfirmAtr; P.tick = 0.001; P.digits = 3; }
+#endif
    long long anchor = (now / 86400) * 86400 - (long long)InpHistoryDays * 86400;
    std::vector<SBar> v5, v15;
    for(const SBar &x : m.m5) if(x.t >= anchor && x.t + 300 <= now) v5.push_back(x);
@@ -123,7 +148,11 @@ static void reference(const Market &m, long long now, Ref &r)
    for(size_t i = 0; i < v5.size(); i++) { r.s5.t[i] = v5[i].t; r.s5.o[i] = v5[i].o; r.s5.h[i] = v5[i].h; r.s5.l[i] = v5[i].l; r.s5.c[i] = v5[i].c; }
    for(size_t i = 0; i < v15.size(); i++) { r.s15.t[i] = v15[i].t; r.s15.o[i] = v15[i].o; r.s15.h[i] = v15[i].h; r.s15.l[i] = v15[i].l; r.s15.c[i] = v15[i].c; }
    NbRun15(r.s15, r.p15, P);
+#if NB_TEST_MARKET == 0
+   NbRun5(r.s5, r.p5, r.s15, true, P, r.sig, r.nSig);
+#else
    NbRun5(r.s5, r.p5, r.s15, true, P, S, r.sig, r.nSig);
+#endif
    NbRunFq(r.s5, r.s15, r.p15, r.s15.np, r.p5, r.s5.np, true, P, C, r.fq, r.pl, r.npl);
    r.b = r.fq.back();
    r.state = r.s5.state.back();
@@ -160,7 +189,7 @@ static bool sameObjs(const std::map<std::string, SimObj> &a, const std::map<std:
 
 int main()
 {
-   std::printf("twin under test: %s on %s\n", NB_MARKET == NB_MKT_CRYPTO ? "CRYPTO" : "FOREX", SYM);
+   std::printf("file under test: %s on %s\n", MKT, SYM);
    Market mk = makeMarket(7, 16);
 
    long long nReadyB = findNow(mk, [](const Ref &r) { return r.b.status == NB_FQ_READY && r.pl[(size_t)r.b.plan].dir > 0 && r.pl[(size_t)r.b.plan].idx == r.s5.n - 1; });
@@ -175,8 +204,8 @@ int main()
          SIM.chartW = w;
          SIM.now = nReadyB;
          start();
-         SimObj &bg = SIM.objs["NBSP_Q_bg"];
-         SimObj &pbg = SIM.objs["NBSP_P_bg"];
+         SimObj &bg = SIM.objs[PFX "Q_bg"];
+         SimObj &pbg = SIM.objs[PFX "P_bg"];
          long long x = bg.i[OBJPROP_XDISTANCE], y = bg.i[OBJPROP_YDISTANCE], W = bg.i[OBJPROP_XSIZE], H = bg.i[OBJPROP_YSIZE];
          long long pRight = pbg.i[OBJPROP_XDISTANCE] + pbg.i[OBJPROP_XSIZE];
          long long centred = (w - W) / 2;
@@ -189,7 +218,7 @@ int main()
          bool inside = true;
          for(auto &kv : SIM.objs)
          {
-            if(kv.first.compare(0, 7, "NBSP_Q_") != 0 || kv.second.type != OBJ_LABEL) continue;
+            if(kv.first.compare(0, 7, PFX "Q_") != 0 || kv.second.type != OBJ_LABEL) continue;
             long long lx = kv.second.i[OBJPROP_XDISTANCE], ly = kv.second.i[OBJPROP_YDISTANCE];
             if(lx < x || lx > x + W || ly < y || ly > y + H) { inside = false; std::printf("    outside: %s\n", kv.first.c_str()); }
          }
@@ -222,24 +251,28 @@ int main()
          CHECK(has(q("ov2"), DoubleToString(g.tp1, DIGITS)), "TP1 row");
          CHECK(g.tp2 > 0.0 ? has(q("ov3"), DoubleToString(g.tp2, DIGITS)) : has(q("ov3"), "no 2nd level"), "TP2 row");
          CHECK(has(q("ov4"), "1 : " + DoubleToString(g.rr1, 2)), "R:R row = the engine's R");
-         CHECK(has(q("ov5"), "risks") || has(q("ov5"), "SKIP"), "lots for the risk % from the SL distance");
+         CHECK((has(q("ov5"), " USD = ") && has(q("ov5"), "%)")) || has(q("ov5"), "SKIP"), "lots for the risk % from the SL distance");
          CHECK(has(q("ov6"), "not filled by"), "validity row");
          CHECK(has(q("qt4"), DoubleToString(g.rr1, 2) + "R") && has(q("qt4"), "NEED 1.5R"), "reward answer shows the number and the bar");
-         CHECK(has(q("next"), "type " + lim) && has(q("next"), "SL " + DoubleToString(g.sl, DIGITS)) &&
-               has(q("next"), "TP " + DoubleToString(g.tp1, DIGITS)), "NEXT: what to type");
+         CHECK(has(q("next1"), "type " + lim) && has(q("next1"), "SL " + DoubleToString(g.sl, DIGITS)) &&
+               has(q("next1"), "TP " + DoubleToString(g.tp1, DIGITS)), "NEXT: what to type");
+         CHECK(has(q("next2"), "Not filled by") && has(q("next2"), "No chasing"), "NEXT line 2: when to cancel");
          CHECK(fprice("PL_E") == g.entry && fprice("PL_SL") == g.sl && fprice("PL_T1") == g.tp1, "plan lines on the chart at the plan's prices");
          CHECK(fint("PL_E", OBJPROP_RAY_RIGHT) == 1, "plan lines run ahead to the right");
-         CHECK(SIM.objs.count("NBSP_F_PM_" + std::to_string(g.idx)) == 1, "a PLAN marker on the plan's candle");
+         CHECK(SIM.objs.count(PFX "F_PM_" + std::to_string(g.idx)) == 1, "a PLAN marker on the plan's candle");
          int tp, sl, un, op, to;
          NbFqTally(r.pl, r.npl, tp, sl, un, op, to);
-         char m[64];
-         std::snprintf(m, sizeof m, "%d plans  -  TP1 %d / SL %d", r.npl, tp, sl);
-         CHECK(has(q("tally"), m), "history tally = the engine's count");
+         char m[96];
+         std::snprintf(m, sizeof m, "%d plans - TP1 %d / SL %d / not filled %d", r.npl, tp, sl, un);
+         CHECK(has(q("tallyL"), m), "history tally = the engine's count");
+         double net = NbFqNetR(r.pl, r.npl);
+         std::string netS = std::string("NET ") + (net >= 0 ? "+" : "") + DoubleToString(net, 1) + "R";
+         CHECK(has(q("tallyR"), netS), "NET R = the engine's sum (TP1 = +R, SL = -1)");
          std::printf("    %s at %s: %s SL %s TP1 %s (%.2fR) | %s\n", side == 0 ? "BUY " : "SELL",
                      TimeToString(now, TIME_DATE | TIME_MINUTES).c_str(), lim.c_str(), DoubleToString(g.sl, DIGITS).c_str(),
-                     DoubleToString(g.tp1, DIGITS).c_str(), g.rr1, q("tally").c_str());
+                     DoubleToString(g.tp1, DIGITS).c_str(), g.rr1, (q("tallyL") + " | " + q("tallyR")).c_str());
          OnDeinit(0);
-         CHECK(countPrefix("NBSP_Q_") == 0 && countPrefix("NBSP_F_") == 0, "OnDeinit removes the table and its chart objects");
+         CHECK(countPrefix(PFX "Q_") == 0 && countPrefix(PFX "F_") == 0, "OnDeinit removes the table and its chart objects");
       }
    }
    end("Q2");
@@ -261,27 +294,31 @@ int main()
          CHECK(fprice("RES") == r.b.res && fprice("SUP") == r.b.sup, "big lines at the engine's nearest resistance / support");
          CHECK(fint("RES", OBJPROP_WIDTH) == 3 && fint("SUP", OBJPROP_WIDTH) == 3, "big = width 3");
          CHECK(fint("RES", OBJPROP_RAY_RIGHT) == 1 && fint("SUP", OBJPROP_RAY_RIGHT) == 1, "they run to the right edge (ahead of price)");
-         CHECK(SIM.objs["NBSP_F_RES_Z"].i[OBJPROP_TIME * 100 + 1] > lastT + 3600 && SIM.objs["NBSP_F_SUP_Z"].i[OBJPROP_TIME * 100 + 1] > lastT + 3600,
+         CHECK(SIM.objs[PFX "F_RES_Z"].i[OBJPROP_TIME * 100 + 1] > lastT + 3600 && SIM.objs[PFX "F_SUP_Z"].i[OBJPROP_TIME * 100 + 1] > lastT + 3600,
                "zones reach into the future (drawn before price gets there)");
-         CHECK(SIM.objs["NBSP_F_RES_Z"].type == OBJ_RECTANGLE && SIM.objs["NBSP_F_RES_Z"].i[OBJPROP_FILL] == 1, "zones are filled rectangles");
-         double zr = SIM.objs["NBSP_F_RES_Z"].d[OBJPROP_PRICE * 100 + 1] - SIM.objs["NBSP_F_RES_Z"].d[OBJPROP_PRICE * 100 + 0];
+         CHECK(SIM.objs[PFX "F_RES_Z"].type == OBJ_RECTANGLE && SIM.objs[PFX "F_RES_Z"].i[OBJPROP_FILL] == 1, "zones are filled rectangles");
+         double zr = SIM.objs[PFX "F_RES_Z"].d[OBJPROP_PRICE * 100 + 1] - SIM.objs[PFX "F_RES_Z"].d[OBJPROP_PRICE * 100 + 0];
          CHECK(std::fabs(zr - 2.0 * r.b.zone) < TICK, "zone height = 2 x (0.25 x 15M ATR)");
          CHECK(has(ftxt("RES_T"), "RESISTANCE") && has(ftxt("RES_T"), DoubleToString(r.b.res, DIGITS)), "resistance label: word + price");
          CHECK(has(ftxt("SUP_T"), "SUPPORT") && has(ftxt("SUP_T"), DoubleToString(r.b.sup, DIGITS)), "support label: word + price");
          if(want > 0)
          {
             CHECK(has(ftxt("RES_H"), "BREAKOUT") && has(ftxt("RES_H"), "possible BUY"), "bull 15M: resistance says BREAKOUT = possible BUY");
-            CHECK(has(ftxt("SUP_H"), "possible BUY") && has(SIM.objs["NBSP_F_SUP_H"].s[OBJPROP_TOOLTIP], "BREAKDOWN"),
+            CHECK(has(ftxt("SUP_H"), "possible BUY") && has(SIM.objs[PFX "F_SUP_H"].s[OBJPROP_TOOLTIP], "BREAKDOWN"),
                   "bull 15M: support says sweep = possible BUY; hover: a BREAKDOWN is against the trend");
          }
          else
          {
             CHECK(has(ftxt("SUP_H"), "BREAKDOWN") && has(ftxt("SUP_H"), "possible SELL"), "bear 15M: support says BREAKDOWN = possible SELL");
-            CHECK(has(ftxt("RES_H"), "possible SELL") && has(SIM.objs["NBSP_F_RES_H"].s[OBJPROP_TOOLTIP], "BREAKOUT"),
+            CHECK(has(ftxt("RES_H"), "possible SELL") && has(SIM.objs[PFX "F_RES_H"].s[OBJPROP_TOOLTIP], "BREAKOUT"),
                   "bear 15M: resistance says sweep = possible SELL; hover: a BREAKOUT is against the trend");
          }
          CHECK(has(ftxt("MID_T"), "MIDDLE - NO ENTRY HERE"), "the middle between them is marked NO ENTRY");
-         CHECK(has(q("lv"), "SUPPORT " + DoubleToString(r.b.sup, DIGITS)) && has(q("lv"), "RESISTANCE " + DoubleToString(r.b.res, DIGITS)),
+         CHECK(has(q("mapL"), "PDH " + (r.b.pdh > 0 ? DoubleToString(r.b.pdh, DIGITS) : std::string("---"))) &&
+               has(q("mapR"), "ASIA " + (r.b.ash > 0 ? DoubleToString(r.b.ash, DIGITS) : std::string("---"))) &&
+               has(q("mapR"), "LDN " + (r.b.loh > 0 ? DoubleToString(r.b.loh, DIGITS) : std::string("---"))),
+               "15M map row: PDH, Asia and London values = the engine's (clock from two witnesses, UTC+3)");
+         CHECK(has(q("lvL"), "SUPPORT " + DoubleToString(r.b.sup, DIGITS)) && has(q("lvR"), "RESISTANCE " + DoubleToString(r.b.res, DIGITS)),
                "the table's level row names the same two prices");
          OnDeinit(0);
          done++;
@@ -300,7 +337,7 @@ int main()
          load(mk, SYM, BASE, QUOTE);
          SIM.now = nb;
          start();
-         CHECK(has(ftxt("BO"), "BREAKOUT") && SIM.objs["NBSP_F_BO"].i[OBJPROP_TIME] == r.s5.t[(size_t)j], "BREAKOUT marker on that exact candle");
+         CHECK(has(ftxt("BO"), "BREAKOUT") && SIM.objs[PFX "F_BO"].i[OBJPROP_TIME] == r.s5.t[(size_t)j], "BREAKOUT marker on that exact candle");
          CHECK(has(ftxt("BO"), r.b.trend > 0 ? "(with 15M)" : "(against 15M - no trade)"), "it says whether it is with the 15M trend");
          OnDeinit(0);
       }
@@ -321,8 +358,9 @@ int main()
          CHECK(has(q("status"), "SETTING UP"), "banner SETTING UP");
          CHECK(q("qa2") == "YES" && q("qa3") == "NO", "liquidity YES, confirmation NO");
          CHECK(has(q("qt3"), "WAIT: 5M CLOSE") && has(q("qt3"), DoubleToString(r.b.trig, DIGITS)), "confirmation row names the trigger price");
-         CHECK(has(q("next"), "wait for a 5M candle to CLOSE") && has(q("next"), DoubleToString(r.b.level, DIGITS)), "NEXT: close beyond the trigger, then the limit");
-         CHECK(countPrefix("NBSP_F_PL_") == 0, "no plan lines before READY");
+         CHECK(has(q("next1"), "wait for a 5M candle to CLOSE") && has(q("next1"), DoubleToString(r.b.trig, DIGITS)) &&
+               has(q("next2"), DoubleToString(r.b.level, DIGITS)), "NEXT: close beyond the trigger, then the limit at the level");
+         CHECK(countPrefix(PFX "F_PL_") == 0, "no plan lines before READY");
          CHECK(has(ftxt("SW"), "SWEEP"), "the sweep is marked on the chart");
          OnDeinit(0);
       }
@@ -331,7 +369,7 @@ int main()
          load(mk, SYM, BASE, QUOTE); SIM.now = nw; start();
          CHECK(has(q("status"), "WATCH") && has(q("status"), "MIDDLE"), "banner WATCH - middle");
          CHECK(q("qa1") == "NO" && has(q("qt1"), "MIDDLE:") && has(q("qt1"), "ATR"), "location NO with the distances in ATR");
-         CHECK(has(q("next"), "NEXT: wait."), "NEXT: wait, with the two prices");
+         CHECK(has(q("next1"), "NEXT: wait.") && has(q("next2"), "idea 2"), "NEXT: wait, with the two prices");
          CHECK(q("ov0") == "---", "no order");
          OnDeinit(0);
       }
@@ -343,7 +381,7 @@ int main()
          CHECK(has(q("status"), "SKIP") && has(q("status"), "ONLY " + DoubleToString(r.b.rr1, 2) + "R TO TP1"), "banner SKIP with the real R");
          CHECK(q("qa4") == "NO", "reward NO");
          CHECK(has(q("ov6"), "not a trade"), "the numbers are shown, marked not a trade");
-         CHECK(countPrefix("NBSP_F_PL_") == 0, "no plan lines for a SKIP");
+         CHECK(countPrefix(PFX "F_PL_") == 0, "no plan lines for a SKIP");
          OnDeinit(0);
       }
    }
@@ -368,8 +406,8 @@ int main()
          bool dashes = true;
          for(int k = 0; k < 5; k++) dashes = dashes && q("qa" + std::to_string(k)) == "---";
          CHECK(dashes && q("ov0") == "---", "no answers, no order on stale data");
-         CHECK(countPrefix("NBSP_F_PL_") == 0, "no live plan lines on the chart");
-         CHECK(has(q("next"), "stale data is never a plan"), "NEXT says why");
+         CHECK(countPrefix(PFX "F_PL_") == 0, "no live plan lines on the chart");
+         CHECK(has(q("next1"), "stale data is never a plan"), "NEXT says why");
          OnDeinit(0);
       }
    }
@@ -377,19 +415,19 @@ int main()
 
    begin("Q6 unsupported symbol / missing history -> no plan, no drawing");
    {
-      load(mk, (NB_MARKET == NB_MKT_CRYPTO) ? "EURUSD" : "BTCUSD", (NB_MARKET == NB_MKT_CRYPTO) ? "EUR" : "BTC", "USD");
+      load(mk, OTHER, OTHERB, "USD");
       SIM.now = mk.m5[3000].t + 20;
       start();
-      CHECK(has(q("status"), ONLY) && countPrefix("NBSP_F_") == 0, "market-only text, nothing drawn");
+      CHECK(has(q("status"), ONLY) && countPrefix(PFX "F_") == 0, "market-only text, nothing drawn");
       OnDeinit(0);
       load(mk, SYM, BASE, QUOTE);
       SIM.now = mk.m5[4000].t + 20;
       SIM.copyFail = true;
       start();
-      CHECK(has(q("status"), "MISSING DATA") && countPrefix("NBSP_F_") == 0, "history unavailable: MISSING DATA, nothing drawn");
+      CHECK(has(q("status"), "MISSING DATA") && countPrefix(PFX "F_") == 0, "history unavailable: MISSING DATA, nothing drawn");
       SIM.copyFail = false;
       OnTimer();
-      CHECK(!has(q("status"), "MISSING DATA") && countPrefix("NBSP_F_") > 0, "recovers once history loads");
+      CHECK(!has(q("status"), "MISSING DATA") && countPrefix(PFX "F_") > 0, "recovers once history loads");
       OnDeinit(0);
    }
    end("Q6");
@@ -399,17 +437,17 @@ int main()
       if(nReadyB > 0)
       {
          load(mk, SYM, BASE, QUOTE); SIM.now = nReadyB; start();
-         auto tq = snapPrefix("NBSP_Q_"), tf = snapPrefix("NBSP_F_");
+         auto tq = snapPrefix(PFX "Q_"), tf = snapPrefix(PFX "F_");
          OnDeinit(0);
          start();
-         CHECK(sameObjs(tq, snapPrefix("NBSP_Q_")) && sameObjs(tf, snapPrefix("NBSP_F_")), "restart: table and drawing identical");
+         CHECK(sameObjs(tq, snapPrefix(PFX "Q_")) && sameObjs(tf, snapPrefix(PFX "F_")), "restart: table and drawing identical");
          OnDeinit(0);
          load(mk, SYM, BASE, QUOTE); SIM.now = nReadyB;
          for(auto *ser : {&SIM.m5, &SIM.m15})
             for(auto &b : *ser)
                if(b.time <= nReadyB && b.time + (ser == &SIM.m5 ? 300 : 900) > nReadyB) { b.low -= PRICE * 0.05; b.high += PRICE * 0.05; b.close -= PRICE * 0.04; }
          start();
-         auto tq2 = snapPrefix("NBSP_Q_"), tf2 = snapPrefix("NBSP_F_");
+         auto tq2 = snapPrefix(PFX "Q_"), tf2 = snapPrefix(PFX "F_");
          // the price line of the title row reads the live bid only through NbPx in the main panel; the table never does
          CHECK(sameObjs(tq, tq2), "a forming crash candle changes nothing in the table");
          CHECK(sameObjs(tf, tf2), "... and nothing on the chart drawing");
@@ -425,7 +463,7 @@ int main()
       if(nm > 0)
       {
          load(mk, SYM, BASE, QUOTE); SIM.now = nm; start();
-         CHECK(has(ptxt("state"), "CLICK BUY") && has(q("main"), "MAIN PANEL (NRTR rules): CLICK BUY"), "CLICK BUY on both");
+         CHECK(has(ptxt("state"), "CLICK BUY") && has(q("mainL"), "MAIN PANEL (NRTR rules): CLICK BUY"), "CLICK BUY on both");
          OnDeinit(0);
       }
       if(nw > 0)
@@ -433,13 +471,101 @@ int main()
          Ref r;
          reference(mk, nw, r);
          load(mk, SYM, BASE, QUOTE); SIM.now = nw; start();
-         CHECK(has(q("main"), "WAIT - " + NbReasonAt(r.reasons, 0)), "WAIT with the main panel's first reason");
+         CHECK(has(q("mainL"), "MAIN PANEL (NRTR rules): WAIT") && q("mainR") == NbReasonAt(r.reasons, 0), "WAIT with the main panel's first reason");
          OnDeinit(0);
       }
       CHECK(nm > 0 && nw > 0, "fixture has both moments");
    }
    end("Q8");
 
-   std::printf("\nFIVE-QUESTION INDICATOR TESTS (%s): %d checks passed, %d failed\n", NB_MARKET == NB_MKT_CRYPTO ? "crypto" : "forex", g_pass, g_fail);
+   begin("Q9 v1.06: no label over MT5's 63-character limit, markers behind the candles, table drawn after the markers");
+   {
+      // MT5 strings are UTF-16: count code points, not UTF-8 bytes
+      auto cps = [](const std::string &u) { int n = 0; for(unsigned char ch : u) if((ch & 0xC0) != 0x80) n++; return n; };
+      int moments = 0, texts = 0, over = 0, notBack = 0, notOnTop = 0;
+      std::string worst;
+      for(size_t k = 11 * 288; k + 1 < mk.m5.size(); k += 37)
+      {
+         for(int w : {1400, 1920})
+         {
+            load(mk, SYM, BASE, QUOTE);
+            SIM.chartW = w;
+            SIM.now = mk.m5[k].t + 320;
+            start();
+            // the order only matters after the next closed candle, when the
+            // main panel's chart markers are deleted and created again
+            SIM.now += 300;
+            OnTimer();
+            long long lastC = 0, firstQ = -1;
+            for(auto &kv : SIM.objs)
+            {
+               const std::string &nm = kv.first;
+               bool mine = nm.compare(0, 7, PFX "Q_") == 0 || nm.compare(0, 7, PFX "F_") == 0;
+               if(nm.compare(0, 7, PFX "C_") == 0) lastC = std::max(lastC, SIM.seqOf[nm]);
+               if(nm.compare(0, 7, PFX "Q_") == 0 && (firstQ < 0 || SIM.seqOf[nm] < firstQ)) firstQ = SIM.seqOf[nm];
+               if(!mine || !kv.second.s.count(OBJPROP_TEXT)) continue;
+               texts++;
+               int n = cps(kv.second.s[OBJPROP_TEXT]);
+               if(n > 63) { over++; if(worst.empty()) worst = nm + " (" + std::to_string(n) + "): " + kv.second.s[OBJPROP_TEXT]; }
+               if(nm.compare(0, 7, PFX "F_") == 0 && kv.second.type == OBJ_TEXT && kv.second.i[OBJPROP_BACK] != 1) notBack++;
+            }
+            if(firstQ >= 0 && lastC > 0 && firstQ < lastC) notOnTop++;
+            OnDeinit(0);
+            moments++;
+         }
+      }
+      char m[160];
+      std::snprintf(m, sizeof m, "%d texts on %d chart moments: none longer than 63 characters", texts, moments);
+      CHECK(texts > 2000 && over == 0, m);
+      std::printf("    %s\n", m);
+      if(over) std::printf("    first too long: %s\n", worst.c_str());
+      CHECK(notBack == 0, "every chart text of the table's drawing is in the background (behind candles and panels)");
+      CHECK(notOnTop == 0, "the table is created after the main panel's chart markers (drawn on top of them)");
+   }
+   end("Q9");
+
+#if NB_TEST_MARKET == 0
+   begin("Q10 SILVER on the metals panel: wider stop and stronger confirmation, shown on the table");
+   {
+      Market ms;
+      ms.m5 = gen5m(11, 16 * 288, T0, 30.0, 0.001, 0.02);
+      ms.m15 = agg(ms.m5, 900);
+      g_refSilver = true;
+      long long now = findNow(ms, [](const Ref &r) { return r.b.status == NB_FQ_READY && r.pl[(size_t)r.b.plan].idx == r.s5.n - 1 &&
+                                                            r.pl[(size_t)r.b.plan].kind == NB_PK_SWEEP; });
+      CHECK(now > 0, "silver fixture has a READY sweep moment (reference run with the silver settings)");
+      if(now > 0)
+      {
+         Ref r;
+         reference(ms, now, r);
+         const NbFqPlan &g = r.pl[(size_t)r.b.plan];
+         double expectSl = (g.dir > 0) ? NbRoundTick(g.ext - InpSlBufferAtr * InpFqSilverSlMult * r.s5.atr[(size_t)g.idx], 0.001, 3, -1)
+                                       : NbRoundTick(g.ext + InpSlBufferAtr * InpFqSilverSlMult * r.s5.atr[(size_t)g.idx], 0.001, 3, 1);
+         CHECK(std::fabs(g.sl - expectSl) < 1e-9, "engine SL = sweep extreme -/+ 0.10 x 5M ATR x 2.0 (silver stop)");
+         SIM = SimState();
+         SIM.sym = "XAGUSD"; SIM.base = "XAG"; SIM.profit = "USD"; SIM.digits = 3; SIM.tick = 0.001;
+         SIM.tickValue = 5.0; SIM.volMin = 0.01; SIM.gmtOff = 3 * 3600;
+         SIM.m5 = toRates(ms.m5); SIM.m15 = toRates(ms.m15);
+         _Symbol = "XAGUSD";
+         SIM.now = now;
+         start();
+         CHECK(has(q("title"), "SILVER  -  15M"), "title: SILVER");
+         CHECK(has(q("status"), "READY") && has(q("status"), DoubleToString(g.entry, 3)), "READY with the silver engine's entry");
+         CHECK(has(q("ov1"), DoubleToString(g.sl, 3)), "SL row = the wider silver stop");
+         CHECK(q("footR") == "SILVER: stop x2.0, confirm +0.25 ATR", "the table says which silver settings are in force");
+         std::printf("    silver READY at %s: %s  SL %s\n", TimeToString(now, TIME_DATE | TIME_MINUTES).c_str(), q("ov0").c_str(), q("ov1").c_str());
+         OnDeinit(0);
+      }
+      g_refSilver = false;
+      load(mk, SYM, BASE, QUOTE);
+      SIM.now = nReadyB;
+      start();
+      CHECK(q("footR") == "A hypothesis until the count says otherwise.", "gold: plain rules, no silver note");
+      OnDeinit(0);
+   }
+   end("Q10");
+#endif
+
+   std::printf("\nFIVE-QUESTION INDICATOR TESTS (%s): %d checks passed, %d failed\n", MKT, g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
 }

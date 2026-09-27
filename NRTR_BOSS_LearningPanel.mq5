@@ -66,9 +66,21 @@
 //|  * LOTS FOR x% RISK: balance (read only) x risk% / money per lot |
 //|    at the SL, rounded DOWN to the volume step. A suggestion you  |
 //|    type yourself; the panel never sizes or sends anything.       |
+//|  v1.05 FIVE-QUESTION PLAN (the same table as the crypto / forex  |
+//|    twins, bottom middle; the main panel is unchanged): TREND =   |
+//|    15M HH/HL or LH/LL; LOCATION = at a mapped level (prev day    |
+//|    H/L, Asia H/L, London H/L, confirmed 15M swings); LIQUIDITY = |
+//|    swept, or broken by a 5M close; CONFIRMATION = 5M close       |
+//|    beyond the sweep candle (or the breakout close); REWARD =     |
+//|    next level >= 1.5R. All five = READY: a PENDING LIMIT at the  |
+//|    level, SL beyond the structure, TP1/TP2 = the next levels.    |
+//|    SILVER gets a wider stop and a stronger confirmation close    |
+//|    (inputs). Asia / London need the broker clock proven by two   |
+//|    witnesses (server vs PC). Stale data = NO TRADE. Every plan   |
+//|    is recorded and counted. Nothing is sent. See CHANGELOG.md.   |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - learning tool"
-#property version     "1.04"
+#property version     "1.05"
 #property description "Gold/Silver NRTR BOSS learning panel: 15M direction, 5M timing. CUSTOM ATR-NRTR."
 #property description "Visual decision support only - never places, modifies or closes orders."
 #property indicator_chart_window
@@ -1195,6 +1207,1157 @@ string NbSignalStatusText(int status)
    }
    return "";
 }
+
+//=== NB_FQ_BEGIN === (identical text in all three files - tests/check_fq_blocks.py)
+//+------------------------------------------------------------------+
+//| v1.05 FIVE-QUESTION PLAN (the bottom-middle table)               |
+//| A SECOND, SEPARATE rule set. It does not read or change the main |
+//| panel's decision; it answers five questions on every CLOSED 5M   |
+//| bar, with the 15M as the map:                                    |
+//|   1 TREND         15M confirmed structure: HH+HL or LH+LL        |
+//|   2 LOCATION      price is at a mapped level (previous broker day |
+//|                   high/low, Asia high/low, London high/low, the  |
+//|                   last confirmed 15M swings), not in the middle  |
+//|   3 LIQUIDITY     the level was SWEPT (pierced from the trade    |
+//|                   side, then back) or BROKEN by a 5M CLOSE       |
+//|   4 CONFIRMATION  sweep: a 5M candle CLOSES beyond the sweep     |
+//|                   candle's high (low) with its body; breakout:   |
+//|                   the breakout close itself (a body, not a wick) |
+//|   5 REWARD        the next mapped level is >= minRR away         |
+//| All five = READY: a PENDING LIMIT at the level (the retest), SL  |
+//| beyond the structure, TP1 / TP2 = the next mapped levels. With   |
+//| the 15M trend only (no counter-trend plan). A plan is frozen at  |
+//| the close where it appears and followed bar by bar; its outcome  |
+//| is recorded so it can be COUNTED (n<20 is luck, ~100 to judge).  |
+//| Causal: bar i uses 5M bars <= i, 15M bars closed by then, swings |
+//| confirmed by then, session ranges that had ENDED by then.        |
+//| It never places anything. It is a plan you may type yourself.    |
+//+------------------------------------------------------------------+
+
+// level sources (bit mask: one merged level can carry several)
+#define NB_LV_PDH 0x1     // previous broker day high
+#define NB_LV_PDL 0x2     // previous broker day low
+#define NB_LV_ASH 0x4     // Asia high (latest ENDED Asia window)
+#define NB_LV_ASL 0x8     // Asia low
+#define NB_LV_LOH 0x10    // London high (latest ENDED London window)
+#define NB_LV_LOL 0x20    // London low
+#define NB_LV_SWH 0x40    // confirmed 15M swing high
+#define NB_LV_SWL 0x80    // confirmed 15M swing low
+
+#define NB_FQ_SWINGS        4     // last confirmed 15M swing highs AND lows used as levels (each)
+#define NB_FQ_SESS_MIN_BARS 12    // a day / Asia / London range needs >= this many closed 5M bars
+#define NB_FQ_OPEN_MAX      144   // a filled plan with neither TP1 nor SL after 144 x 5M (12 h) = TIMED OUT
+
+// plan kind
+#define NB_PK_NONE  0
+#define NB_PK_SWEEP 1     // sweep -> rejection -> structure break -> retest
+#define NB_PK_BREAK 2     // breakout / breakdown close -> retest -> continuation
+
+// table status of a closed 5M bar
+#define NB_FQ_NOTRADE 0   // a question is badly missing (no trend, no data)
+#define NB_FQ_WATCH   1   // trend yes, no sweep / break at a level yet (levels drawn in advance)
+#define NB_FQ_SETUP   2   // swept, waiting for the confirmation close
+#define NB_FQ_SKIP    3   // confirmed, but no stop / no target / not enough room
+#define NB_FQ_READY   4   // all five YES: the pending limit is valid
+#define NB_FQ_FILLED  5   // the limit was touched: running to TP1 / SL
+
+// the one reason behind the status
+#define NB_FW_NONE      0
+#define NB_FW_NO_DATA   1
+#define NB_FW_UNCONF    2
+#define NB_FW_MIXED     3
+#define NB_FW_NO_LEVELS 4
+#define NB_FW_MIDDLE    5
+#define NB_FW_AT_LEVEL  6
+#define NB_FW_WAIT_CONF 7
+#define NB_FW_NO_STOP   8
+#define NB_FW_NO_TARGET 9
+#define NB_FW_LOW_RR    10
+#define NB_FW_PENDING   11
+#define NB_FW_FILLED    12
+#define NB_FW_AT_BREAK  13   // at the level a breakout / breakdown close would break
+
+// plan outcome
+#define NB_PO_PENDING   1   // limit not touched yet
+#define NB_PO_FILLED    2   // limit touched, open
+#define NB_PO_TP1       3
+#define NB_PO_SL        4
+#define NB_PO_EXPIRED   5   // not filled within validBars
+#define NB_PO_MISSED    6   // price reached TP1 before the limit filled (no chase)
+#define NB_PO_CANCELLED 7   // 15M structure turned while the limit was pending
+#define NB_PO_TIMEOUT   8   // filled, neither TP1 nor SL within NB_FQ_OPEN_MAX bars
+
+struct NbFqCfg
+{
+   double   zoneAtr;       // level zone half-width and merge width, x 15M ATR
+   int      window;        // sweep / breakout must be inside the last `window` closed 5M bars
+   double   minRR;         // minimum reward to TP1, in R
+   int      validBars;     // a pending limit lives this many closed 5M bars
+   int      openMax;       // a filled plan times out after this many closed 5M bars
+   int      asiaStart;     // UTC hours [start, end)
+   int      asiaEnd;
+   int      lonStart;
+   int      lonEnd;
+   bool     clockOk;       // Asia / London need a known UTC offset; the day levels do not
+   long     offset;        // broker server time - UTC, seconds
+   double   slBufMult;     // v1.06: SL buffer multiplier (1.0; silver: wider stops)
+   double   confirmAtr;    // v1.06: the confirmation close must pass by this x 5M ATR (0; silver: stronger)
+};
+
+struct NbLv
+{
+   double   price;
+   int      src;           // NB_LV_* mask
+   int      pri;           // merge priority: 1 day, 2 London, 3 Asia, 4 swing (lower wins)
+};
+
+struct NbFqPlan
+{
+   int      idx;           // 5M bar at whose close the plan appeared (READY)
+   int      dir;           // NB_BUY / NB_SELL
+   int      kind;          // NB_PK_*
+   double   level;
+   int      src;
+   int      event;         // pierce bar (sweep) or breakout close bar
+   double   ext;           // sweep extreme (sweep only)
+   double   trig;          // price the confirmation close had to pass (sweep only)
+   int      conf;          // confirmation bar
+   double   entry;         // the pending LIMIT = the level (the retest)
+   double   sl;
+   double   tp1;
+   double   tp2;           // 0 = no second level mapped
+   int      tp1Src;
+   int      tp2Src;
+   double   risk;
+   double   rr1;
+   double   rr2;
+   int      status;        // NB_PO_*
+   int      fillIdx;       // -1 = not filled
+   int      statusIdx;     // bar where the outcome was decided
+};
+
+struct NbFqBar
+{
+   // session levels known at this bar's close (0 = not known)
+   double   pdh;
+   double   pdl;
+   double   ash;
+   double   asl;
+   double   loh;
+   double   lol;
+   // the map around the close
+   double   zone;
+   double   sup;           // nearest level below the close (0 = none)
+   int      supSrc;
+   double   sup2;          // the one after it
+   double   res;           // nearest level above the close
+   int      resSrc;
+   double   res2;
+   // the five questions
+   int      trend;         // +1 15M BULL structure, -1 BEAR, 0 none
+   int      status;        // NB_FQ_*
+   int      why;           // NB_FW_*
+   int      kind;          // candidate / plan kind
+   double   level;
+   int      src;
+   int      event;
+   double   ext;
+   double   trig;
+   int      conf;          // -1 = not confirmed
+   double   entry;
+   double   sl;
+   double   tp1;
+   double   tp2;
+   int      tp1Src;
+   int      tp2Src;
+   double   risk;
+   double   rr1;
+   double   rr2;
+   int      plan;          // live plan, else the latest plan, else -1
+   bool     forming;       // carried from the previous closed bar, never evaluated
+};
+
+//--- decision fields only (the session levels are filled separately)
+void NbFqReset(NbFqBar &b)
+{
+   b.zone = 0.0;
+   b.sup = 0.0;
+   b.supSrc = 0;
+   b.sup2 = 0.0;
+   b.res = 0.0;
+   b.resSrc = 0;
+   b.res2 = 0.0;
+   b.trend = 0;
+   b.status = NB_FQ_NOTRADE;
+   b.why = NB_FW_NONE;
+   b.kind = NB_PK_NONE;
+   b.level = 0.0;
+   b.src = 0;
+   b.event = -1;
+   b.ext = 0.0;
+   b.trig = 0.0;
+   b.conf = -1;
+   b.entry = 0.0;
+   b.sl = 0.0;
+   b.tp1 = 0.0;
+   b.tp2 = 0.0;
+   b.tp1Src = 0;
+   b.tp2Src = 0;
+   b.risk = 0.0;
+   b.rr1 = 0.0;
+   b.rr2 = 0.0;
+   b.plan = -1;
+   b.forming = false;
+}
+
+void NbFqCopy(NbFqBar &d, const NbFqBar &s)
+{
+   d.zone = s.zone;
+   d.sup = s.sup;
+   d.supSrc = s.supSrc;
+   d.sup2 = s.sup2;
+   d.res = s.res;
+   d.resSrc = s.resSrc;
+   d.res2 = s.res2;
+   d.trend = s.trend;
+   d.status = s.status;
+   d.why = s.why;
+   d.kind = s.kind;
+   d.level = s.level;
+   d.src = s.src;
+   d.event = s.event;
+   d.ext = s.ext;
+   d.trig = s.trig;
+   d.conf = s.conf;
+   d.entry = s.entry;
+   d.sl = s.sl;
+   d.tp1 = s.tp1;
+   d.tp2 = s.tp2;
+   d.tp1Src = s.tp1Src;
+   d.tp2Src = s.tp2Src;
+   d.risk = s.risk;
+   d.rr1 = s.rr1;
+   d.rr2 = s.rr2;
+   d.plan = s.plan;
+   d.forming = s.forming;
+}
+
+void NbFqFromPlan(NbFqBar &b, const NbFqPlan &g)
+{
+   b.kind = g.kind;
+   b.level = g.level;
+   b.src = g.src;
+   b.event = g.event;
+   b.ext = g.ext;
+   b.trig = g.trig;
+   b.conf = g.conf;
+   b.entry = g.entry;
+   b.sl = g.sl;
+   b.tp1 = g.tp1;
+   b.tp2 = g.tp2;
+   b.tp1Src = g.tp1Src;
+   b.tp2Src = g.tp2Src;
+   b.risk = g.risk;
+   b.rr1 = g.rr1;
+   b.rr2 = g.rr2;
+}
+
+void NbFqNewPlan(NbFqPlan &g, int idx, int dir, const NbFqBar &b)
+{
+   g.idx = idx;
+   g.dir = dir;
+   g.kind = b.kind;
+   g.level = b.level;
+   g.src = b.src;
+   g.event = b.event;
+   g.ext = b.ext;
+   g.trig = b.trig;
+   g.conf = b.conf;
+   g.entry = b.entry;
+   g.sl = b.sl;
+   g.tp1 = b.tp1;
+   g.tp2 = b.tp2;
+   g.tp1Src = b.tp1Src;
+   g.tp2Src = b.tp2Src;
+   g.risk = b.risk;
+   g.rr1 = b.rr1;
+   g.rr2 = b.rr2;
+   g.status = NB_PO_PENDING;
+   g.fillIdx = -1;
+   g.statusIdx = idx;
+}
+
+//--- one UTC session window [hStart, hEnd) fed bar by bar. The window's
+//    high / low become KNOWN (kH / kL) only at the close of the bar that
+//    reaches the window's end, or at the first bar after it (data gaps);
+//    a window with fewer than NB_FQ_SESS_MIN_BARS bars is never published.
+void NbFqWindow(datetime t, double hi, double lo, int sec, long offset, int hStart, int hEnd, long &id, double &wH,
+                double &wL, int &wN, datetime &wEnd, bool &pub, double &kH, double &kL)
+{
+   long u = (long)t - offset;
+   long uDay = u / 86400;
+   long sod = u - uDay * 86400;
+   bool inside = (sod >= (long)hStart * 3600 && sod < (long)hEnd * 3600);
+   if(!pub && (long)t >= (long)wEnd)
+   {
+      if(wN >= NB_FQ_SESS_MIN_BARS)
+      {
+         kH = wH;
+         kL = wL;
+      }
+      pub = true;
+   }
+   if(inside)
+   {
+      if(uDay != id)
+      {
+         id = uDay;
+         wH = hi;
+         wL = lo;
+         wN = 0;
+         pub = false;
+         wEnd = (datetime)(uDay * 86400 + (long)hEnd * 3600 + offset);
+      }
+      if(hi > wH)
+         wH = hi;
+      if(lo < wL)
+         wL = lo;
+      wN++;
+   }
+   if(!pub && (long)t + sec >= (long)wEnd)
+   {
+      if(wN >= NB_FQ_SESS_MIN_BARS)
+      {
+         kH = wH;
+         kL = wL;
+      }
+      pub = true;
+   }
+}
+
+//--- session levels for every closed 5M bar (causal).
+//    PDH / PDL: high / low of the latest COMPLETE broker day before the
+//    bar's own day (server 00:00-24:00, the same day MT5's D1 bar uses).
+//    Asia / London: high / low of the latest ENDED UTC window; they need
+//    the session clock (two witnesses, AUTO) and are 0 without it.
+void NbFqSessions(const datetime &t[], const double &h[], const double &l[], int n, int sec, const NbFqCfg &C,
+                  NbFqBar &fq[])
+{
+   long dId = -1;
+   double dH = 0.0;
+   double dL = 0.0;
+   int dN = 0;
+   double pH = 0.0;
+   double pL = 0.0;
+   long aId = -1;
+   double aH = 0.0;
+   double aL = 0.0;
+   int aN = 0;
+   datetime aEnd = 0;
+   bool aPub = true;
+   double aKH = 0.0;
+   double aKL = 0.0;
+   long oId = -1;
+   double oH = 0.0;
+   double oL = 0.0;
+   int oN = 0;
+   datetime oEnd = 0;
+   bool oPub = true;
+   double oKH = 0.0;
+   double oKL = 0.0;
+   for(int i = 0; i < n; i++)
+   {
+      long day = ((long)t[i]) / 86400;
+      if(day != dId)
+      {
+         if(dId >= 0 && dN >= NB_FQ_SESS_MIN_BARS)
+         {
+            pH = dH;
+            pL = dL;
+         }
+         dId = day;
+         dH = h[i];
+         dL = l[i];
+         dN = 0;
+      }
+      if(h[i] > dH)
+         dH = h[i];
+      if(l[i] < dL)
+         dL = l[i];
+      dN++;
+      fq[i].pdh = pH;
+      fq[i].pdl = pL;
+      fq[i].ash = 0.0;
+      fq[i].asl = 0.0;
+      fq[i].loh = 0.0;
+      fq[i].lol = 0.0;
+      if(!C.clockOk)
+         continue;
+      NbFqWindow(t[i], h[i], l[i], sec, C.offset, C.asiaStart, C.asiaEnd, aId, aH, aL, aN, aEnd, aPub, aKH, aKL);
+      NbFqWindow(t[i], h[i], l[i], sec, C.offset, C.lonStart, C.lonEnd, oId, oH, oL, oN, oEnd, oPub, oKH, oKL);
+      fq[i].ash = aKH;
+      fq[i].asl = aKL;
+      fq[i].loh = oKH;
+      fq[i].lol = oKL;
+   }
+}
+
+void NbLvAdd(NbLv &lv[], int &n, double price, int src, int pri)
+{
+   if(price <= 0.0)
+      return;
+   ArrayResize(lv, n + 1, 32);
+   lv[n].price = price;
+   lv[n].src = src;
+   lv[n].pri = pri;
+   n++;
+}
+
+//--- the levels known at one bar: its session levels plus the last
+//    NB_FQ_SWINGS confirmed 15M swing highs and lows among piv[0..pc-1]
+//    (the caller passes only swings confirmed by then). Sorted ascending;
+//    levels closer than `tol` to the first of their group become ONE level
+//    (price of the stronger source, sources OR'ed).
+int NbFqLevels(const NbFqBar &b, const NbPivot &piv[], int pc, double tol, NbLv &lv[])
+{
+   int n = 0;
+   ArrayResize(lv, 0);
+   NbLvAdd(lv, n, b.pdh, NB_LV_PDH, 1);
+   NbLvAdd(lv, n, b.pdl, NB_LV_PDL, 1);
+   NbLvAdd(lv, n, b.loh, NB_LV_LOH, 2);
+   NbLvAdd(lv, n, b.lol, NB_LV_LOL, 2);
+   NbLvAdd(lv, n, b.ash, NB_LV_ASH, 3);
+   NbLvAdd(lv, n, b.asl, NB_LV_ASL, 3);
+   int nh = 0;
+   int nlo = 0;
+   for(int p = pc - 1; p >= 0 && (nh < NB_FQ_SWINGS || nlo < NB_FQ_SWINGS); p--)
+   {
+      if(piv[p].kind > 0 && nh < NB_FQ_SWINGS)
+      {
+         NbLvAdd(lv, n, piv[p].price, NB_LV_SWH, 4);
+         nh++;
+      }
+      if(piv[p].kind < 0 && nlo < NB_FQ_SWINGS)
+      {
+         NbLvAdd(lv, n, piv[p].price, NB_LV_SWL, 4);
+         nlo++;
+      }
+   }
+   for(int a = 1; a < n; a++)
+   {
+      int k = a;
+      while(k > 0 && lv[k - 1].price > lv[k].price)
+      {
+         double tp = lv[k].price;
+         int ts = lv[k].src;
+         int tq = lv[k].pri;
+         lv[k].price = lv[k - 1].price;
+         lv[k].src = lv[k - 1].src;
+         lv[k].pri = lv[k - 1].pri;
+         lv[k - 1].price = tp;
+         lv[k - 1].src = ts;
+         lv[k - 1].pri = tq;
+         k--;
+      }
+   }
+   int m = 0;
+   double first = 0.0;
+   for(int a = 0; a < n; a++)
+   {
+      if(m > 0 && lv[a].price - first <= tol)
+      {
+         lv[m - 1].src |= lv[a].src;
+         if(lv[a].pri < lv[m - 1].pri)
+         {
+            lv[m - 1].price = lv[a].price;
+            lv[m - 1].pri = lv[a].pri;
+         }
+         continue;
+      }
+      first = lv[a].price;
+      lv[m].price = lv[a].price;
+      lv[m].src = lv[a].src;
+      lv[m].pri = lv[a].pri;
+      m++;
+   }
+   ArrayResize(lv, m);
+   return m;
+}
+
+//--- nearest levels below / above a price (lv sorted ascending)
+void NbFqNearest(const NbLv &lv[], int n, double px, NbFqBar &b)
+{
+   b.sup = 0.0;
+   b.supSrc = 0;
+   b.sup2 = 0.0;
+   b.res = 0.0;
+   b.resSrc = 0;
+   b.res2 = 0.0;
+   for(int a = 0; a < n; a++)
+   {
+      if(lv[a].price < px)
+      {
+         b.sup2 = b.sup;
+         b.sup = lv[a].price;
+         b.supSrc = lv[a].src;
+      }
+      else if(lv[a].price > px)
+      {
+         if(b.res <= 0.0)
+         {
+            b.res = lv[a].price;
+            b.resSrc = lv[a].src;
+         }
+         else if(b.res2 <= 0.0)
+            b.res2 = lv[a].price;
+      }
+   }
+}
+
+//--- index of the first level strictly beyond `from` in direction dir, -1 = none
+int NbLvBeyond(const NbLv &lv[], int n, double from, int dir)
+{
+   if(dir > 0)
+   {
+      for(int a = 0; a < n; a++)
+         if(lv[a].price > from)
+            return a;
+      return -1;
+   }
+   for(int a = n - 1; a >= 0; a--)
+      if(lv[a].price < from)
+         return a;
+   return -1;
+}
+
+//--- latest bar in (i - window, i] whose CLOSE crossed `lvl` (dir +1: from
+//    <= to >, dir -1: from >= to <). -1 = none. Display helper.
+int NbFqCross(const double &c[], int i, int window, double lvl, int dir)
+{
+   for(int j = i; j >= 1 && j > i - window; j--)
+   {
+      if(dir > 0 && c[j] > lvl && c[j - 1] <= lvl)
+         return j;
+      if(dir < 0 && c[j] < lvl && c[j - 1] >= lvl)
+         return j;
+   }
+   return -1;
+}
+
+//--- a live plan meets one closed 5M bar k (> the plan's bar).
+//    Pending: a touch of the entry = filled. On the FILL candle only the SL
+//    is judged (tick order unknown, so a TP1 touch there is not counted).
+//    TP1 reached before any fill = MISSED (no chase). validBars without a
+//    fill = EXPIRED.
+//    Filled: SAME-CANDLE RULE as the main panel: SL is tested first.
+void NbFqTrack(NbFqPlan &g, int k, double hi, double lo, int validBars, int openMax)
+{
+   if(g.status == NB_PO_PENDING)
+   {
+      bool fill = (g.dir > 0) ? (lo <= g.entry) : (hi >= g.entry);
+      if(fill)
+      {
+         g.fillIdx = k;
+         bool stop = (g.dir > 0) ? (lo <= g.sl) : (hi >= g.sl);
+         if(stop)
+         {
+            g.status = NB_PO_SL;
+            g.statusIdx = k;
+         }
+         else
+            g.status = NB_PO_FILLED;
+         return;
+      }
+      bool ran = (g.dir > 0) ? (hi >= g.tp1) : (lo <= g.tp1);
+      if(ran)
+      {
+         g.status = NB_PO_MISSED;
+         g.statusIdx = k;
+         return;
+      }
+      if(k - g.idx >= validBars)
+      {
+         g.status = NB_PO_EXPIRED;
+         g.statusIdx = k;
+      }
+      return;
+   }
+   if(g.status == NB_PO_FILLED && k > g.fillIdx)
+   {
+      bool stop = (g.dir > 0) ? (lo <= g.sl) : (hi >= g.sl);
+      bool tp = (g.dir > 0) ? (hi >= g.tp1) : (lo <= g.tp1);
+      if(stop)
+      {
+         g.status = NB_PO_SL;
+         g.statusIdx = k;
+      }
+      else if(tp)
+      {
+         g.status = NB_PO_TP1;
+         g.statusIdx = k;
+      }
+      else if(k - g.fillIdx >= openMax)
+      {
+         g.status = NB_PO_TIMEOUT;
+         g.statusIdx = k;
+      }
+   }
+}
+
+//--- the five questions on every closed 5M bar, and the plans they produce.
+//    s15 must already be computed (NbRun15) and s5 aligned to it (NbRun5:
+//    s5.map, s5.atr). piv5 are the 5M swings (for the breakout stop).
+//    lastClosed=false: the last bar is still forming and is NOT evaluated.
+void NbRunFq(const NbSeries &s5, const NbSeries &s15, const NbPivot &piv15[], int np15, const NbPivot &piv5[],
+             int np5, bool lastClosed, const NbParams &P, const NbFqCfg &C, NbFqBar &fq[], NbFqPlan &pl[], int &nPl)
+{
+   int n = s5.n;
+   ArrayResize(fq, n);
+   ArrayResize(pl, 0);
+   nPl = 0;
+   NbFqSessions(s5.t, s5.h, s5.l, n, s5.sec, C, fq);
+   int nEvalFq = lastClosed ? n : n - 1;
+   int cur = -1;       // live plan (pending or filled)
+   int latest = -1;    // latest plan of any outcome
+   int usedEv = -1;    // newest event that already produced a plan
+   int pc = 0;         // 15M swings confirmed so far
+   double minRisk = (P.tick > 0.0) ? P.tick * 0.5 : 0.0;
+   NbLv lv[];
+   for(int i = 0; i < n; i++)
+   {
+      NbFqReset(fq[i]);
+      if(i >= nEvalFq)
+      {
+         // unfinished candle: carry the last CLOSED answer, never evaluate it
+         if(i > 0)
+         {
+            NbFqCopy(fq[i], fq[i - 1]);
+            fq[i].pdh = fq[i - 1].pdh;
+            fq[i].pdl = fq[i - 1].pdl;
+            fq[i].ash = fq[i - 1].ash;
+            fq[i].asl = fq[i - 1].asl;
+            fq[i].loh = fq[i - 1].loh;
+            fq[i].lol = fq[i - 1].lol;
+         }
+         fq[i].forming = true;
+         continue;
+      }
+      // 1) the live plan meets this closed bar
+      if(cur >= 0 && i > pl[cur].idx)
+         NbFqTrack(pl[cur], i, s5.h[i], s5.l[i], C.validBars, C.openMax);
+      int k15 = s5.map[i];
+      int tr = 0;
+      if(k15 >= 0)
+      {
+         if(s15.st[k15] == NB_ST_BULL)
+            tr = 1;
+         if(s15.st[k15] == NB_ST_BEAR)
+            tr = -1;
+      }
+      // a pending limit dies when the 15M structure stops agreeing
+      if(cur >= 0 && pl[cur].status == NB_PO_PENDING && tr != pl[cur].dir)
+      {
+         pl[cur].status = NB_PO_CANCELLED;
+         pl[cur].statusIdx = i;
+      }
+      if(cur >= 0 && pl[cur].status != NB_PO_PENDING && pl[cur].status != NB_PO_FILLED)
+         cur = -1;
+      while(k15 >= 0 && pc < np15 && piv15[pc].confirmIdx <= k15)
+         pc++;
+      fq[i].trend = tr;
+      fq[i].plan = (cur >= 0) ? cur : latest;
+      if(k15 < 0 || s15.atr[k15] <= 0.0 || s5.atr[i] <= 0.0)
+      {
+         fq[i].why = NB_FW_NO_DATA;
+         continue;
+      }
+      double zone = C.zoneAtr * s15.atr[k15];
+      int nl = NbFqLevels(fq[i], piv15, pc, zone, lv);
+      fq[i].zone = zone;
+      NbFqNearest(lv, nl, s5.c[i], fq[i]);
+      if(cur >= 0)
+      {
+         NbFqFromPlan(fq[i], pl[cur]);
+         fq[i].status = (pl[cur].status == NB_PO_FILLED) ? NB_FQ_FILLED : NB_FQ_READY;
+         fq[i].why = (pl[cur].status == NB_PO_FILLED) ? NB_FW_FILLED : NB_FW_PENDING;
+         continue;
+      }
+      if(tr == 0)
+      {
+         fq[i].why = (s15.st[k15] == NB_ST_MIXED) ? NB_FW_MIXED : NB_FW_UNCONF;
+         continue;
+      }
+      if(nl == 0)
+      {
+         fq[i].why = NB_FW_NO_LEVELS;
+         continue;
+      }
+      // 2) candidate: the newest sweep or breakout of a level on the trade
+      //    side (below the close for a BUY, above it for a SELL)
+      double cl = s5.c[i];
+      int bK = NB_PK_NONE;
+      int bEv = -1;
+      int bA = -1;
+      for(int a = 0; a < nl; a++)
+      {
+         double L = lv[a].price;
+         if((tr > 0 && !(L < cl)) || (tr < 0 && !(L > cl)))
+            continue;
+         int ev = -1;
+         int kind = NB_PK_NONE;
+         // sweep: the bar before was on the trade side, this bar pierced the
+         // level; the close now is back on the trade side (checked above).
+         // The EARLIEST unused pierce inside the window starts the sweep, so
+         // a re-dip during the same sweep never moves the stop above the
+         // real sweep extreme.
+         int j0 = i - C.window + 1;
+         if(j0 < 1)
+            j0 = 1;
+         if(j0 <= usedEv)
+            j0 = usedEv + 1;
+         for(int j = j0; j <= i; j++)
+         {
+            bool pierce = (tr > 0) ? (s5.l[j] < L && s5.c[j - 1] > L) : (s5.h[j] > L && s5.c[j - 1] < L);
+            if(pierce)
+            {
+               ev = j;
+               kind = NB_PK_SWEEP;
+               break;
+            }
+         }
+         // breakout: the LATEST close through the level, with its body, held since
+         if(ev < 0)
+         {
+            for(int j = i; j >= 1 && j > i - C.window; j--)
+            {
+               bool cross = (tr > 0) ? (s5.c[j] > L && s5.c[j - 1] <= L) : (s5.c[j] < L && s5.c[j - 1] >= L);
+               if(!cross)
+                  continue;
+               double need = C.confirmAtr * s5.atr[j];
+               bool body = (tr > 0) ? (s5.c[j] > s5.o[j] && s5.c[j] > L + need) : (s5.c[j] < s5.o[j] && s5.c[j] < L - need);
+               bool held = true;
+               for(int k = j + 1; k <= i; k++)
+                  if((tr > 0 && s5.c[k] <= L) || (tr < 0 && s5.c[k] >= L))
+                     held = false;
+               if(body && held)
+               {
+                  ev = j;
+                  kind = NB_PK_BREAK;
+               }
+               break;
+            }
+         }
+         if(ev < 0 || ev <= usedEv)
+            continue;
+         bool better = (bA < 0 || ev > bEv);
+         if(!better && ev == bEv && kind == NB_PK_SWEEP && bK != NB_PK_SWEEP)
+            better = true;
+         if(!better && ev == bEv && kind == bK && MathAbs(L - cl) < MathAbs(lv[bA].price - cl))
+            better = true;
+         if(better)
+         {
+            bA = a;
+            bEv = ev;
+            bK = kind;
+         }
+      }
+      if(bA < 0)
+      {
+         // no sweep / break: LOCATION only - at the level to buy from (sell
+         // from), at the level a with-trend close would break, or nowhere
+         double lvNear = (tr > 0) ? fq[i].sup : fq[i].res;
+         double lvBrk = (tr > 0) ? fq[i].res : fq[i].sup;
+         bool at = false;
+         bool atBrk = false;
+         if(lvNear > 0.0)
+            at = (tr > 0) ? (cl - lvNear <= zone || s5.l[i] <= lvNear + zone)
+                          : (lvNear - cl <= zone || s5.h[i] >= lvNear - zone);
+         if(lvBrk > 0.0)
+            atBrk = (tr > 0) ? (lvBrk - cl <= zone || s5.h[i] >= lvBrk - zone)
+                             : (cl - lvBrk <= zone || s5.l[i] <= lvBrk + zone);
+         fq[i].status = NB_FQ_WATCH;
+         fq[i].why = at ? NB_FW_AT_LEVEL : (atBrk ? NB_FW_AT_BREAK : NB_FW_MIDDLE);
+         continue;
+      }
+      double lvl = lv[bA].price;
+      fq[i].kind = bK;
+      fq[i].level = lvl;
+      fq[i].src = lv[bA].src;
+      fq[i].event = bEv;
+      double buf = P.slBufAtr * C.slBufMult * s5.atr[i];
+      double sl = 0.0;
+      if(bK == NB_PK_SWEEP)
+      {
+         // the sweep extreme since the pierce, and the candle that made it
+         int m = bEv;
+         double ext = (tr > 0) ? s5.l[bEv] : s5.h[bEv];
+         for(int k = bEv; k <= i; k++)
+         {
+            if((tr > 0 && s5.l[k] <= ext) || (tr < 0 && s5.h[k] >= ext))
+            {
+               ext = (tr > 0) ? s5.l[k] : s5.h[k];
+               m = k;
+            }
+         }
+         // confirmation: a later candle CLOSES beyond that candle's other
+         // extreme (and beyond the level), with its body
+         double trig = (tr > 0) ? MathMax(s5.h[m], lvl) : MathMin(s5.l[m], lvl);
+         int conf = -1;
+         for(int k = m + 1; k <= i; k++)
+         {
+            double need = C.confirmAtr * s5.atr[k];
+            bool okc = (tr > 0) ? (s5.c[k] > trig + need && s5.c[k] > s5.o[k]) : (s5.c[k] < trig - need && s5.c[k] < s5.o[k]);
+            if(okc)
+            {
+               conf = k;
+               break;
+            }
+         }
+         fq[i].ext = ext;
+         fq[i].trig = trig;
+         fq[i].conf = conf;
+         if(conf < 0)
+         {
+            fq[i].status = NB_FQ_SETUP;
+            fq[i].why = NB_FW_WAIT_CONF;
+            continue;
+         }
+         sl = (tr > 0) ? NbRoundTick(ext - buf, P.tick, P.digits, -1) : NbRoundTick(ext + buf, P.tick, P.digits, 1);
+      }
+      else
+      {
+         // breakout: the close through the level IS the confirmation; the
+         // stop goes beyond the latest confirmed 5M swing behind the level
+         fq[i].conf = bEv;
+         double sw = 0.0;
+         int sp = NbFindStopSwing(piv5, np5, i, tr, lvl, NB_SL_SEARCH_BARS, sw);
+         if(sp < 0)
+         {
+            fq[i].status = NB_FQ_SKIP;
+            fq[i].why = NB_FW_NO_STOP;
+            continue;
+         }
+         sl = (tr > 0) ? NbRoundTick(sw - buf, P.tick, P.digits, -1) : NbRoundTick(sw + buf, P.tick, P.digits, 1);
+      }
+      double entry = NbRoundTick(lvl, P.tick, P.digits, 0);
+      double risk = NormalizeDouble(MathAbs(entry - sl), P.digits);
+      fq[i].entry = entry;
+      fq[i].sl = sl;
+      fq[i].risk = risk;
+      if(risk <= minRisk || risk <= 0.0 || (tr > 0 && sl >= entry) || (tr < 0 && sl <= entry))
+      {
+         fq[i].status = NB_FQ_SKIP;
+         fq[i].why = NB_FW_NO_STOP;
+         continue;
+      }
+      // 3) reward: TP1 = the next mapped level beyond the entry zone AND
+      //    beyond the current close; TP2 = the level after it. No level
+      //    mapped = reward UNKNOWN, which is never a YES.
+      double from = (tr > 0) ? MathMax(entry + zone, cl) : MathMin(entry - zone, cl);
+      int t1 = NbLvBeyond(lv, nl, from, tr);
+      if(t1 < 0)
+      {
+         fq[i].status = NB_FQ_SKIP;
+         fq[i].why = NB_FW_NO_TARGET;
+         continue;
+      }
+      int t2 = NbLvBeyond(lv, nl, lv[t1].price, tr);
+      fq[i].tp1 = lv[t1].price;
+      fq[i].tp1Src = lv[t1].src;
+      if(t2 >= 0)
+      {
+         fq[i].tp2 = lv[t2].price;
+         fq[i].tp2Src = lv[t2].src;
+      }
+      fq[i].rr1 = MathAbs(fq[i].tp1 - entry) / risk;
+      fq[i].rr2 = (t2 >= 0) ? MathAbs(fq[i].tp2 - entry) / risk : 0.0;
+      if(fq[i].rr1 < C.minRR)
+      {
+         fq[i].status = NB_FQ_SKIP;
+         fq[i].why = NB_FW_LOW_RR;
+         continue;
+      }
+      // 4) READY: the plan is frozen at this close and followed from the next bar
+      ArrayResize(pl, nPl + 1, 64);
+      NbFqNewPlan(pl[nPl], i, tr, fq[i]);
+      cur = nPl;
+      latest = nPl;
+      nPl++;
+      usedEv = bEv;
+      fq[i].status = NB_FQ_READY;
+      fq[i].why = NB_FW_PENDING;
+      fq[i].plan = cur;
+   }
+}
+
+//--- the levels a bar used, rebuilt from scratch (display and tests; the
+//    run above builds the same list incrementally)
+int NbFqLevelsAt(const NbSeries &s5, const NbSeries &s15, const NbPivot &piv15[], int np15, const NbFqCfg &C,
+                 const NbFqBar &fq[], int i, NbLv &lv[])
+{
+   ArrayResize(lv, 0);
+   if(i < 0 || i >= s5.n || i >= ArraySize(fq))
+      return 0;
+   int k15 = s5.map[i];
+   if(k15 < 0 || s15.atr[k15] <= 0.0)
+      return 0;
+   int pc = 0;
+   while(pc < np15 && piv15[pc].confirmIdx <= k15)
+      pc++;
+   return NbFqLevels(fq[i], piv15, pc, C.zoneAtr * s15.atr[k15], lv);
+}
+
+//--- outcome counts over all plans (the evidence the table prints)
+void NbFqTally(const NbFqPlan &pl[], int n, int &nTp, int &nSl, int &nUnfilled, int &nOpen, int &nTimeout)
+{
+   nTp = 0;
+   nSl = 0;
+   nUnfilled = 0;
+   nOpen = 0;
+   nTimeout = 0;
+   for(int k = 0; k < n; k++)
+   {
+      int s = pl[k].status;
+      if(s == NB_PO_TP1)
+         nTp++;
+      else if(s == NB_PO_SL)
+         nSl++;
+      else if(s == NB_PO_EXPIRED || s == NB_PO_MISSED || s == NB_PO_CANCELLED)
+         nUnfilled++;
+      else if(s == NB_PO_PENDING || s == NB_PO_FILLED)
+         nOpen++;
+      else if(s == NB_PO_TIMEOUT)
+         nTimeout++;
+   }
+}
+
+//--- v1.06: net result of the finished plans in R (TP1 = +its R, SL = -1;
+//    not filled / cancelled / timed out = 0). Evidence, not a promise.
+double NbFqNetR(const NbFqPlan &pl[], int n)
+{
+   double r = 0.0;
+   for(int k = 0; k < n; k++)
+   {
+      if(pl[k].status == NB_PO_TP1)
+         r += pl[k].rr1;
+      else if(pl[k].status == NB_PO_SL)
+         r -= 1.0;
+   }
+   return r;
+}
+
+//--- words
+string NbLvSrcText(int src)
+{
+   string t = "";
+   if((src & NB_LV_PDH) != 0)
+      t = t + ((t == "") ? "" : " + ") + "PREV DAY HIGH";
+   if((src & NB_LV_PDL) != 0)
+      t = t + ((t == "") ? "" : " + ") + "PREV DAY LOW";
+   if((src & NB_LV_LOH) != 0)
+      t = t + ((t == "") ? "" : " + ") + "LONDON HIGH";
+   if((src & NB_LV_LOL) != 0)
+      t = t + ((t == "") ? "" : " + ") + "LONDON LOW";
+   if((src & NB_LV_ASH) != 0)
+      t = t + ((t == "") ? "" : " + ") + "ASIA HIGH";
+   if((src & NB_LV_ASL) != 0)
+      t = t + ((t == "") ? "" : " + ") + "ASIA LOW";
+   if((src & NB_LV_SWH) != 0)
+      t = t + ((t == "") ? "" : " + ") + "15M SWING HIGH";
+   if((src & NB_LV_SWL) != 0)
+      t = t + ((t == "") ? "" : " + ") + "15M SWING LOW";
+   if(t == "")
+      t = "LEVEL";
+   return t;
+}
+
+string NbLvSrcShort(int src)
+{
+   string t = "";
+   if((src & NB_LV_PDH) != 0)
+      t = t + ((t == "") ? "" : "+") + "PDH";
+   if((src & NB_LV_PDL) != 0)
+      t = t + ((t == "") ? "" : "+") + "PDL";
+   if((src & NB_LV_LOH) != 0)
+      t = t + ((t == "") ? "" : "+") + "LDN H";
+   if((src & NB_LV_LOL) != 0)
+      t = t + ((t == "") ? "" : "+") + "LDN L";
+   if((src & NB_LV_ASH) != 0)
+      t = t + ((t == "") ? "" : "+") + "ASIA H";
+   if((src & NB_LV_ASL) != 0)
+      t = t + ((t == "") ? "" : "+") + "ASIA L";
+   if((src & NB_LV_SWH) != 0)
+      t = t + ((t == "") ? "" : "+") + "SWING H";
+   if((src & NB_LV_SWL) != 0)
+      t = t + ((t == "") ? "" : "+") + "SWING L";
+   if(t == "")
+      t = "LEVEL";
+   return t;
+}
+
+//--- v1.06: the long name when it is short enough for a chart label
+//    (MT5 cuts object text at 63 characters), else the short codes
+string NbLvName(int src)
+{
+   string t = NbLvSrcText(src);
+   if(StringLen(t) <= 34)
+      return t;
+   return NbLvSrcShort(src);
+}
+
+//--- v1.06: at most two short codes (+n) - fits a table cell. Strongest
+//    source first (day, London, Asia, swing), as in NbLvSrcShort.
+int NbLvBitAt(int k)
+{
+   switch(k)
+   {
+      case 0: return NB_LV_PDH;
+      case 1: return NB_LV_PDL;
+      case 2: return NB_LV_LOH;
+      case 3: return NB_LV_LOL;
+      case 4: return NB_LV_ASH;
+      case 5: return NB_LV_ASL;
+      case 6: return NB_LV_SWH;
+      case 7: return NB_LV_SWL;
+   }
+   return 0;
+}
+
+string NbLvTag(int src)
+{
+   string t = "";
+   int shown = 0;
+   int more = 0;
+   for(int b = 0; b < 8; b++)
+   {
+      int bit = NbLvBitAt(b);
+      if((src & bit) == 0)
+         continue;
+      if(shown < 2)
+      {
+         t = t + ((t == "") ? "" : "+") + NbLvSrcShort(bit);
+         shown++;
+      }
+      else
+         more++;
+   }
+   if(more > 0)
+      t = t + "+" + IntegerToString(more);
+   if(t == "")
+      t = "LEVEL";
+   return t;
+}
+
+//--- v1.06: broker clock from two witnesses (server vs PC GMT): on a half
+//    hour within 5 minutes and a plausible zone, else unknown. For files
+//    that have no session clock of their own (the metals panel).
+bool NbFqWitnessClock(datetime server, datetime gmt, long &offset)
+{
+   offset = 0;
+   if(server <= 0 || gmt <= 0)
+      return false;
+   long off = (long)server - (long)gmt;
+   long r = (long)MathRound((double)off / 1800.0) * 1800;
+   if(MathAbs(off - r) > 300)
+      return false;
+   if(r < -12 * 3600 || r > 14 * 3600)
+      return false;
+   offset = r;
+   return true;
+}
+
+string NbFqStatusText(int st)
+{
+   switch(st)
+   {
+      case NB_FQ_WATCH:  return "WATCH";
+      case NB_FQ_SETUP:  return "SETTING UP";
+      case NB_FQ_SKIP:   return "SKIP";
+      case NB_FQ_READY:  return "READY";
+      case NB_FQ_FILLED: return "FILLED";
+   }
+   return "NO TRADE";
+}
+
+string NbFqWhyText(int why)
+{
+   switch(why)
+   {
+      case NB_FW_NO_DATA:   return "15M / 5M DATA NOT READY";
+      case NB_FW_UNCONF:    return "15M STRUCTURE NOT CONFIRMED";
+      case NB_FW_MIXED:     return "15M STRUCTURE MIXED - NO SIDE";
+      case NB_FW_NO_LEVELS: return "NO LEVELS MAPPED YET";
+      case NB_FW_MIDDLE:    return "PRICE IN THE MIDDLE - NO ENTRY HERE";
+      case NB_FW_AT_LEVEL:  return "AT THE LEVEL - WAIT FOR A SWEEP";
+      case NB_FW_WAIT_CONF: return "SWEPT - WAIT FOR THE CONFIRMATION CLOSE";
+      case NB_FW_NO_STOP:   return "NO CONFIRMED 5M SWING FOR THE SL";
+      case NB_FW_NO_TARGET: return "NO MAPPED TARGET BEYOND - REWARD UNKNOWN";
+      case NB_FW_LOW_RR:    return "NEXT LEVEL TOO CLOSE - NOT ENOUGH ROOM";
+      case NB_FW_PENDING:   return "PENDING LIMIT - WAITING FOR THE RETEST";
+      case NB_FW_FILLED:    return "LIMIT FILLED - RUNNING TO TP1 / SL";
+      case NB_FW_AT_BREAK:  return "AT THE BREAKOUT LINE - WAIT FOR A 5M CLOSE BEYOND";
+   }
+   return "";
+}
+
+string NbFqOutcomeText(int st)
+{
+   switch(st)
+   {
+      case NB_PO_PENDING:   return "pending - limit not filled yet";
+      case NB_PO_FILLED:    return "filled - running";
+      case NB_PO_TP1:       return "HIT TP1";
+      case NB_PO_SL:        return "HIT SL";
+      case NB_PO_EXPIRED:   return "not filled in time";
+      case NB_PO_MISSED:    return "ran to TP1 without a fill (no chase)";
+      case NB_PO_CANCELLED: return "cancelled - 15M structure turned";
+      case NB_PO_TIMEOUT:   return "filled, no TP1 / SL in 12 h";
+   }
+   return "";
+}
+
+string NbFqKindText(int kind, int dir)
+{
+   if(kind == NB_PK_SWEEP)
+      return "SWEEP";
+   if(kind == NB_PK_BREAK)
+      return (dir > 0) ? "BREAKOUT" : "BREAKDOWN";
+   return "";
+}
+
+//--- what a level means, in words a beginner can act on.
+//    role +1 = the level is ABOVE price (resistance), -1 = BELOW (support)
+string NbFqHint(int role, int trend)
+{
+   if(role > 0)
+   {
+      if(trend > 0)
+         return "5M close ABOVE = BREAKOUT " + NbSymArrow() + " possible BUY on the retest";
+      if(trend < 0)
+         return "sweep above + 5M close back BELOW = possible SELL";
+      return "15M unclear: breakout or rejection - just watch";
+   }
+   if(trend < 0)
+      return "5M close BELOW = BREAKDOWN " + NbSymArrow() + " possible SELL on the retest";
+   if(trend > 0)
+      return "sweep below + 5M close back ABOVE = possible BUY";
+   return "15M unclear: breakdown or bounce - just watch";
+}
+
+//--- the other side of the same level: what the plan will NOT do
+string NbFqHint2(int role, int trend)
+{
+   if(role > 0 && trend < 0)
+      return "a real BREAKOUT above = against the 15M trend, no trade";
+   if(role < 0 && trend > 0)
+      return "a real BREAKDOWN below = against the 15M trend, no trade";
+   if(role > 0 && trend > 0)
+      return "a rejection here = no SELL (15M is bullish)";
+   if(role < 0 && trend < 0)
+      return "a bounce here = no BUY (15M is bearish)";
+   return "";
+}
+//=== NB_FQ_END ===
 //=== NB_ENGINE_END ===
 
 //+------------------------------------------------------------------+
@@ -1204,6 +2367,8 @@ string NbSignalStatusText(int status)
 const string NB_PFX   = "NBLP_";
 const string NB_PFX_P = "NBLP_P_";
 const string NB_PFX_C = "NBLP_C_";
+const string NB_PFX_Q = "NBLP_Q_";   // v1.05: the bottom-middle 5-question table
+const string NB_PFX_F = "NBLP_F_";   // v1.05: its chart drawing (S/R lines, zones, plan)
 #define NB_RGB(r, g, b) ((color)((r) | ((g) << 8) | ((b) << 16)))
 
 enum ENUM_NB_CORNER
@@ -1246,6 +2411,20 @@ input bool           InpCandleArrows    = true;        // Arrow on the candle wh
 input bool           InpArrowEveryBar   = false;       // Also a small arrow on every closed candle
 input bool           InpPreview         = true;        // Yellow PREVIEW on the forming candle (not a signal)
 input bool           InpBlink           = true;        // Blink the CLICK BUY / SELL banner
+input group "5-QUESTION PLAN (v1.05, bottom-middle table - nothing is sent)"
+input bool           InpFqShow          = true;        // Show the 5-question table (bottom middle)
+input bool           InpFqDraw          = true;        // Draw big support / resistance lines, zones and the plan
+input double         InpFqZoneAtr       = 0.25;        // Level zone and merge width (x 15M ATR)
+input int            InpFqWindowBars    = 12;          // Sweep / breakout must be within this many closed 5M bars
+input double         InpFqMinRR         = 1.5;         // Minimum reward to TP1 (R) - less = SKIP
+input int            InpFqValidBars     = 12;          // Pending limit valid for (closed 5M bars)
+input int            InpFqAsiaStartUtc  = 0;           // Asia range start (UTC hour)
+input int            InpFqAsiaEndUtc    = 7;           // Asia range end (UTC hour)
+input int            InpFqLondonStartUtc = 7;          // London range start (UTC hour)
+input int            InpFqLondonEndUtc  = 12;          // London range end (UTC hour)
+input int            InpFqBottomY       = 16;          // Table distance from the chart bottom (px)
+input double         InpFqSilverSlMult  = 2.0;         // SILVER: SL buffer x this (wider, volatility-adjusted stop)
+input double         InpFqSilverConfirmAtr = 0.25;     // SILVER: confirmation close must pass by this x 5M ATR
 
 // plot buffers
 double g_bEma[];
@@ -1308,6 +2487,12 @@ int      g_nyOpenSec;      // seconds after broker midnight, -1 = disabled / bad
 long     g_nyAlertDay;     // broker day (t/86400) already alerted
 double   g_swingDist;
 
+// v1.05 five-question plan state
+NbFqCfg  g_C;
+NbFqBar  g_fq[];
+NbFqPlan g_fqPlans[];
+int      g_nFqPlan;
+
 // prototypes
 int    PlotDrawType(int plot);
 void   NbUpdate();
@@ -1331,6 +2516,16 @@ string NbHms(long secs);
 void   NbPreview(bool ok, int i5, int d5, double bid, string &line1, string &line2, color &clr);
 void   NbDrawPanel();
 void   NbRow(string kid, string vid, int kx, int vx, int y, string key, string val, color vc, color kc, int fs);
+// v1.05 prototypes
+void   NbFqConfig();
+void   NbFqRecompute();
+void   NbFLine(string name, datetime t1, double price, color clr, int width, int style);
+void   NbFZone(string name, datetime t1, datetime t2, double p1, double p2, color fill);
+void   NbFqDrawChart();
+void   NbQRect(string id, int x, int y, int w, int h, color bg, color border);
+void   NbQLabel(string id, int x, int y, string txt, color clr, int size, string font, int anchor);
+color  NbQAnsColor(string ans);
+void   NbFqDrawTable();
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -1358,6 +2553,15 @@ int OnInit()
    if(!NbParamsValid(g_P) || InpHistoryDays < 3)
    {
       Print("NRTR BOSS: invalid inputs");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   if(InpFqZoneAtr <= 0.0 || InpFqZoneAtr > 2.0 || InpFqWindowBars < 2 || InpFqWindowBars > 96 || InpFqMinRR < 0.5 ||
+      InpFqMinRR > 10.0 || InpFqValidBars < 1 || InpFqValidBars > 288 || InpFqAsiaStartUtc < 0 ||
+      InpFqAsiaStartUtc >= InpFqAsiaEndUtc || InpFqAsiaEndUtc > 24 || InpFqLondonStartUtc < 0 ||
+      InpFqLondonStartUtc >= InpFqLondonEndUtc || InpFqLondonEndUtc > 24 || InpFqBottomY < 0 ||
+      InpFqSilverSlMult < 1.0 || InpFqSilverSlMult > 5.0 || InpFqSilverConfirmAtr < 0.0 || InpFqSilverConfirmAtr > 2.0)
+   {
+      Print("NRTR BOSS: invalid inputs - 5-question plan settings out of range");
       return INIT_PARAMETERS_INCORRECT;
    }
 
@@ -1425,6 +2629,10 @@ int OnInit()
       Print("NRTR BOSS: NY open time '" + InpNyOpenTime + "' is not HH:MM - NY alert disabled");
    g_nyAlertDay = -1;
    g_swingDist = (g_metal == NB_METAL_SILVER) ? InpSwingDistSilver : InpSwingDistGold;
+   ArrayResize(g_fq, 0);
+   ArrayResize(g_fqPlans, 0);
+   g_nFqPlan = 0;
+   NbFqConfig();
    if(g_swingDist < 0.0)
       g_swingDist = 0.0;
 
@@ -1461,6 +2669,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
    if(id == CHARTEVENT_CHART_CHANGE)
    {
       NbDrawPanel();
+      NbFqDrawTable();
       ChartRedraw(0);
    }
 }
@@ -1499,6 +2708,7 @@ void NbUpdate()
    }
    NbEvaluate();
    NbDrawPanel();
+   NbFqDrawTable();
    ChartRedraw(0);
 }
 
@@ -1643,12 +2853,18 @@ void NbRecompute()
       g_seen15 = 0;   // retry on the next timer tick
       g_seen5 = 0;
       ObjectsDeleteAll(0, NB_PFX_C);
+      ArrayResize(g_fq, 0);
+      ArrayResize(g_fqPlans, 0);
+      g_nFqPlan = 0;
+      ObjectsDeleteAll(0, NB_PFX_F);
       return;
    }
    NbRun15(g_s15, g_piv15, g_P);
    NbRun5(g_s5, g_piv5, g_s15, true, g_P, g_sigs, g_nSig);
    g_ready = true;
    NbDrawChart();
+   NbFqRecompute();
+   NbFqDrawChart();
 }
 
 //--- decide what the panel shows right now
@@ -2626,4 +3842,743 @@ void NbRow(string kid, string vid, int kx, int vx, int y, string key, string val
    NbLabel(kid, kx, y, key, kc, fs, "Arial", ANCHOR_LEFT_UPPER);
    NbLabel(vid, vx, y, val, vc, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
 }
+
+//+------------------------------------------------------------------+
+//| FIVE-QUESTION PLAN - the per-file adapters (v1.05 metals). Every |
+//| line between NB_FQT_BEGIN and NB_FQT_END below is identical text |
+//| in the crypto, forex and metals files; only these lines differ.  |
+//+------------------------------------------------------------------+
+string NbFqLabel()
+{
+   if(g_metal == NB_METAL_GOLD)
+      return "GOLD";
+   if(g_metal == NB_METAL_SILVER)
+      return "SILVER";
+   return "";
+}
+
+string NbFqOnlyText()
+{
+   return "GOLD / SILVER ONLY";
+}
+
+color NbFqAccent()
+{
+   return (g_metal == NB_METAL_SILVER) ? NB_RGB(200, 206, 214) : NB_RGB(212, 175, 55);
+}
+
+//--- this file has no session clock of its own: the broker's offset from
+//    UTC is taken only when two witnesses agree (server vs PC GMT)
+void NbFqClock(bool &ok, long &offset)
+{
+   ok = NbFqWitnessClock(TimeTradeServer(), TimeGMT(), offset);
+}
+
+//--- gold = the plain rules; silver = wider stop + stronger confirmation
+//    (explicit inputs, shown on the table)
+void NbFqAsset(double &slMult, double &confirmAtr, string &note)
+{
+   slMult = 1.0;
+   confirmAtr = 0.0;
+   note = "";
+   if(g_metal == NB_METAL_SILVER)
+   {
+      slMult = InpFqSilverSlMult;
+      confirmAtr = InpFqSilverConfirmAtr;
+      note = "SILVER: stop x" + DoubleToString(slMult, 1) + ", confirm +" + DoubleToString(confirmAtr, 2) + " ATR";
+   }
+}
+
+//=== NB_FQT_BEGIN === (identical text in all three files - tests/check_fq_blocks.py)
+//+------------------------------------------------------------------+
+//| FIVE-QUESTION PLAN - terminal side (v1.05, v1.06 layout)         |
+//| Own objects only: <prefix>Q_ (the bottom-middle table) and       |
+//| <prefix>F_ (big support / resistance lines, zones, plan lines,   |
+//| markers). The main panel and its chart objects are not touched.  |
+//| MT5 cuts object text at 63 characters, so every label here is    |
+//| built to stay at or under 63 (tested); long rows are two labels. |
+//| The per-file adapters NbFqLabel / NbFqOnlyText / NbFqAccent /    |
+//| NbFqClock / NbFqAsset sit just above this block.                 |
+//+------------------------------------------------------------------+
+void NbFqConfig()
+{
+   g_C.zoneAtr = InpFqZoneAtr;
+   g_C.window = InpFqWindowBars;
+   g_C.minRR = InpFqMinRR;
+   g_C.validBars = InpFqValidBars;
+   g_C.openMax = NB_FQ_OPEN_MAX;
+   g_C.asiaStart = InpFqAsiaStartUtc;
+   g_C.asiaEnd = InpFqAsiaEndUtc;
+   g_C.lonStart = InpFqLondonStartUtc;
+   g_C.lonEnd = InpFqLondonEndUtc;
+   // Asia / London need UTC: only a clock proven by two witnesses gives
+   // it. Unknown = those levels are not known (never guessed).
+   bool ok = false;
+   long off = 0;
+   NbFqClock(ok, off);
+   g_C.clockOk = ok;
+   g_C.offset = ok ? off : 0;
+   double slm = 1.0;
+   double cfa = 0.0;
+   string note = "";
+   NbFqAsset(slm, cfa, note);
+   g_C.slBufMult = slm;
+   g_C.confirmAtr = cfa;
+}
+
+void NbFqRecompute()
+{
+   NbFqConfig();
+   NbRunFq(g_s5, g_s15, g_piv15, g_s15.np, g_piv5, g_s5.np, true, g_P, g_C, g_fq, g_fqPlans, g_nFqPlan);
+}
+
+//--- a horizontal line that runs to the right edge and beyond (drawn in advance)
+void NbFLine(string name, datetime t1, double price, color clr, int width, int style)
+{
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_TREND, 0, t1, price, t1 + 300, price);
+   ObjectSetInteger(0, name, OBJPROP_TIME, 0, t1);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 0, price);
+   ObjectSetInteger(0, name, OBJPROP_TIME, 1, t1 + 300);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 1, price);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
+   ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+}
+
+//--- a filled zone behind the candles, from t1 to t2 (t2 may be in the future)
+void NbFZone(string name, datetime t1, datetime t2, double p1, double p2, color fill)
+{
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_RECTANGLE, 0, t1, p1, t2, p2);
+   ObjectSetInteger(0, name, OBJPROP_TIME, 0, t1);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 0, p1);
+   ObjectSetInteger(0, name, OBJPROP_TIME, 1, t2);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 1, p2);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, fill);
+   ObjectSetInteger(0, name, OBJPROP_FILL, true);
+   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+}
+
+//--- chart text drawn in the BACKGROUND (v1.06): behind the candles and
+//    therefore never on top of the main panel or the table
+void NbFText(string name, datetime t, double price, string txt, color clr, int size, int anchor, string tip)
+{
+   NbText(name, t, price, txt, clr, size, anchor, tip);
+   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+}
+
+//--- chart: every mapped level (thin), the nearest SUPPORT and RESISTANCE
+//    (big line + zone reaching 6 h into the future + what it means in
+//    words), the middle, breakout / breakdown closes, the live plan and a
+//    marker per plan in history. Redrawn on every new closed bar.
+void NbFqDrawChart()
+{
+   ObjectsDeleteAll(0, NB_PFX_F);
+   // the table is recreated right after this (same refresh), so it is drawn
+   // after the chart markers and stays on top of them
+   ObjectsDeleteAll(0, NB_PFX_Q);
+   if(!InpFqDraw || !g_ready || g_s5.n < 1 || ArraySize(g_fq) != g_s5.n)
+      return;
+   int i = g_s5.n - 1;
+   NbLv lv[];
+   int nl = NbFqLevelsAt(g_s5, g_s15, g_piv15, g_s15.np, g_C, g_fq, i, lv);
+   datetime tNow = g_s5.t[i] + g_s5.sec;          // open of the forming 5M bar
+   datetime tL = tNow - 12 * 3600;                 // lines start 12 h back
+   datetime tR = tNow + 6 * 3600;                  // zones reach 6 h ahead: drawn BEFORE price gets there
+   int tr = g_fq[i].trend;
+   double zone = g_fq[i].zone;
+   double cl = g_s5.c[i];
+   color cUp = NB_RGB(46, 204, 113);
+   color cDn = NB_RGB(231, 76, 60);
+   color cMid = NB_RGB(150, 150, 150);
+
+   for(int a = 0; a < nl; a++)
+   {
+      if(lv[a].price == g_fq[i].sup || lv[a].price == g_fq[i].res)
+         continue;   // the nearest two are drawn big below
+      color lc = (lv[a].price > cl) ? NB_RGB(170, 90, 90) : NB_RGB(80, 160, 110);
+      string nm = NB_PFX_F + "LV_" + IntegerToString(a);
+      NbFLine(nm, tL, lv[a].price, lc, 1, STYLE_DOT);
+      NbFText(nm + "_T", tNow, lv[a].price, NbLvName(lv[a].src) + "  " + NbPx(lv[a].price), lc, 7, ANCHOR_RIGHT_LOWER,
+              "Mapped level (" + NbLvSrcText(lv[a].src) + "). " + ((lv[a].price > cl) ? "Above price = resistance." : "Below price = support."));
+   }
+   if(g_fq[i].res > 0.0)
+   {
+      double rv = g_fq[i].res;
+      NbFZone(NB_PFX_F + "RES_Z", tL, tR, rv - zone, rv + zone, NB_RGB(70, 24, 24));
+      NbFLine(NB_PFX_F + "RES", tL, rv, cDn, 3, STYLE_SOLID);
+      NbFText(NB_PFX_F + "RES_T", tNow, rv + zone, "RESISTANCE " + NbPx(rv) + "  (" + NbLvName(g_fq[i].resSrc) + ")", cDn, 10,
+              ANCHOR_RIGHT_LOWER, "Nearest level ABOVE price (" + NbLvSrcText(g_fq[i].resSrc) + "). Zone = +/- " +
+              DoubleToString(g_C.zoneAtr, 2) + " x 15M ATR.");
+      NbFText(NB_PFX_F + "RES_H", tNow, rv - zone, NbFqHint(1, tr), cDn, 8, ANCHOR_RIGHT_UPPER, NbFqHint2(1, tr));
+   }
+   if(g_fq[i].sup > 0.0)
+   {
+      double sv = g_fq[i].sup;
+      NbFZone(NB_PFX_F + "SUP_Z", tL, tR, sv - zone, sv + zone, NB_RGB(20, 60, 36));
+      NbFLine(NB_PFX_F + "SUP", tL, sv, cUp, 3, STYLE_SOLID);
+      NbFText(NB_PFX_F + "SUP_T", tNow, sv - zone, "SUPPORT " + NbPx(sv) + "  (" + NbLvName(g_fq[i].supSrc) + ")", cUp, 10,
+              ANCHOR_RIGHT_UPPER, "Nearest level BELOW price (" + NbLvSrcText(g_fq[i].supSrc) + "). Zone = +/- " +
+              DoubleToString(g_C.zoneAtr, 2) + " x 15M ATR.");
+      NbFText(NB_PFX_F + "SUP_H", tNow, sv + zone, NbFqHint(-1, tr), cUp, 8, ANCHOR_RIGHT_LOWER, NbFqHint2(-1, tr));
+   }
+   if(g_fq[i].res > 0.0 && g_fq[i].sup > 0.0)
+   {
+      double mid = NbRoundTick((g_fq[i].res + g_fq[i].sup) / 2.0, g_P.tick, g_P.digits, 0);
+      NbFLine(NB_PFX_F + "MID", tL, mid, cMid, 1, STYLE_DASH);
+      NbFText(NB_PFX_F + "MID_T", tNow, mid, "MIDDLE - NO ENTRY HERE", cMid, 8, ANCHOR_RIGHT_LOWER,
+              "Halfway between support and resistance: the middle of nowhere.");
+   }
+   // BREAKOUT / BREAKDOWN: the latest 5M close through the nearest levels
+   int bo = (g_fq[i].sup > 0.0) ? NbFqCross(g_s5.c, i, g_C.window, g_fq[i].sup, 1) : -1;
+   int bd = (g_fq[i].res > 0.0) ? NbFqCross(g_s5.c, i, g_C.window, g_fq[i].res, -1) : -1;
+   if(bo >= 0)
+      NbFText(NB_PFX_F + "BO", g_s5.t[bo], g_s5.h[bo] + g_s5.atr[bo] * 0.3,
+              NbSymUp() + " BREAKOUT" + ((tr > 0) ? " (with 15M)" : " (against 15M - no trade)"), cUp, 9, ANCHOR_LOWER,
+              "5M candle CLOSED above " + NbPx(g_fq[i].sup) + ". Old resistance = new support (retest).");
+   if(bd >= 0)
+      NbFText(NB_PFX_F + "BD", g_s5.t[bd], g_s5.l[bd] - g_s5.atr[bd] * 0.3,
+              NbSymDown() + " BREAKDOWN" + ((tr < 0) ? " (with 15M)" : " (against 15M - no trade)"), cDn, 9, ANCHOR_UPPER,
+              "5M candle CLOSED below " + NbPx(g_fq[i].res) + ". Old support = new resistance (retest).");
+   // the sweep being watched right now
+   if(g_fq[i].kind == NB_PK_SWEEP && g_fq[i].event >= 0 && g_fq[i].status != NB_FQ_READY && g_fq[i].status != NB_FQ_FILLED)
+   {
+      int e = g_fq[i].event;
+      NbFText(NB_PFX_F + "SW", g_s5.t[e], g_fq[i].ext, "SWEEP", NB_RGB(241, 196, 15), 9, (tr > 0) ? ANCHOR_UPPER : ANCHOR_LOWER,
+              "Level " + NbPx(g_fq[i].level) + " pierced to " + NbPx(g_fq[i].ext) + ". Confirmation = a 5M close " +
+              ((tr > 0) ? "above " : "below ") + NbPx(g_fq[i].trig));
+   }
+   // one marker per plan in history (hover: levels + what happened)
+   for(int k = 0; k < g_nFqPlan; k++)
+   {
+      int s = g_fqPlans[k].idx;
+      if(s < 0 || s >= g_s5.n)
+         continue;
+      string side = (g_fqPlans[k].dir > 0) ? "BUY" : "SELL";
+      string tip = "5-QUESTION PLAN " + side + " LIMIT " + NbPx(g_fqPlans[k].entry) + " SL " + NbPx(g_fqPlans[k].sl) + " TP1 " +
+                   NbPx(g_fqPlans[k].tp1) + " (" + DoubleToString(g_fqPlans[k].rr1, 2) + "R) - " + NbFqOutcomeText(g_fqPlans[k].status);
+      double off = g_s5.atr[s] * 0.6;
+      string nm = NB_PFX_F + "PM_" + IntegerToString(s);
+      string txt = "PLAN " + side + " (" + NbFqKindText(g_fqPlans[k].kind, g_fqPlans[k].dir) + ")";
+      if(g_fqPlans[k].dir > 0)
+         NbFText(nm, g_s5.t[s], g_s5.l[s] - off, NbSymUp() + " " + txt, cUp, 9, ANCHOR_UPPER, tip);
+      else
+         NbFText(nm, g_s5.t[s], g_s5.h[s] + off, NbSymDown() + " " + txt, cDn, 9, ANCHOR_LOWER, tip);
+   }
+   // the live plan: its lines start at the plan's candle and run ahead
+   int p = g_fq[i].plan;
+   if(p >= 0 && p < g_nFqPlan && (g_fq[i].status == NB_FQ_READY || g_fq[i].status == NB_FQ_FILLED))
+   {
+      datetime tp0 = g_s5.t[g_fqPlans[p].idx];
+      string side = (g_fqPlans[p].dir > 0) ? "BUY LIMIT" : "SELL LIMIT";
+      NbFLine(NB_PFX_F + "PL_E", tp0, g_fqPlans[p].entry, clrWhite, 2, STYLE_SOLID);
+      NbFText(NB_PFX_F + "PL_E_T", tp0, g_fqPlans[p].entry, side + "  " + NbPx(g_fqPlans[p].entry) + "  (you type it)", clrWhite, 9,
+              ANCHOR_LEFT_LOWER, "Pending limit at the level = the retest. Nothing is sent.");
+      NbFLine(NB_PFX_F + "PL_SL", tp0, g_fqPlans[p].sl, cDn, 1, STYLE_DASH);
+      NbFText(NB_PFX_F + "PL_SL_T", tp0, g_fqPlans[p].sl, "SL  " + NbPx(g_fqPlans[p].sl), cDn, 8, ANCHOR_LEFT_LOWER, "Beyond the structure.");
+      NbFLine(NB_PFX_F + "PL_T1", tp0, g_fqPlans[p].tp1, cUp, 1, STYLE_DASH);
+      NbFText(NB_PFX_F + "PL_T1_T", tp0, g_fqPlans[p].tp1, "TP1  " + NbPx(g_fqPlans[p].tp1) + "  " + DoubleToString(g_fqPlans[p].rr1, 2) + "R",
+              cUp, 8, ANCHOR_LEFT_LOWER, "Next mapped level: " + NbLvSrcText(g_fqPlans[p].tp1Src));
+      if(g_fqPlans[p].tp2 > 0.0)
+      {
+         NbFLine(NB_PFX_F + "PL_T2", tp0, g_fqPlans[p].tp2, cUp, 1, STYLE_DOT);
+         NbFText(NB_PFX_F + "PL_T2_T", tp0, g_fqPlans[p].tp2, "TP2  " + NbPx(g_fqPlans[p].tp2) + "  " + DoubleToString(g_fqPlans[p].rr2, 2) + "R",
+                 cUp, 8, ANCHOR_LEFT_LOWER, "The mapped level after TP1: " + NbLvSrcText(g_fqPlans[p].tp2Src));
+      }
+   }
+}
+
+void NbQRect(string id, int x, int y, int w, int h, color bg, color border)
+{
+   string name = NB_PFX_Q + id;
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, h);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, border);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 10);
+}
+
+void NbQLabel(string id, int x, int y, string txt, color clr, int size, string font, int anchor)
+{
+   string name = NB_PFX_Q + id;
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, anchor);
+   ObjectSetString(0, name, OBJPROP_TEXT, txt);
+   ObjectSetString(0, name, OBJPROP_FONT, font);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 11);
+}
+
+//--- YES / NO / ?? in colour
+color NbQAnsColor(string ans)
+{
+   if(ans == "YES")
+      return NB_RGB(46, 204, 113);
+   if(ans == "NO")
+      return NB_RGB(231, 76, 60);
+   if(ans == "??")
+      return NB_RGB(241, 196, 15);
+   return NB_RGB(95, 105, 120);
+}
+
+//--- the bottom-middle table. Redrawn every second (price, clock); the
+//    answers come from the last CLOSED 5M bar. Stale data = NO TRADE.
+void NbFqDrawTable()
+{
+   if(!InpFqShow)
+   {
+      ObjectsDeleteAll(0, NB_PFX_Q);
+      return;
+   }
+   double sc = MathMax(0.7, MathMin(1.6, InpPanelScale));
+   int W = (int)MathRound(760 * sc);
+   int rh = (int)MathRound(15 * sc);
+   int pad = (int)MathRound(10 * sc);
+   int fs = (int)MathRound(9 * sc);
+   int fsS = (int)MathRound(8 * sc);
+   int fsT = (int)MathRound(11 * sc);
+   int fsB = (int)MathRound(13 * sc);
+   int bannerH = (int)MathRound(26 * sc);
+   int H = pad * 2 + bannerH + 16 * rh + (int)MathRound(8 * sc);
+   int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0);
+   int ch = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS, 0);
+   // bottom MIDDLE; pushed sideways only if it would cover the main panel
+   int pw = (int)MathRound(430 * sc);   // the main panel's width (NbDrawPanel)
+   int ox = (cw - W) / 2;
+   if(InpPanelCorner == NB_TOP_LEFT || InpPanelCorner == NB_BOTTOM_LEFT)
+   {
+      if(ox < InpPanelX + pw + 8)
+         ox = InpPanelX + pw + 8;
+   }
+   else if(ox + W > cw - InpPanelX - pw - 8)
+      ox = cw - InpPanelX - pw - 8 - W;
+   if(ox < 0)
+      ox = 0;
+   int oy = ch - H - InpFqBottomY;
+   if(oy < 0)
+      oy = 0;
+   int xr = ox + (int)MathRound(400 * sc);   // right half of the split rows
+
+   color cBg = NB_RGB(16, 20, 28);
+   color cMkt = NbFqAccent();
+   color cKey = NB_RGB(140, 150, 165);
+   color cVal = NB_RGB(235, 238, 242);
+   color cUp = NB_RGB(46, 204, 113);
+   color cDn = NB_RGB(231, 76, 60);
+   color cWait = NB_RGB(241, 196, 15);
+   color cSkip = NB_RGB(230, 126, 34);
+   color cDim = NB_RGB(95, 105, 120);
+   color cFill = NB_RGB(80, 160, 255);
+
+   string lbl = NbFqLabel();
+   bool ok = (lbl != "" && g_ready && g_s5.n > 0 && g_s15.n > 0 && ArraySize(g_fq) == g_s5.n);
+   int i = ok ? g_s5.n - 1 : 0;
+   string limW = "";   // "BUY LIMIT " / "SELL LIMIT " (set below, used in several rows)
+   bool gate = ok && g_fresh;           // STALE DATA IS NEVER A PLAN
+   int tr = gate ? g_fq[i].trend : 0;
+   int st = gate ? g_fq[i].status : NB_FQ_NOTRADE;
+   int why = gate ? g_fq[i].why : NB_FW_NONE;
+   int kind = gate ? g_fq[i].kind : NB_PK_NONE;
+   int p = ok ? g_fq[i].plan : -1;
+   bool live = gate && p >= 0 && p < g_nFqPlan && (st == NB_FQ_READY || st == NB_FQ_FILLED);
+   int dir = live ? g_fqPlans[p].dir : tr;
+   int k15 = ok ? g_s5.map[i] : -1;
+   double atr15 = (ok && k15 >= 0) ? g_s15.atr[k15] : 0.0;
+   // stale data never shows a live plan on the chart either; the lines come
+   // back by themselves when the data is live again
+   if(ok && InpFqDraw)
+   {
+      bool drawn = (ObjectFind(0, NB_PFX_F + "PL_E") >= 0);
+      if(!gate && drawn)
+         ObjectsDeleteAll(0, NB_PFX_F + "PL_");
+      else if(gate && live && !drawn)
+         NbFqDrawChart();
+   }
+   limW = (dir > 0) ? "BUY LIMIT " : "SELL LIMIT ";
+   string beyondW = (dir > 0) ? "ABOVE " : "BELOW ";
+
+   NbQRect("bg", ox, oy, W, H, cBg, cMkt);
+   int y = oy + pad;
+
+   // title: symbol and the 15M side
+   string trTxt = "NO CLEAR TREND";
+   color trC = cWait;
+   if(tr > 0)
+   {
+      trTxt = "BULLISH";
+      trC = cUp;
+   }
+   if(tr < 0)
+   {
+      trTxt = "BEARISH";
+      trC = cDn;
+   }
+   string head = (lbl == "") ? "5-QUESTION PLAN" : (lbl + "  -  15M " + (gate ? trTxt : "---"));
+   NbQLabel("title", ox + pad, y, head, gate ? trC : cDim, fsT, "Arial Black", ANCHOR_LEFT_UPPER);
+   NbQLabel("sub", ox + W - pad, y + (int)MathRound(2 * sc), "5-QUESTION PLAN  -  15M MAP + 5M TIMING  -  PENDING ORDERS", cMkt, fsS,
+            "Arial Black", ANCHOR_RIGHT_UPPER);
+   y += (int)MathRound(rh * 1.3);
+
+   // STATUS banner
+   string sTxt = "NO TRADE";
+   color sC = cDim;
+   if(lbl == "")
+      sTxt = NbFqOnlyText();
+   else if(!ok)
+      sTxt = "NO TRADE  -  MISSING DATA";
+   else if(!g_fresh)
+      sTxt = "NO TRADE  -  DATA STALE / MARKET CLOSED";
+   else if(st == NB_FQ_READY && live)
+   {
+      sTxt = "READY  -  " + limW + NbPx(g_fqPlans[p].entry);
+      sC = (dir > 0) ? cUp : cDn;
+   }
+   else if(st == NB_FQ_FILLED && live)
+   {
+      sTxt = "FILLED (if you placed it)  -  SL / TP1 RUNNING";
+      sC = cFill;
+   }
+   else if(st == NB_FQ_SETUP)
+   {
+      sTxt = "SETTING UP  -  SWEPT, WAIT FOR THE CONFIRMATION CLOSE";
+      sC = cWait;
+   }
+   else if(st == NB_FQ_SKIP)
+   {
+      sTxt = "SKIP  -  " + NbFqWhyText(why);
+      if(why == NB_FW_LOW_RR)
+         sTxt = "SKIP  -  ONLY " + DoubleToString(g_fq[i].rr1, 2) + "R TO TP1 (NEED " + DoubleToString(g_C.minRR, 1) + ")";
+      sC = cSkip;
+   }
+   else if(st == NB_FQ_WATCH)
+   {
+      sTxt = "WATCH  -  " + NbFqWhyText(why);
+      sC = NB_RGB(120, 170, 220);
+   }
+   else
+      sTxt = "NO TRADE  -  " + NbFqWhyText(why);
+   NbQRect("banner", ox + pad, y, W - 2 * pad, bannerH, cBg, sC);
+   NbQLabel("status", ox + W / 2, y + bannerH / 2, sTxt, sC, fsB, "Arial Black", ANCHOR_CENTER);
+   y += bannerH + (int)MathRound(4 * sc);
+
+   // five questions (left) and the order (right)
+   string qKey[5] = {"1  TREND", "2  LOCATION", "3  LIQUIDITY", "4  CONFIRMATION", "5  REWARD"};
+   string qAns[5] = {"---", "---", "---", "---", "---"};
+   string qTxt[5] = {" ", " ", " ", " ", " "};
+   if(gate)
+   {
+      string stTxt = (k15 >= 0) ? NbStructText(g_s15.st[k15], g_s15.hl[k15], g_s15.ll[k15], g_s15.lk[k15]) : "NOT CONFIRMED";
+      qAns[0] = (tr != 0) ? "YES" : "NO";
+      qTxt[0] = stTxt + ((tr > 0) ? "  = BUY SIDE ONLY" : ((tr < 0) ? "  = SELL SIDE ONLY" : "  = NO SIDE"));
+      string role = (dir > 0) ? "SUPPORT " : "RESISTANCE ";
+      if(kind == NB_PK_SWEEP)
+      {
+         qAns[1] = "YES";
+         qTxt[1] = "AT " + role + NbPx(g_fq[i].level) + " (" + NbLvTag(g_fq[i].src) + ")";
+      }
+      else if(kind == NB_PK_BREAK)
+      {
+         qAns[1] = "YES";
+         qTxt[1] = "RETEST OF " + NbPx(g_fq[i].level) + " (" + NbLvTag(g_fq[i].src) + ")";
+      }
+      else if(why == NB_FW_AT_LEVEL)
+      {
+         double lvA = (tr > 0) ? g_fq[i].sup : g_fq[i].res;
+         int srA = (tr > 0) ? g_fq[i].supSrc : g_fq[i].resSrc;
+         qAns[1] = "YES";
+         qTxt[1] = "AT " + role + NbPx(lvA) + " (" + NbLvTag(srA) + ")";
+      }
+      else if(why == NB_FW_AT_BREAK)
+      {
+         double lvB = (tr > 0) ? g_fq[i].res : g_fq[i].sup;
+         int srB = (tr > 0) ? g_fq[i].resSrc : g_fq[i].supSrc;
+         string bW = (tr > 0) ? "AT RESISTANCE " : "AT SUPPORT ";
+         string lnW = (tr > 0) ? " - BREAKOUT LINE" : " - BREAKDOWN LINE";
+         qAns[1] = "YES";
+         qTxt[1] = bW + NbPx(lvB) + " (" + NbLvTag(srB) + ")" + lnW;
+      }
+      else if(why == NB_FW_MIDDLE && atr15 > 0.0)
+      {
+         qAns[1] = "NO";
+         string dS = (g_fq[i].sup > 0.0) ? DoubleToString((g_s5.c[i] - g_fq[i].sup) / atr15, 1) : "?";
+         string dR = (g_fq[i].res > 0.0) ? DoubleToString((g_fq[i].res - g_s5.c[i]) / atr15, 1) : "?";
+         qTxt[1] = "MIDDLE: " + dS + " ATR OVER SUPPORT, " + dR + " UNDER RESIST.";
+      }
+      if(tr != 0)
+      {
+         if(kind == NB_PK_SWEEP)
+         {
+            qAns[2] = "YES";
+            qTxt[2] = "SWEPT TO " + NbPx(g_fq[i].ext) + ", BACK " + ((dir > 0) ? "ABOVE" : "BELOW");
+            qAns[3] = (g_fq[i].conf >= 0) ? "YES" : "NO";
+            string cW = (g_fq[i].conf >= 0) ? "5M CLOSED " : "WAIT: 5M CLOSE ";
+            qTxt[3] = cW + beyondW + NbPx(g_fq[i].trig);
+         }
+         else if(kind == NB_PK_BREAK)
+         {
+            qAns[2] = "YES";
+            qTxt[2] = (dir > 0) ? "5M CLOSED ABOVE (BREAKOUT)" : "5M CLOSED BELOW (BREAKDOWN)";
+            qAns[3] = "YES";
+            qTxt[3] = "BODY CLOSE BEYOND - NOT A WICK";
+         }
+         else
+         {
+            qAns[2] = "NO";
+            qTxt[2] = "NOT SWEPT / NOT BROKEN YET";
+            qAns[3] = "NO";
+            qTxt[3] = "NOTHING TO CONFIRM YET";
+         }
+      }
+      if(g_fq[i].rr1 > 0.0)
+      {
+         qAns[4] = (g_fq[i].rr1 >= g_C.minRR) ? "YES" : "NO";
+         qTxt[4] = "TP1 = " + DoubleToString(g_fq[i].rr1, 2) + "R   (NEED " + DoubleToString(g_C.minRR, 1) + "R)";
+      }
+      else if(why == NB_FW_NO_TARGET)
+      {
+         qAns[4] = "??";
+         qTxt[4] = "NO LEVEL MAPPED BEYOND = UNKNOWN = NO";
+      }
+      else if(why == NB_FW_NO_STOP)
+      {
+         qAns[4] = "NO";
+         qTxt[4] = "NO CONFIRMED 5M SWING FOR THE SL";
+      }
+   }
+   int xa = ox + pad + (int)MathRound(108 * sc);
+   int xt = ox + pad + (int)MathRound(140 * sc);
+   int xk = ox + (int)MathRound(450 * sc);
+   int xv = ox + (int)MathRound(505 * sc);
+   // order column: live plan, or the candidate's numbers (dim when not READY)
+   bool haveNum = gate && g_fq[i].entry > 0.0;
+   color oC = live ? cVal : cDim;
+   string oKey[7] = {"ORDER", "SL", "TP1", "TP2", "R:R", "LOTS", "VALID"};
+   string oVal[7] = {"---", "---", "---", "---", "---", "---", "---"};
+   if(haveNum)
+   {
+      oVal[0] = limW + NbPx(g_fq[i].entry);
+      string slWhy = (kind == NB_PK_SWEEP) ? ((dir > 0) ? "below sweep low" : "above sweep high")
+                                           : ((dir > 0) ? "below 5M swing low" : "above 5M swing high");
+      oVal[1] = NbPx(g_fq[i].sl) + "   " + slWhy;
+      if(g_fq[i].tp1 > 0.0)
+         oVal[2] = NbPx(g_fq[i].tp1) + "   " + NbLvTag(g_fq[i].tp1Src);
+      if(g_fq[i].tp2 > 0.0)
+         oVal[3] = NbPx(g_fq[i].tp2) + "   " + NbLvTag(g_fq[i].tp2Src);
+      else if(g_fq[i].tp1 > 0.0)
+         oVal[3] = "--- (no 2nd level mapped)";
+      if(g_fq[i].rr1 > 0.0)
+         oVal[4] = "1 : " + DoubleToString(g_fq[i].rr1, 2) + ((g_fq[i].rr2 > 0.0) ? ("    /    1 : " + DoubleToString(g_fq[i].rr2, 2)) : "");
+      if(g_tick > 0.0 && g_tickValue > 0.0)
+      {
+         double atRisk = 0.0;
+         double lots = NbLotsForRisk(g_balance, InpRiskPercent, g_fq[i].risk, g_tick, g_tickValue, g_volMin, g_volStep, g_volMax, atRisk);
+         oVal[5] = (lots > 0.0) ? (DoubleToString(lots, 2) + "   (" + DoubleToString(atRisk, 2) + " " + g_accCcy + " = " +
+                                   DoubleToString(InpRiskPercent, 1) + "%)")
+                                : ("SKIP - " + DoubleToString(g_volMin, 2) + " lot risks > " + DoubleToString(InpRiskPercent, 1) + "%");
+      }
+      if(live && st == NB_FQ_READY)
+      {
+         datetime tExp = g_s5.t[g_fqPlans[p].idx] + (datetime)(g_s5.sec * (g_C.validBars + 1));
+         oVal[6] = "not filled by " + TimeToString(tExp, TIME_MINUTES) + " = cancel it";
+      }
+      else if(live && st == NB_FQ_FILLED && g_fqPlans[p].fillIdx >= 0)
+         oVal[6] = "filled in the 5M bar of " + TimeToString(g_s5.t[g_fqPlans[p].fillIdx], TIME_MINUTES);
+      else
+         oVal[6] = "not a trade: " + NbFqStatusText(st);
+   }
+   for(int r = 0; r < 7; r++)
+   {
+      string rid = IntegerToString(r);
+      if(r < 5)
+      {
+         NbQLabel("qk" + rid, ox + pad, y, qKey[r], cKey, fs, "Arial", ANCHOR_LEFT_UPPER);
+         NbQLabel("qa" + rid, xa, y, qAns[r], NbQAnsColor(qAns[r]), fs, "Arial Black", ANCHOR_LEFT_UPPER);
+         NbQLabel("qt" + rid, xt, y, qTxt[r], gate ? cVal : cDim, fsS, "Arial", ANCHOR_LEFT_UPPER);
+      }
+      NbQLabel("ok" + rid, xk, y, oKey[r], cKey, fs, "Arial", ANCHOR_LEFT_UPPER);
+      color vc = oC;
+      if(live && r == 0)
+         vc = (dir > 0) ? cUp : cDn;
+      if(live && r == 1)
+         vc = cDn;
+      if(live && (r == 2 || r == 3))
+         vc = cUp;
+      NbQLabel("ov" + rid, xv, y, oVal[r], vc, fsS, "Arial Bold", ANCHOR_LEFT_UPPER);
+      y += rh;
+   }
+   y += (int)MathRound(3 * sc);
+
+   // NEXT: what to do, in two short lines
+   string n1 = "---";
+   string n2 = " ";
+   if(lbl == "")
+      n1 = "This file is for " + NbFqOnlyText();
+   else if(!ok)
+      n1 = "NEXT: nothing - history is not loaded yet.";
+   else if(!g_fresh)
+   {
+      n1 = "NEXT: nothing - stale data is never a plan.";
+      n2 = "Wait for live ticks (see the main panel's DATA CLOCK).";
+   }
+   else if(st == NB_FQ_READY && live)
+   {
+      datetime tEnd = g_s5.t[g_fqPlans[p].idx] + (datetime)(g_s5.sec * (g_C.validBars + 1));
+      n1 = "NEXT: type " + limW + NbPx(g_fqPlans[p].entry) + "  SL " + NbPx(g_fqPlans[p].sl) + "  TP " + NbPx(g_fqPlans[p].tp1);
+      n2 = "Not filled by " + TimeToString(tEnd, TIME_MINUTES) + " = cancel it. No chasing.";
+   }
+   else if(st == NB_FQ_FILLED && live)
+   {
+      n1 = "NEXT: if you placed it, leave the SL and TP alone.";
+      n2 = "The main panel's EXIT / PROTECT still applies.";
+   }
+   else if(st == NB_FQ_SETUP)
+   {
+      n1 = "NEXT: wait for a 5M candle to CLOSE " + beyondW + NbPx(g_fq[i].trig);
+      n2 = "then a " + limW + "at " + NbPx(g_fq[i].level) + " (the retest).";
+   }
+   else if(st == NB_FQ_SKIP)
+   {
+      n1 = "NEXT: skip this one. Wait for the next setup.";
+      n2 = NbFqWhyText(why);
+   }
+   else if(st == NB_FQ_WATCH && tr > 0)
+   {
+      n1 = "NEXT: wait. BUY idea 1: a sweep of SUPPORT " + NbPx(g_fq[i].sup);
+      n2 = "BUY idea 2: a 5M close above RESISTANCE " + NbPx(g_fq[i].res);
+   }
+   else if(st == NB_FQ_WATCH && tr < 0)
+   {
+      n1 = "NEXT: wait. SELL idea 1: a sweep of RESISTANCE " + NbPx(g_fq[i].res);
+      n2 = "SELL idea 2: a 5M close below SUPPORT " + NbPx(g_fq[i].sup);
+   }
+   else
+   {
+      n1 = "NEXT: nothing.";
+      n2 = NbFqWhyText(why);
+   }
+   NbQLabel("next1", ox + pad, y, n1, (st == NB_FQ_READY && live) ? sC : cVal, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
+   y += rh;
+   NbQLabel("next2", ox + pad, y, n2, cVal, fs, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
+
+   // the map: two halves per row
+   string lvL = "---";
+   string lvR = " ";
+   string mapL = "---";
+   string mapR = " ";
+   if(ok)
+   {
+      lvL = (g_fq[i].sup > 0.0) ? ("SUPPORT " + NbPx(g_fq[i].sup) + " (" + NbLvTag(g_fq[i].supSrc) + ")") : "SUPPORT ---";
+      lvR = (g_fq[i].res > 0.0) ? ("RESISTANCE " + NbPx(g_fq[i].res) + " (" + NbLvTag(g_fq[i].resSrc) + ")") : "RESISTANCE ---";
+      if(atr15 > 0.0 && g_fq[i].sup > 0.0)
+         lvL = lvL + "  " + DoubleToString((g_s5.c[i] - g_fq[i].sup) / atr15, 1) + " ATR below";
+      if(atr15 > 0.0 && g_fq[i].res > 0.0)
+         lvR = lvR + "  " + DoubleToString((g_fq[i].res - g_s5.c[i]) / atr15, 1) + " ATR above";
+      mapL = "15M MAP   PDH " + NbPx(g_fq[i].pdh) + "  PDL " + NbPx(g_fq[i].pdl);
+      if(g_C.clockOk)
+         mapR = "ASIA " + NbPx(g_fq[i].ash) + " / " + NbPx(g_fq[i].asl) + "   LDN " + NbPx(g_fq[i].loh) + " / " + NbPx(g_fq[i].lol);
+      else
+         mapR = "ASIA / LONDON: UTC offset unknown - not shown";
+   }
+   NbQLabel("lvL", ox + pad, y, lvL, cVal, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   NbQLabel("lvR", xr, y, lvR, cVal, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
+   NbQLabel("mapL", ox + pad, y, mapL, cKey, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   NbQLabel("mapR", xr, y, mapR, cKey, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
+
+   // evidence: the last plan and the count
+   string lastL = "LAST PLAN: none in the loaded history yet";
+   string lastR = " ";
+   if(ok && p >= 0 && p < g_nFqPlan)
+   {
+      string lsW = (g_fqPlans[p].dir > 0) ? "BUY " : "SELL ";
+      lastL = "LAST PLAN: " + lsW + NbFqKindText(g_fqPlans[p].kind, g_fqPlans[p].dir) + " @ " +
+              TimeToString(g_s5.t[g_fqPlans[p].idx] + g_s5.sec, TIME_MINUTES) + "  limit " + NbPx(g_fqPlans[p].entry);
+      lastR = NbFqOutcomeText(g_fqPlans[p].status);
+   }
+   NbQLabel("lastL", ox + pad, y, lastL, cVal, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   NbQLabel("lastR", xr, y, lastR, cVal, fsS, "Arial Bold", ANCHOR_LEFT_UPPER);
+   y += rh;
+   int nTp = 0;
+   int nSl = 0;
+   int nUn = 0;
+   int nOp = 0;
+   int nTo = 0;
+   double netR = 0.0;
+   if(ok)
+   {
+      NbFqTally(g_fqPlans, g_nFqPlan, nTp, nSl, nUn, nOp, nTo);
+      netR = NbFqNetR(g_fqPlans, g_nFqPlan);
+   }
+   string tallyL = "HISTORY " + IntegerToString(InpHistoryDays) + " days: " + IntegerToString(ok ? g_nFqPlan : 0) + " plans - TP1 " +
+                   IntegerToString(nTp) + " / SL " + IntegerToString(nSl) + " / not filled " + IntegerToString(nUn);
+   string sgnR = (netR >= 0.0) ? "+" : "";
+   string tallyR = "open " + IntegerToString(nOp) + ((nTo > 0) ? (" / timed out " + IntegerToString(nTo)) : "") + "   NET " + sgnR +
+                   DoubleToString(netR, 1) + "R   " + ((nTp + nSl < 20) ? "(n<20 = luck)" : "(~100 to judge)");
+   color netC = cKey;
+   if(nTp + nSl >= 20)
+      netC = (netR > 0.0) ? cUp : cDn;
+   NbQLabel("tallyL", ox + pad, y, tallyL, cKey, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   NbQLabel("tallyR", xr, y, tallyR, netC, fsS, "Arial Bold", ANCHOR_LEFT_UPPER);
+   y += rh;
+
+   // the main panel's answer, so a disagreement is visible (different rules)
+   string mainTxt = "WAIT";
+   string mainWhy = NbReasonAt(g_finalR, 0);
+   if(g_final == NB_BUY)
+   {
+      mainTxt = "CLICK BUY";
+      mainWhy = " ";
+   }
+   if(g_final == NB_SELL)
+   {
+      mainTxt = "CLICK SELL";
+      mainWhy = " ";
+   }
+   if(g_final == NB_EXIT)
+   {
+      mainTxt = "EXIT / PROTECT";
+      mainWhy = " ";
+   }
+   if(live && st == NB_FQ_READY)
+      mainWhy = (g_final == dir) ? "agrees with this table" : "other rules - they can disagree";
+   if(mainWhy == "")
+      mainWhy = " ";
+   NbQLabel("mainL", ox + pad, y, "MAIN PANEL (NRTR rules): " + mainTxt, cKey, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   NbQLabel("mainR", xr, y, mainWhy, cKey, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
+   double slm = 1.0;
+   double cfa = 0.0;
+   string note = "";
+   NbFqAsset(slm, cfa, note);
+   NbQLabel("footL", ox + pad, y, "Plan only. Nothing is sent. You type the pending order.", cDim, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   NbQLabel("footR", xr, y, (note == "") ? "A hypothesis until the count says otherwise." : note, cDim, fsS, "Arial", ANCHOR_LEFT_UPPER);
+}
+//=== NB_FQT_END ===
 //+------------------------------------------------------------------+
