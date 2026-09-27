@@ -74,6 +74,37 @@ MUTATIONS = [
      'NbLabel("r1", ox + kx, y, "REASON: " + r1', 'NbLabel("r1", ox + kx, y, "REASON:  " + r1'),
     ("gold", "metals: stale-data gate removed from the table",
      "   bool gate = ok && g_fresh;", "   bool gate = ok;"),
+    # ---- v1.06 metals NY trap + decision ladder (caught by tests/test_nyt.cpp) ----
+    ("gold", "v1.06 NY trap: trigger without a body (any close back inside counts)",
+     "(c > s.level + need && c > o) : (c < s.level - need && c < o)", "(c > s.level + need) : (c < s.level - need)"),
+    ("gold", "v1.06 NY trap: forming 5M candle evaluated",
+     "   int nEvalNy = lastClosed ? n : n - 1;", "   int nEvalNy = n;"),
+    ("gold", "v1.06 NY trap: silver wider stop ignored",
+     "   g_N.slBufMult = slm;", "   g_N.slBufMult = 1.0;"),
+    ("gold", "v1.06 NY trap: silver stronger close back inside ignored",
+     "   g_N.confirmAtr = cfa;", "   g_N.confirmAtr = 0.0;"),
+    ("gold", "v1.06 NY trap: TP1 checked before SL on the same candle",
+     "         if(stop)\n         {\n            s.state = NB_NT_INVALID;\n            s.why = NB_NTW_SL;",
+     "         if(stop && !tp)\n         {\n            s.state = NB_NT_INVALID;\n            s.why = NB_NTW_SL;"),
+    ("gold", "v1.06 NY trap: runs at the weekend",
+     "      int wd = (int)((day + 4) % 7);   // 1970-01-01 was a Thursday; 0 = Sunday, 6 = Saturday",
+     "      int wd = 3;"),
+    ("gold", "v1.06 NY trap: SL rounded inward (off the protective side of the tick grid)",
+     "? NbRoundTick(s.sweep - buf, N.tick, N.digits, -1) : NbRoundTick(s.sweep + buf, N.tick, N.digits, 1);\n         double risk",
+     "? NbRoundTick(s.sweep - buf, N.tick, N.digits, 1) : NbRoundTick(s.sweep + buf, N.tick, N.digits, -1);\n         double risk"),
+    ("gold", "v1.06 ladder: NY trap AGAINST the 15M boss shown as VALID - CLICK",
+     "      if(boss == tDir)\n      {\n         aDir = tDir;", "      if(boss == tDir || boss == -tDir)\n      {\n         aDir = tDir;"),
+    ("gold", "v1.06 ladder: NY trap with the 15M boss in WAIT shown as VALID - CLICK",
+     "      if(boss == tDir)\n      {\n         aDir = tDir;", "      if(boss != -tDir)\n      {\n         aDir = tDir;"),
+    ("gold", "v1.06 ladder: 5-question plan against the 15M boss shown as PENDING ORDER PLAN",
+     "      if(boss == fqDir)\n      {", "      if(true)\n      {"),
+    ("gold", "v1.06 ladder: stale-data gate removed (NO TRADE never shown)",
+     "   else if(!g_fresh)\n   {\n      act = \"NO TRADE\";", "   else if(false)\n   {\n      act = \"NO TRADE\";"),
+    ("gold", "v1.06 ladder: money ignores the broker's tick value (1 per tick assumed)",
+     "   return MathAbs(move) / g_tick * g_tickValue * lots;", "   return MathAbs(move) / g_tick * lots;"),
+    ("gold", "v1.06 ladder: the forming candle's preview drives the timing row",
+     "      if(g_final == NB_BUY || g_final == NB_SELL)\n      {\n         t2 = ",
+     "      if(g_final == NB_BUY || g_final == NB_SELL || iClose(g_sym, PERIOD_M5, 0) != iOpen(g_sym, PERIOD_M5, 0))\n      {\n         t2 = "),
 ]
 
 
@@ -93,10 +124,13 @@ def build_and_test(target, src_text, tag):
         if r.returncode != 0:
             return {"translate": False}
     res = {}
-    for test in ("test_fq_engine", "test_fq_indicator"):
+    tests = ["test_fq_engine", "test_fq_indicator"] + (["test_nyt"] if target == "gold" else [])   # v1.06 NY trap: metals only
+    for test in tests:
         exe = os.path.join(d, test)
         r = run(["g++"] + FLAGS + ["-I" + d, "-DNB_TEST_MARKET=" + mk, "tests/%s.cpp" % test, "-o", exe])
-        res[test] = (r.returncode == 0) and run([exe]).returncode == 0
+        if r.returncode != 0:
+            return {"BUILD": None}   # a mutation that does not compile proves nothing about the tests
+        res[test] = run([exe]).returncode == 0
     exe = os.path.join(d, "dump_new")
     r = run(["g++"] + FLAGS + ["-I" + d, "-DNB_TEST_MARKET=" + mk, '-DDUMP_INC="%s"' % full, "tests/dump_objects.cpp", "-o", exe])
     same = False
@@ -147,6 +181,10 @@ def main():
             escaped += 1
             continue
         res = build_and_test(t, text.replace(old, new), "m%02d" % k)
+        if "BUILD" in res or "translate" in res:
+            print("M%02d [%-6s] %-72s NOT RUNNABLE - the mutated copy does not build" % (k, t, name))
+            escaped += 1
+            continue
         failed = [x for x, ok in res.items() if not ok]
         verdict = "CAUGHT by " + ", ".join(failed) if failed else "ESCAPED"
         if not failed:

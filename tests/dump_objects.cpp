@@ -4,7 +4,8 @@
 // against the current file. Both binaries run the SAME scenarios on the same
 // simulated terminal and print every chart object, every plot buffer (hash),
 // every alert and every log line - EXCEPT the objects that v1.05 added
-// (prefixes NBSP_Q_ = table, NBSP_F_ = its chart drawing). The two outputs
+// (prefixes Q_ = table, F_ = its chart drawing, and in the metals file
+// v1.06 N_ = NY trap lines, L_ = decision ladder). The two outputs
 // must be byte-identical.
 #include "../tests/mt5_sim.h"
 #include DUMP_INC
@@ -74,7 +75,8 @@ static unsigned long long fnv(const void *p, size_t n, unsigned long long h = 14
 }
 static bool added(const std::string &name)
 {
-   return name.compare(0, 7, PFX "Q_") == 0 || name.compare(0, 7, PFX "F_") == 0;
+   return name.compare(0, 7, PFX "Q_") == 0 || name.compare(0, 7, PFX "F_") == 0 ||
+          name.compare(0, 7, PFX "N_") == 0 || name.compare(0, 7, PFX "L_") == 0;   // v1.06 metals: NY trap + ladder
 }
 static void dump(const char *label)
 {

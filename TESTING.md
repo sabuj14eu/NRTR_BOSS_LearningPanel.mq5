@@ -270,6 +270,33 @@ the session engine tests (two of them by the indicator tests as well):
 | Clock accepted whatever the PC said (no half-hour check) | yes |
 | The forming 5M bar evaluated for a trap | yes |
 
+## Results (2026-09-27, v1.06 metals: NY trap + decision ladder)
+
+```
+NY TRAP + LADDER TESTS (metals): 105 passed, 0 failed    (./run_tests.sh step 5d, tests/test_nyt.cpp)
+SIMPLE VIEW TESTS (metals):       12 passed, 0 failed    (step 5e: the same test built with InpSimpleView = true)
+EXISTING GOLD PANEL UNCHANGED:    PASS (v1.04 baseline, 53 scenarios; the new NBLP_N_ / NBLP_L_ objects excluded)
+ALL EARLIER SUITES:               PASS
+MUTATION TESTS:  35 planted (13 new for v1.06) - PENDING at this commit, see the next commit
+MetaEditor F7:   metals v1.05 compiled in the user's MT5 with no error (2026-09-27); metals v1.06 NOT YET
+```
+
+* **N1-N6** check the NY trap engine on hand-built candles with prices worked out by hand: SELL and
+  BUY trap exact entry / SL / TP1 / TP2, a one-candle trap, a bearish close still above the level
+  (not a trigger), SL beats TP1 in one candle, expiry, no range, silver settings, weekend, no NY
+  time, one trap per side per day, and the forming candle.
+* **L1-L9** run the whole indicator **separately on XAUUSD (tick 0.01) and XAGUSD (tick 0.001,
+  tick value 5, contract 5000)**: layout, the 15M boss over 120 moments, CLICK prices, trap lines vs
+  the engine, CONFLICT / AGREE / NOT IN MODE (injected, all six combinations), the forming-candle
+  preview, a read-only open position with money distances, own parameters, and the 01:00 reopen.
+  **L10**: an unsupported symbol draws nothing.
+* The mapping to the ten points Shyam asked for is in CHANGELOG.md ("The ten verification
+  points"). Point 10 (MetaEditor) cannot run here.
+
+**Manual check:** F7. Attach to XAUUSD M5 and XAGUSD M5. The ladder is at the top right, clear of
+both panels, and no text ends in the middle of a word. During the NY window, the NY TRAP lines
+match the ladder's prices. At 01:00-01:15 broker time the ladder must not say DATA STALE.
+
 ## Results (2026-09-27, v1.06 twins + v1.05 metals)
 
 ```

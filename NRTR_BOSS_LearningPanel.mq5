@@ -78,9 +78,27 @@
 //|    (inputs). Asia / London need the broker clock proven by two   |
 //|    witnesses (server vs PC). Stale data = NO TRADE. Every plan   |
 //|    is recorded and counted. Nothing is sent. See CHANGELOG.md.   |
+//|  v1.06 NY TRAP + DECISION LADDER (separate layers; the main      |
+//|    panel and the 5-question table are unchanged):                |
+//|    * NY TRAP BUY / SELL: range = the hours before the NY open;   |
+//|      in the NY window a 5M wick beyond the range = VALID (swept),|
+//|      a CLOSED 5M candle back inside with a body = TRIGGERED      |
+//|      (entry = that close, SL beyond the sweep, TP1/TP2 = R).     |
+//|      Window over / SL / expiry / no range = INVALID. One trap    |
+//|      per side per day. Lines for entry, SL, TP1, TP2 on the      |
+//|      chart. SILVER: wider stop, stronger close back inside.      |
+//|    * DECISION LADDER (top right): 1 15M BOSS -> 2 5M TIMING ->   |
+//|      3 NY TRAP / PENDING -> 4 ONE ACTION. The trap NEVER         |
+//|      overrides the 15M boss: against it = "NY TRAP vs 15M BOSS = |
+//|      CONFLICT", boss in WAIT = WAIT. The forming 5M candle is a  |
+//|      labelled PREVIEW row only, never an input to any decision.  |
+//|    * Scalp reference (gold 5-20, silver 0.30-1.00 price move)    |
+//|      with money from the broker's tick size / tick value. Not a  |
+//|      promise. Open position: read only, distances to SL/TP.      |
+//|    Nothing is sent, modified or closed. See CHANGELOG.md.        |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - learning tool"
-#property version     "1.05"
+#property version     "1.06"
 #property description "Gold/Silver NRTR BOSS learning panel: 15M direction, 5M timing. CUSTOM ATR-NRTR."
 #property description "Visual decision support only - never places, modifies or closes orders."
 #property indicator_chart_window
@@ -2358,6 +2376,432 @@ string NbFqHint2(int role, int trend)
    return "";
 }
 //=== NB_FQ_END ===
+
+//=== NB_NYT_BEGIN === (metals only: the NY trap layer, v1.06)
+//+------------------------------------------------------------------+
+//| NY TRAP LAYER (metals v1.06). A SEPARATE setup layer: it never   |
+//| changes the 15M boss, the 5M trigger or any main-panel state.    |
+//| Its conflict with the boss is judged and SHOWN by the ladder.    |
+//|   pre-NY range = closed 5M bars in [open - preHours, open)       |
+//|   NY window    = [open, open + winMin), open = the typed NY time |
+//|   NY TRAP SELL: in the window price takes the range HIGH (sweep),|
+//|     then a 5M candle CLOSES back below it with a bearish body    |
+//|     (silver: by at least confirmAtr x 5M ATR) = TRIGGERED:       |
+//|     entry = that close, SL = sweep high + buffer (rounded to the |
+//|     tick, outward), TP1 / TP2 = R multiples. BUY = the mirror.   |
+//| States per side: WAIT (range building / not swept), VALID (swept,|
+//| waiting for the close back inside), TRIGGERED (the close came;   |
+//| then TP1 / SL / expiry are recorded), INVALID (no range, window  |
+//| over untriggered, SL hit, expired). One trap per side per day.   |
+//| Causal: bar i uses bars <= i only; the forming bar is carried.   |
+//+------------------------------------------------------------------+
+#define NB_NT_OFF       0   // no session (weekend / NY time not set)
+#define NB_NT_WAIT      1
+#define NB_NT_VALID     2
+#define NB_NT_TRIGGERED 3
+#define NB_NT_INVALID   4
+
+#define NB_NTW_NONE      0
+#define NB_NTW_NO_CLOCK  1
+#define NB_NTW_WEEKEND   2
+#define NB_NTW_BEFORE    3
+#define NB_NTW_BUILDING  4
+#define NB_NTW_NO_RANGE  5
+#define NB_NTW_NOT_SWEPT 6
+#define NB_NTW_SWEPT     7
+#define NB_NTW_ACTIVE    8
+#define NB_NTW_TP1       9
+#define NB_NTW_SL        10
+#define NB_NTW_EXPIRED   11
+#define NB_NTW_OVER      12
+#define NB_NTW_NO_STOP   13
+
+#define NB_NTP_OUT    0
+#define NB_NTP_BEFORE 1
+#define NB_NTP_PRE    2
+#define NB_NTP_NY     3
+#define NB_NTP_AFTER  4
+
+struct NbNytCfg
+{
+   int      openSec;       // NY open, seconds after broker midnight (-1 = not set)
+   int      preHours;      // pre-NY range length
+   int      winMin;        // NY window length
+   int      minBars;       // closed 5M bars the range needs
+   double   slBufAtr;      // SL buffer beyond the sweep, x 5M ATR
+   double   slBufMult;     // silver: wider
+   double   confirmAtr;    // silver: the close back inside must clear the level by this x 5M ATR
+   double   refAtr;        // WAIT reference SL distance, x 5M ATR (an estimate, labelled so)
+   double   tp1R;
+   double   tp2R;
+   int      validBars;     // a triggered trap stays in play this many closed 5M bars
+   double   tick;
+   int      digits;
+};
+
+struct NbNytSide
+{
+   int      dir;           // NB_BUY / NB_SELL
+   int      state;         // NB_NT_*
+   int      why;           // NB_NTW_*
+   double   level;         // the range edge being trapped
+   double   sweep;         // extreme beyond the level (0 = not swept)
+   double   entry;         // TRIGGERED: the close; otherwise the level (reference)
+   double   sl;
+   double   tp1;
+   double   tp2;
+   double   risk;
+   bool     estimate;      // true = reference prices, the real ones exist only after the trigger
+   int      trigIdx;
+   int      outIdx;
+};
+
+struct NbNytBar
+{
+   int       phase;        // NB_NTP_*
+   long      sid;          // session id (broker day), -1 = none
+   datetime  preStart;
+   datetime  open;
+   datetime  winEnd;
+   double    rh;           // pre-NY range high / low known at this bar (0 = none)
+   double    rl;
+   int       rn;
+   NbNytSide buy;
+   NbNytSide sell;
+   bool      forming;
+};
+
+void NbNytSideReset(NbNytSide &s, int dir)
+{
+   s.dir = dir;
+   s.state = NB_NT_OFF;
+   s.why = NB_NTW_NONE;
+   s.level = 0.0;
+   s.sweep = 0.0;
+   s.entry = 0.0;
+   s.sl = 0.0;
+   s.tp1 = 0.0;
+   s.tp2 = 0.0;
+   s.risk = 0.0;
+   s.estimate = true;
+   s.trigIdx = -1;
+   s.outIdx = -1;
+}
+
+void NbNytSideCopy(NbNytSide &d, const NbNytSide &s)
+{
+   d.dir = s.dir;
+   d.state = s.state;
+   d.why = s.why;
+   d.level = s.level;
+   d.sweep = s.sweep;
+   d.entry = s.entry;
+   d.sl = s.sl;
+   d.tp1 = s.tp1;
+   d.tp2 = s.tp2;
+   d.risk = s.risk;
+   d.estimate = s.estimate;
+   d.trigIdx = s.trigIdx;
+   d.outIdx = s.outIdx;
+}
+
+//--- reference prices for a side that has not triggered: entry = the level,
+//    SL = sweep extreme + buffer when swept, else level + refAtr x ATR
+//    (an estimate), TP = R multiples from the level
+void NbNytRefs(NbNytSide &s, double atr, const NbNytCfg &N)
+{
+   if(s.level <= 0.0 || atr <= 0.0)
+      return;
+   int d = s.dir;
+   s.entry = NbRoundTick(s.level, N.tick, N.digits, 0);
+   double buf = N.slBufAtr * N.slBufMult * atr;
+   if(s.sweep > 0.0)
+      s.sl = (d > 0) ? NbRoundTick(s.sweep - buf, N.tick, N.digits, -1) : NbRoundTick(s.sweep + buf, N.tick, N.digits, 1);
+   else
+      s.sl = (d > 0) ? NbRoundTick(s.level - N.refAtr * atr, N.tick, N.digits, -1)
+                     : NbRoundTick(s.level + N.refAtr * atr, N.tick, N.digits, 1);
+   s.risk = NormalizeDouble(MathAbs(s.entry - s.sl), N.digits);
+   s.tp1 = NbRoundTick(s.entry + d * N.tp1R * s.risk, N.tick, N.digits, 0);
+   s.tp2 = NbRoundTick(s.entry + d * N.tp2R * s.risk, N.tick, N.digits, 0);
+   s.estimate = true;
+}
+
+//--- one closed bar for one side
+void NbNytStep(NbNytSide &s, int i, double o, double h, double l, double c, double atr, int phase, bool haveRange,
+               const NbNytCfg &N)
+{
+   int d = s.dir;
+   // a triggered trap meets this bar: SL first (tick order unknown), then TP1, then expiry
+   if(s.state == NB_NT_TRIGGERED && s.why == NB_NTW_ACTIVE)
+   {
+      if(i > s.trigIdx)
+      {
+         bool stop = (d > 0) ? (l <= s.sl) : (h >= s.sl);
+         bool tp = (d > 0) ? (h >= s.tp1) : (l <= s.tp1);
+         if(stop)
+         {
+            s.state = NB_NT_INVALID;
+            s.why = NB_NTW_SL;
+            s.outIdx = i;
+         }
+         else if(tp)
+         {
+            s.why = NB_NTW_TP1;
+            s.outIdx = i;
+         }
+         else if(i - s.trigIdx >= N.validBars)
+         {
+            s.state = NB_NT_INVALID;
+            s.why = NB_NTW_EXPIRED;
+            s.outIdx = i;
+         }
+      }
+      return;
+   }
+   if(s.state == NB_NT_TRIGGERED || s.state == NB_NT_INVALID)
+      return;   // done for this session
+   if(phase == NB_NTP_BEFORE)
+   {
+      s.state = NB_NT_WAIT;
+      s.why = NB_NTW_BEFORE;
+      return;
+   }
+   if(phase == NB_NTP_PRE)
+   {
+      s.state = NB_NT_WAIT;
+      s.why = NB_NTW_BUILDING;
+      return;
+   }
+   if(phase == NB_NTP_AFTER)
+   {
+      s.state = NB_NT_INVALID;
+      s.why = (haveRange) ? NB_NTW_OVER : NB_NTW_NO_RANGE;
+      return;
+   }
+   if(phase != NB_NTP_NY)
+      return;
+   if(!haveRange)
+   {
+      s.state = NB_NT_INVALID;
+      s.why = NB_NTW_NO_RANGE;
+      return;
+   }
+   bool pierce = (d > 0) ? (l < s.level) : (h > s.level);
+   if(s.state != NB_NT_VALID)
+   {
+      s.state = NB_NT_WAIT;
+      s.why = NB_NTW_NOT_SWEPT;
+      if(pierce)
+      {
+         s.state = NB_NT_VALID;
+         s.why = NB_NTW_SWEPT;
+         s.sweep = (d > 0) ? l : h;
+      }
+   }
+   else
+   {
+      if(d > 0 && l < s.sweep)
+         s.sweep = l;
+      if(d < 0 && h > s.sweep)
+         s.sweep = h;
+   }
+   if(s.state == NB_NT_VALID && atr > 0.0)
+   {
+      double need = N.confirmAtr * atr;
+      bool back = (d > 0) ? (c > s.level + need && c > o) : (c < s.level - need && c < o);
+      if(back)
+      {
+         double buf = N.slBufAtr * N.slBufMult * atr;
+         double sl = (d > 0) ? NbRoundTick(s.sweep - buf, N.tick, N.digits, -1) : NbRoundTick(s.sweep + buf, N.tick, N.digits, 1);
+         double risk = NormalizeDouble(MathAbs(c - sl), N.digits);
+         double minRisk = (N.tick > 0.0) ? N.tick * 0.5 : 0.0;
+         if(risk <= minRisk || risk <= 0.0)
+         {
+            s.state = NB_NT_INVALID;
+            s.why = NB_NTW_NO_STOP;
+            return;
+         }
+         s.entry = c;
+         s.sl = sl;
+         s.risk = risk;
+         s.tp1 = NbRoundTick(c + d * N.tp1R * risk, N.tick, N.digits, 0);
+         s.tp2 = NbRoundTick(c + d * N.tp2R * risk, N.tick, N.digits, 0);
+         s.estimate = false;
+         s.state = NB_NT_TRIGGERED;
+         s.why = NB_NTW_ACTIVE;
+         s.trigIdx = i;
+      }
+   }
+}
+
+//--- the NY trap layer over every closed 5M bar (s5.atr must be computed)
+void NbRunNyt(const NbSeries &s5, bool lastClosed, const NbNytCfg &N, NbNytBar &nt[])
+{
+   int n = s5.n;
+   ArrayResize(nt, n);
+   int nEvalNy = lastClosed ? n : n - 1;
+   long curSid = -1;
+   double rh = 0.0;
+   double rl = 0.0;
+   int rn = 0;
+   NbNytSide sb;
+   NbNytSide ss;
+   NbNytSideReset(sb, NB_BUY);
+   NbNytSideReset(ss, NB_SELL);
+   for(int i = 0; i < n; i++)
+   {
+      if(i >= nEvalNy)
+      {
+         // unfinished candle: carry the last CLOSED answer, never evaluate it
+         if(i > 0)
+         {
+            nt[i].phase = nt[i - 1].phase;
+            nt[i].sid = nt[i - 1].sid;
+            nt[i].preStart = nt[i - 1].preStart;
+            nt[i].open = nt[i - 1].open;
+            nt[i].winEnd = nt[i - 1].winEnd;
+            nt[i].rh = nt[i - 1].rh;
+            nt[i].rl = nt[i - 1].rl;
+            nt[i].rn = nt[i - 1].rn;
+            NbNytSideCopy(nt[i].buy, nt[i - 1].buy);
+            NbNytSideCopy(nt[i].sell, nt[i - 1].sell);
+         }
+         else
+         {
+            nt[i].phase = NB_NTP_OUT;
+            nt[i].sid = -1;
+            nt[i].preStart = 0;
+            nt[i].open = 0;
+            nt[i].winEnd = 0;
+            nt[i].rh = 0.0;
+            nt[i].rl = 0.0;
+            nt[i].rn = 0;
+            NbNytSideReset(nt[i].buy, NB_BUY);
+            NbNytSideReset(nt[i].sell, NB_SELL);
+         }
+         nt[i].forming = true;
+         continue;
+      }
+      nt[i].forming = false;
+      long day = ((long)s5.t[i]) / 86400;
+      int wd = (int)((day + 4) % 7);   // 1970-01-01 was a Thursday; 0 = Sunday, 6 = Saturday
+      if(N.openSec < 0 || wd == 0 || wd == 6)
+      {
+         NbNytSideReset(sb, NB_BUY);
+         NbNytSideReset(ss, NB_SELL);
+         sb.why = (N.openSec < 0) ? NB_NTW_NO_CLOCK : NB_NTW_WEEKEND;
+         ss.why = sb.why;
+         curSid = -1;
+         nt[i].phase = NB_NTP_OUT;
+         nt[i].sid = -1;
+         nt[i].preStart = 0;
+         nt[i].open = 0;
+         nt[i].winEnd = 0;
+         nt[i].rh = 0.0;
+         nt[i].rl = 0.0;
+         nt[i].rn = 0;
+         NbNytSideCopy(nt[i].buy, sb);
+         NbNytSideCopy(nt[i].sell, ss);
+         continue;
+      }
+      datetime open = (datetime)(day * 86400 + N.openSec);
+      datetime preStart = open - (datetime)(N.preHours * 3600);
+      datetime winEnd = open + (datetime)(N.winMin * 60);
+      int phase = NB_NTP_AFTER;
+      if(s5.t[i] < preStart)
+         phase = NB_NTP_BEFORE;
+      else if(s5.t[i] < open)
+         phase = NB_NTP_PRE;
+      else if(s5.t[i] < winEnd)
+         phase = NB_NTP_NY;
+      if(day != curSid)
+      {
+         curSid = day;
+         rh = 0.0;
+         rl = 0.0;
+         rn = 0;
+         NbNytSideReset(sb, NB_BUY);
+         NbNytSideReset(ss, NB_SELL);
+      }
+      if(phase == NB_NTP_PRE)
+      {
+         if(rn == 0)
+         {
+            rh = s5.h[i];
+            rl = s5.l[i];
+         }
+         else
+         {
+            if(s5.h[i] > rh)
+               rh = s5.h[i];
+            if(s5.l[i] < rl)
+               rl = s5.l[i];
+         }
+         rn++;
+      }
+      bool haveRange = (rn >= N.minBars);
+      if(sb.state == NB_NT_OFF || sb.state == NB_NT_WAIT)
+         sb.level = rl;
+      if(ss.state == NB_NT_OFF || ss.state == NB_NT_WAIT)
+         ss.level = rh;
+      NbNytStep(sb, i, s5.o[i], s5.h[i], s5.l[i], s5.c[i], s5.atr[i], phase, haveRange, N);
+      NbNytStep(ss, i, s5.o[i], s5.h[i], s5.l[i], s5.c[i], s5.atr[i], phase, haveRange, N);
+      if(sb.state == NB_NT_WAIT || sb.state == NB_NT_VALID)
+         NbNytRefs(sb, s5.atr[i], N);
+      if(ss.state == NB_NT_WAIT || ss.state == NB_NT_VALID)
+         NbNytRefs(ss, s5.atr[i], N);
+      nt[i].phase = phase;
+      nt[i].sid = curSid;
+      nt[i].preStart = preStart;
+      nt[i].open = open;
+      nt[i].winEnd = winEnd;
+      nt[i].rh = (rn > 0) ? rh : 0.0;
+      nt[i].rl = (rn > 0) ? rl : 0.0;
+      nt[i].rn = rn;
+      NbNytSideCopy(nt[i].buy, sb);
+      NbNytSideCopy(nt[i].sell, ss);
+   }
+}
+
+string NbNytStateText(int st)
+{
+   switch(st)
+   {
+      case NB_NT_WAIT:      return "WAIT";
+      case NB_NT_VALID:     return "VALID";
+      case NB_NT_TRIGGERED: return "TRIGGERED";
+      case NB_NT_INVALID:   return "INVALID";
+   }
+   return "OFF";
+}
+
+string NbNytWhyText(int why)
+{
+   switch(why)
+   {
+      case NB_NTW_NO_CLOCK:  return "NY open time not set (HH:MM)";
+      case NB_NTW_WEEKEND:   return "weekend - no NY session";
+      case NB_NTW_BEFORE:    return "range starts later today";
+      case NB_NTW_BUILDING:  return "pre-NY range building";
+      case NB_NTW_NO_RANGE:  return "range too short - nothing to trap";
+      case NB_NTW_NOT_SWEPT: return "level not swept yet";
+      case NB_NTW_SWEPT:     return "swept - wait 5M close back inside";
+      case NB_NTW_ACTIVE:    return "5M closed back inside - in play";
+      case NB_NTW_TP1:       return "TP1 reached";
+      case NB_NTW_SL:        return "SL hit";
+      case NB_NTW_EXPIRED:   return "expired (no TP1 / SL in time)";
+      case NB_NTW_OVER:      return "NY window over - no trigger";
+      case NB_NTW_NO_STOP:   return "no room for a stop";
+   }
+   return "";
+}
+
+//--- a side is IN PLAY when swept (VALID) or triggered and not finished
+bool NbNytLive(const NbNytSide &s)
+{
+   return (s.state == NB_NT_TRIGGERED && s.why == NB_NTW_ACTIVE);
+}
+//=== NB_NYT_END ===
 //=== NB_ENGINE_END ===
 
 //+------------------------------------------------------------------+
@@ -2369,6 +2813,8 @@ const string NB_PFX_P = "NBLP_P_";
 const string NB_PFX_C = "NBLP_C_";
 const string NB_PFX_Q = "NBLP_Q_";   // v1.05: the bottom-middle 5-question table
 const string NB_PFX_F = "NBLP_F_";   // v1.05: its chart drawing (S/R lines, zones, plan)
+const string NB_PFX_N = "NBLP_N_";   // v1.06: NY trap lines on the chart
+const string NB_PFX_L = "NBLP_L_";   // v1.06: the decision ladder panel (top right)
 #define NB_RGB(r, g, b) ((color)((r) | ((g) << 8) | ((b) << 16)))
 
 enum ENUM_NB_CORNER
@@ -2425,6 +2871,18 @@ input int            InpFqLondonEndUtc  = 12;          // London range end (UTC 
 input int            InpFqBottomY       = 16;          // Table distance from the chart bottom (px)
 input double         InpFqSilverSlMult  = 2.0;         // SILVER: SL buffer x this (wider, volatility-adjusted stop)
 input double         InpFqSilverConfirmAtr = 0.25;     // SILVER: confirmation close must pass by this x 5M ATR
+input group "NY TRAP + DECISION LADDER (v1.06, read only - nothing is sent)"
+input bool           InpLadderShow      = true;        // Show the decision ladder (15M > 5M > NY trap > ACTION)
+input bool           InpNytDraw         = true;        // Draw the NY TRAP BUY / SELL lines
+input int            InpNytRangeHours   = 4;           // NY trap: pre-NY range = hours before the NY open time
+input int            InpNytWindowMin    = 90;          // NY trap: window after the NY open (minutes)
+input int            InpNytMinBars      = 12;          // NY trap: range needs at least this many closed 5M bars
+input double         InpNytRefAtr       = 1.0;         // NY trap: reference SL before the sweep (x 5M ATR, estimate)
+input double         InpScalpGoldMin    = 5.0;         // Scalp reference GOLD: smallest move (price)
+input double         InpScalpGoldMax    = 20.0;        // Scalp reference GOLD: largest move (price)
+input double         InpScalpSilverMin  = 0.30;        // Scalp reference SILVER: smallest move (price)
+input double         InpScalpSilverMax  = 1.00;        // Scalp reference SILVER: largest move (price)
+input bool           InpSimpleView      = false;       // Simple view: ladder + chart only (hide main panel and table)
 
 // plot buffers
 double g_bEma[];
@@ -2493,6 +2951,10 @@ NbFqBar  g_fq[];
 NbFqPlan g_fqPlans[];
 int      g_nFqPlan;
 
+// v1.06 NY trap layer
+NbNytCfg g_N;
+NbNytBar g_nt[];
+
 // prototypes
 int    PlotDrawType(int plot);
 void   NbUpdate();
@@ -2526,6 +2988,11 @@ void   NbQRect(string id, int x, int y, int w, int h, color bg, color border);
 void   NbQLabel(string id, int x, int y, string txt, color clr, int size, string font, int anchor);
 color  NbQAnsColor(string ans);
 void   NbFqDrawTable();
+// v1.06 prototypes
+void   NbNytConfig();
+void   NbNytRecompute();
+void   NbNytDrawChart();
+void   NbLadderDraw();
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -2562,6 +3029,18 @@ int OnInit()
       InpFqSilverSlMult < 1.0 || InpFqSilverSlMult > 5.0 || InpFqSilverConfirmAtr < 0.0 || InpFqSilverConfirmAtr > 2.0)
    {
       Print("NRTR BOSS: invalid inputs - 5-question plan settings out of range");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   if(InpNytRangeHours < 1 || InpNytRangeHours > 12 || InpNytWindowMin < 5 || InpNytWindowMin > 480 || InpNytMinBars < 1 ||
+      InpNytRefAtr <= 0.0 || InpNytRefAtr > 5.0 || InpScalpGoldMin <= 0.0 || InpScalpGoldMax <= InpScalpGoldMin ||
+      InpScalpSilverMin <= 0.0 || InpScalpSilverMax <= InpScalpSilverMin)
+   {
+      Print("NRTR BOSS: invalid inputs - NY trap / scalp settings out of range");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   if(NbParseHHMM(InpNyOpenTime) >= 0 && NbParseHHMM(InpNyOpenTime) < InpNytRangeHours * 3600)
+   {
+      Print("NRTR BOSS: invalid inputs - the pre-NY range would start before broker midnight");
       return INIT_PARAMETERS_INCORRECT;
    }
 
@@ -2633,6 +3112,7 @@ int OnInit()
    ArrayResize(g_fqPlans, 0);
    g_nFqPlan = 0;
    NbFqConfig();
+   ArrayResize(g_nt, 0);
    if(g_swingDist < 0.0)
       g_swingDist = 0.0;
 
@@ -2668,8 +3148,12 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 {
    if(id == CHARTEVENT_CHART_CHANGE)
    {
-      NbDrawPanel();
-      NbFqDrawTable();
+      if(!InpSimpleView)
+      {
+         NbDrawPanel();
+         NbFqDrawTable();
+      }
+      NbLadderDraw();
       ChartRedraw(0);
    }
 }
@@ -2707,8 +3191,17 @@ void NbUpdate()
       NbNyCheck(TimeTradeServer());
    }
    NbEvaluate();
-   NbDrawPanel();
-   NbFqDrawTable();
+   if(!InpSimpleView)
+   {
+      NbDrawPanel();
+      NbFqDrawTable();
+   }
+   else
+   {
+      ObjectsDeleteAll(0, NB_PFX_P);
+      ObjectsDeleteAll(0, NB_PFX_Q);
+   }
+   NbLadderDraw();
    ChartRedraw(0);
 }
 
@@ -2857,6 +3350,8 @@ void NbRecompute()
       ArrayResize(g_fqPlans, 0);
       g_nFqPlan = 0;
       ObjectsDeleteAll(0, NB_PFX_F);
+      ArrayResize(g_nt, 0);
+      ObjectsDeleteAll(0, NB_PFX_N);
       return;
    }
    NbRun15(g_s15, g_piv15, g_P);
@@ -2865,6 +3360,8 @@ void NbRecompute()
    NbDrawChart();
    NbFqRecompute();
    NbFqDrawChart();
+   NbNytRecompute();
+   NbNytDrawChart();
 }
 
 //--- decide what the panel shows right now
@@ -4581,4 +5078,665 @@ void NbFqDrawTable()
    NbQLabel("footR", xr, y, (note == "") ? "A hypothesis until the count says otherwise." : note, cDim, fsS, "Arial", ANCHOR_LEFT_UPPER);
 }
 //=== NB_FQT_END ===
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v1.06 METALS: NY TRAP LAYER + DECISION LADDER (terminal side)    |
+//| Own objects only: NBLP_N_ (NY trap lines on the chart) and       |
+//| NBLP_L_ (the ladder panel, top right). READ ONLY: positions are  |
+//| read, never changed. Every label stays within MT5's 63 chars.    |
+//| The ladder reads the existing layers in their order of command:  |
+//|   1 15M = BOSS / DIRECTION   (the main engine's 15M mode)        |
+//|   2 5M  = ENTRY / SCALP TIMING (the main engine's 5M state)      |
+//|   3 NY TRAP / PENDING LOCATION (NY trap layer, 5-question plan)  |
+//|   4 ACTION  - exactly one: POSITION ACTIVE / CLICK / PENDING /   |
+//|               CONFLICT / WAIT / NO TRADE                         |
+//| A layer below can never overrule a layer above it: a NY trap or  |
+//| a pending plan against (or without) the 15M boss is not READY.   |
+//+------------------------------------------------------------------+
+void NbNytConfig()
+{
+   g_N.openSec = NbParseHHMM(InpNyOpenTime);
+   g_N.preHours = InpNytRangeHours;
+   g_N.winMin = InpNytWindowMin;
+   g_N.minBars = InpNytMinBars;
+   g_N.slBufAtr = InpSlBufferAtr;
+   double slm = 1.0;
+   double cfa = 0.0;
+   string note = "";
+   NbFqAsset(slm, cfa, note);   // silver: wider stop + stronger confirmation, same as the table
+   g_N.slBufMult = slm;
+   g_N.confirmAtr = cfa;
+   g_N.refAtr = InpNytRefAtr;
+   g_N.tp1R = InpTp1R;
+   g_N.tp2R = InpTp2R;
+   g_N.validBars = InpSignalValidBars;
+   g_N.tick = g_tick;
+   g_N.digits = g_digits;
+}
+
+void NbNytRecompute()
+{
+   NbNytConfig();
+   NbRunNyt(g_s5, true, g_N, g_nt);
+}
+
+//--- a finite (or future-reaching) horizontal segment
+void NbNSeg(string name, datetime t1, datetime t2, double price, color clr, int width, int style)
+{
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_TREND, 0, t1, price, t2, price);
+   ObjectSetInteger(0, name, OBJPROP_TIME, 0, t1);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 0, price);
+   ObjectSetInteger(0, name, OBJPROP_TIME, 1, t2);
+   ObjectSetDouble(0, name, OBJPROP_PRICE, 1, price);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
+   ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+}
+
+color NbNytStateColor(int st, int dir)
+{
+   if(st == NB_NT_TRIGGERED)
+      return (dir > 0) ? NB_RGB(46, 204, 113) : NB_RGB(231, 76, 60);
+   if(st == NB_NT_VALID)
+      return NB_RGB(241, 196, 15);
+   if(st == NB_NT_WAIT)
+      return NB_RGB(155, 89, 182);
+   return NB_RGB(110, 110, 120);
+}
+
+//--- NY TRAP BUY / SELL lines of the latest session: entry reference, SL,
+//    TP1, TP2 from the range start to the end of the NY window (drawn
+//    before the window happens). Texts in the background.
+void NbNytDrawSide(const NbNytSide &s, datetime t1, datetime t2, string tag)
+{
+   if(s.state == NB_NT_OFF || s.level <= 0.0)
+      return;
+   color c = NbNytStateColor(s.state, s.dir);
+   color cSl = NB_RGB(231, 76, 60);
+   color cTp = NB_RGB(46, 204, 113);
+   string side = (s.dir > 0) ? "NY TRAP BUY" : "NY TRAP SELL";
+   string pfx = NB_PFX_N + tag;
+   string st = NbNytStateText(s.state);
+   string ref = (s.state == NB_NT_TRIGGERED) ? "entry " : "ref ";
+   NbNSeg(pfx + "E", t1, t2, (s.state == NB_NT_TRIGGERED) ? s.entry : s.level, c, 2, STYLE_SOLID);
+   NbFText(pfx + "E_T", t1, (s.state == NB_NT_TRIGGERED) ? s.entry : s.level,
+           side + "  " + st + "  " + ref + NbPx((s.state == NB_NT_TRIGGERED) ? s.entry : s.level), c, 9,
+           (s.dir > 0) ? ANCHOR_LEFT_UPPER : ANCHOR_LEFT_LOWER, side + ": " + NbNytWhyText(s.why));
+   bool live = (s.state == NB_NT_WAIT || s.state == NB_NT_VALID || NbNytLive(s));
+   if(!live || s.sl <= 0.0)
+      return;
+   string est = s.estimate ? " (ref)" : "";
+   NbNSeg(pfx + "SL", t1, t2, s.sl, cSl, 1, STYLE_DASH);
+   NbFText(pfx + "SL_T", t2, s.sl, side + " SL " + NbPx(s.sl) + est, cSl, 7, ANCHOR_RIGHT_LOWER,
+           s.estimate ? "Reference: the real SL is the sweep extreme + buffer, known at the trigger." : "Beyond the sweep.");
+   NbNSeg(pfx + "T1", t1, t2, s.tp1, cTp, 1, STYLE_DOT);
+   NbFText(pfx + "T1_T", t2, s.tp1, side + " TP1 " + NbPx(s.tp1) + est, cTp, 7, ANCHOR_RIGHT_LOWER, "TP1 = " + DoubleToString(g_N.tp1R, 1) + "R");
+   NbNSeg(pfx + "T2", t1, t2, s.tp2, cTp, 1, STYLE_DOT);
+   NbFText(pfx + "T2_T", t2, s.tp2, side + " TP2 " + NbPx(s.tp2) + est, cTp, 7, ANCHOR_RIGHT_LOWER, "TP2 = " + DoubleToString(g_N.tp2R, 1) + "R");
+}
+
+void NbNytDrawChart()
+{
+   ObjectsDeleteAll(0, NB_PFX_N);
+   // the ladder is recreated right after this (same refresh): drawn on top of the markers
+   ObjectsDeleteAll(0, NB_PFX_L);
+   if(!InpNytDraw || !g_ready || g_s5.n < 1 || ArraySize(g_nt) != g_s5.n)
+      return;
+   int i = g_s5.n - 1;
+   if(g_nt[i].phase == NB_NTP_OUT || g_nt[i].sid < 0)
+      return;
+   datetime t1 = g_nt[i].preStart;
+   datetime t2 = g_nt[i].winEnd;
+   if(g_nt[i].rn > 0)
+   {
+      NbNSeg(NB_PFX_N + "RH", t1, g_nt[i].open, g_nt[i].rh, NB_RGB(155, 89, 182), 1, STYLE_DASHDOT);
+      NbNSeg(NB_PFX_N + "RL", t1, g_nt[i].open, g_nt[i].rl, NB_RGB(155, 89, 182), 1, STYLE_DASHDOT);
+   }
+   NbNytDrawSide(g_nt[i].sell, g_nt[i].open, t2, "S_");
+   NbNytDrawSide(g_nt[i].buy, g_nt[i].open, t2, "B_");
+   // the trigger candle of a triggered side
+   for(int k = 0; k < 2; k++)
+   {
+      int ti = (k == 0) ? g_nt[i].buy.trigIdx : g_nt[i].sell.trigIdx;
+      int dir = (k == 0) ? NB_BUY : NB_SELL;
+      if(ti < 0 || ti >= g_s5.n)
+         continue;
+      double off = g_s5.atr[ti] * 0.5;
+      if(dir > 0)
+         NbFText(NB_PFX_N + "M_B", g_s5.t[ti], g_s5.l[ti] - off, NbSymUp() + " NY TRAP BUY", NB_RGB(46, 204, 113), 10,
+                 ANCHOR_UPPER, "The 5M close back above the swept range low.");
+      else
+         NbFText(NB_PFX_N + "M_S", g_s5.t[ti], g_s5.h[ti] + off, NbSymDown() + " NY TRAP SELL", NB_RGB(231, 76, 60), 10,
+                 ANCHOR_LOWER, "The 5M close back below the swept range high.");
+   }
+}
+
+void NbLRect(string id, int x, int y, int w, int h, color bg, color border)
+{
+   string name = NB_PFX_L + id;
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, h);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, border);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 10);
+}
+
+void NbLLabel(string id, int x, int y, string txt, color clr, int size, string font, int anchor)
+{
+   string name = NB_PFX_L + id;
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, anchor);
+   ObjectSetString(0, name, OBJPROP_TEXT, txt);
+   ObjectSetString(0, name, OBJPROP_FONT, font);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 11);
+}
+
+//--- money for a price move: move / tick size x tick value x lots (the
+//    broker's own tick value already carries the contract size)
+double NbMoneyFor(double move, double lots)
+{
+   if(g_tick <= 0.0 || g_tickValue <= 0.0)
+      return 0.0;
+   return MathAbs(move) / g_tick * g_tickValue * lots;
+}
+
+//--- one NY trap side in two short rows
+void NbLTrapRows(const NbNytSide &s, string id, int x, int x2, int &y, int rh, int fs, int fsS)
+{
+   string side = (s.dir > 0) ? "NY TRAP BUY " : "NY TRAP SELL";
+   color c = NbNytStateColor(s.state, s.dir);
+   string st = NbNytStateText(s.state);
+   NbLLabel(id + "a", x, y, side, c, fs, "Arial Black", ANCHOR_LEFT_UPPER);
+   NbLLabel(id + "b", x2, y, st + "  -  " + NbNytWhyText(s.why), c, fsS, "Arial Bold", ANCHOR_LEFT_UPPER);
+   y += rh;
+   string row = "---";
+   if(s.state != NB_NT_OFF && s.level > 0.0 && s.sl > 0.0)
+   {
+      string e = (s.state == NB_NT_TRIGGERED) ? "entry " : "ref ";
+      row = e + NbPx(s.entry) + "  SL " + NbPx(s.sl) + "  TP1 " + NbPx(s.tp1) + "  TP2 " + NbPx(s.tp2);
+   }
+   else if(s.level > 0.0)
+      row = "level " + NbPx(s.level);
+   NbLLabel(id + "c", x2, y, row, (s.state == NB_NT_INVALID || s.state == NB_NT_OFF) ? NB_RGB(95, 105, 120) : NB_RGB(235, 238, 242),
+            fsS, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
+}
+
+//--- THE DECISION LADDER. Redrawn every second; every answer comes from
+//    the last CLOSED bars except the one PREVIEW row, which is labelled so
+//    and is never used for any decision.
+void NbLadderDraw()
+{
+   if(!InpLadderShow)
+   {
+      ObjectsDeleteAll(0, NB_PFX_L);
+      return;
+   }
+   double sc = MathMax(0.7, MathMin(1.6, InpPanelScale));
+   int W = (int)MathRound(430 * sc);
+   int rh = (int)MathRound(15 * sc);
+   int pad = (int)MathRound(10 * sc);
+   int fs = (int)MathRound(9 * sc);
+   int fsS = (int)MathRound(8 * sc);
+   int fsT = (int)MathRound(11 * sc);
+   int fsB = (int)MathRound(13 * sc);
+   int bannerH = (int)MathRound(26 * sc);
+   int rows = 31;
+   int H = pad * 2 + bannerH + rows * rh;
+   int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0);
+   // top RIGHT; top left when the main panel sits on the right
+   int ox = cw - W - InpPanelX;
+   if(InpPanelCorner == NB_TOP_RIGHT || InpPanelCorner == NB_BOTTOM_RIGHT)
+      ox = InpPanelX;
+   if(ox < 0)
+      ox = 0;
+   int oy = InpPanelY;
+   int x2 = ox + pad + (int)MathRound(120 * sc);
+
+   color cBg = NB_RGB(16, 20, 28);
+   color cMkt = NbFqAccent();
+   color cKey = NB_RGB(140, 150, 165);
+   color cVal = NB_RGB(235, 238, 242);
+   color cUp = NB_RGB(46, 204, 113);
+   color cDn = NB_RGB(231, 76, 60);
+   color cWait = NB_RGB(241, 196, 15);
+   color cDim = NB_RGB(95, 105, 120);
+   color cExit = NB_RGB(230, 126, 34);
+   color cNy = NB_RGB(155, 89, 182);
+
+   string lbl = NbFqLabel();
+   bool ok = (lbl != "" && g_ready && g_s5.n > 0 && g_s15.n > 0 && ArraySize(g_nt) == g_s5.n);
+   int i5 = ok ? g_s5.n - 1 : 0;
+   int i15 = ok ? g_s15.n - 1 : 0;
+   int boss = ok ? g_s15.mode[i15] : NB_WAIT;
+   double bid = SymbolInfoDouble(g_sym, SYMBOL_BID);
+   double ask = SymbolInfoDouble(g_sym, SYMBOL_ASK);
+   if(ask <= 0.0)
+      ask = bid;
+
+   NbLRect("bg", ox, oy, W, H, cBg, cMkt);
+   int y = oy + pad;
+   NbLLabel("title", ox + pad, y, (lbl == "") ? "DECISION LADDER" : (lbl + "  " + g_sym + "   " + NbPx(bid)), cMkt, fsT, "Arial Black",
+            ANCHOR_LEFT_UPPER);
+   NbLLabel("sub", ox + W - pad, y + (int)MathRound(2 * sc), "DECISION LADDER", cKey, fsS, "Arial Black", ANCHOR_RIGHT_UPPER);
+   y += (int)MathRound(rh * 1.3);
+
+   // ---------------- 1: 15M BOSS ----------------
+   NbLLabel("h1", ox + pad, y, "1   15M = BOSS / DIRECTION", cMkt, fs, "Arial Black", ANCHOR_LEFT_UPPER);
+   y += rh;
+   string b1 = "---";
+   string b2 = "---";
+   color b2c = cDim;
+   if(ok)
+   {
+      int d15 = g_s15.dir[i15];
+      string ema = "EMA200 ---";
+      if(g_s15.ema[i15] > 0.0)
+         ema = (g_s15.c[i15] > g_s15.ema[i15]) ? "ABOVE EMA200" : ((g_s15.c[i15] < g_s15.ema[i15]) ? "BELOW EMA200" : "ON EMA200");
+      b1 = "NRTR " + NbDirText(d15) + "   " + ema + "   " + NbStructText(g_s15.st[i15], g_s15.hl[i15], g_s15.ll[i15], g_s15.lk[i15]);
+      if(boss == NB_BUY)
+         b2 = "BOSS = BUY MODE  (only BUY ideas)";
+      else if(boss == NB_SELL)
+         b2 = "BOSS = SELL MODE  (only SELL ideas)";
+      else
+         b2 = "BOSS = WAIT: " + NbReasonAt(g_s15.mr[i15], 0);
+      b2c = NbDirColor(boss);
+   }
+   NbLLabel("b1", ox + pad, y, b1, cVal, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
+   NbLLabel("b2", ox + pad, y, b2, b2c, fs, "Arial Black", ANCHOR_LEFT_UPPER);
+   y += rh;
+
+   // ---------------- 2: 5M TIMING ----------------
+   NbLLabel("h2", ox + pad, y, NbSymDown() + "  2   5M = ENTRY / SCALP TIMING", cMkt, fs, "Arial Black", ANCHOR_LEFT_UPPER);
+   y += rh;
+   string t1 = "---";
+   string t2 = "---";
+   color t2c = cDim;
+   string pv = "---";
+   color pvc = cDim;
+   if(ok)
+   {
+      string body = (g_s5.c[i5] > g_s5.o[i5]) ? "BULLISH BODY" : ((g_s5.c[i5] < g_s5.o[i5]) ? "BEARISH BODY" : "NO BODY (doji)");
+      t1 = "LAST CLOSED 5M " + TimeToString(g_s5.t[i5] + g_s5.sec, TIME_MINUTES) + "  " + body + "   NRTR " + NbDirText(g_s5.dir[i5]);
+      if(g_final == NB_BUY || g_final == NB_SELL)
+      {
+         t2 = "TIMING = CONFIRMED - CLOSED WITH THE 15M BOSS";
+         t2c = NbDirColor(g_final);
+      }
+      else
+      {
+         t2 = "TIMING = WAIT: " + NbReasonAt(g_s5.reasons[i5], 0);
+         t2c = cWait;
+      }
+      // the forming candle: PREVIEW ONLY, from the live bid, never a decision input
+      double o0 = iOpen(g_sym, PERIOD_M5, 0);
+      if(g_fresh && o0 > 0.0 && bid > 0.0)
+      {
+         string pvBody = (bid > o0) ? "BULLISH BODY" : ((bid < o0) ? "BEARISH BODY" : "NO BODY");
+         pv = "IF IT CLOSED NOW: " + pvBody;
+         pvc = NB_RGB(241, 196, 15);
+      }
+   }
+   NbLLabel("t1", ox + pad, y, t1, cVal, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
+   NbLLabel("t2", ox + pad, y, t2, t2c, fsS, "Arial Bold", ANCHOR_LEFT_UPPER);
+   y += rh;
+   NbLLabel("pvk", ox + pad, y, "FORMING 5M - PREVIEW ONLY, NOT A SIGNAL:", cDim, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
+   NbLLabel("pv", ox + pad, y, pv, pvc, fsS, "Arial Bold", ANCHOR_LEFT_UPPER);
+   y += rh;
+
+   // ---------------- 3: NY TRAP / PENDING ----------------
+   NbLLabel("h3", ox + pad, y, NbSymDown() + "  3   NY TRAP / PENDING LOCATION", cMkt, fs, "Arial Black", ANCHOR_LEFT_UPPER);
+   y += rh;
+   string ny = "NY session: ---";
+   if(ok && g_nt[i5].sid >= 0)
+   {
+      ny = "NY " + TimeToString(g_nt[i5].open, TIME_MINUTES) + "-" + TimeToString(g_nt[i5].winEnd, TIME_MINUTES);
+      if(g_nt[i5].rn > 0)
+         ny = ny + "  RANGE H " + NbPx(g_nt[i5].rh) + "  L " + NbPx(g_nt[i5].rl) + " (" + IntegerToString(g_nt[i5].rn) + ")";
+      else
+         ny = ny + "  range from " + TimeToString(g_nt[i5].preStart, TIME_MINUTES);
+   }
+   else if(ok)
+      ny = "NY session: " + NbNytWhyText(g_nt[i5].sell.why);
+   NbLLabel("ny", ox + pad, y, ny, cNy, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
+   NbNytSide tS;
+   NbNytSide tB;
+   NbNytSideReset(tS, NB_SELL);
+   NbNytSideReset(tB, NB_BUY);
+   if(ok)
+   {
+      NbNytSideCopy(tS, g_nt[i5].sell);
+      NbNytSideCopy(tB, g_nt[i5].buy);
+   }
+   NbLTrapRows(tS, "ts", ox + pad, x2, y, rh, fsS, fsS);
+   NbLTrapRows(tB, "tb", ox + pad, x2, y, rh, fsS, fsS);
+   // the trap side that matters now: triggered-in-play first, then swept
+   int tDir = 0;
+   if(NbNytLive(tS))
+      tDir = NB_SELL;
+   else if(NbNytLive(tB))
+      tDir = NB_BUY;
+   else if(tS.state == NB_NT_VALID)
+      tDir = NB_SELL;
+   else if(tB.state == NB_NT_VALID)
+      tDir = NB_BUY;
+   string vs = "NY TRAP: nothing in play";
+   color vsc = cDim;
+   if(tDir != 0)
+   {
+      string tn = (tDir > 0) ? "NY TRAP BUY" : "NY TRAP SELL";
+      if(boss == -tDir)
+      {
+         vs = "NY TRAP vs 15M BOSS = CONFLICT  (" + tn + ")";
+         vsc = cExit;
+      }
+      else if(boss == tDir)
+      {
+         vs = tn + " AGREES WITH THE 15M BOSS";
+         vsc = NbDirColor(tDir);
+      }
+      else
+      {
+         vs = tn + " - 15M BOSS NOT IN MODE (not confirmed)";
+         vsc = cWait;
+      }
+   }
+   NbLLabel("vs", ox + pad, y, vs, vsc, fsS, "Arial Bold", ANCHOR_LEFT_UPPER);
+   y += rh;
+   // the 5-question pending plan (bottom-middle table)
+   int fqP = -1;
+   int fqDir = 0;
+   bool fqReady = false;
+   if(ok && ArraySize(g_fq) == g_s5.n)
+   {
+      fqP = g_fq[i5].plan;
+      fqReady = (g_fq[i5].status == NB_FQ_READY && fqP >= 0 && fqP < g_nFqPlan);
+      if(fqReady)
+         fqDir = g_fqPlans[fqP].dir;
+   }
+   string pend = "PENDING PLAN: none (5-question table: " + ((ok && ArraySize(g_fq) == g_s5.n) ? NbFqStatusText(g_fq[i5].status) : "---") + ")";
+   if(fqReady)
+   {
+      string pendType = (fqDir > 0) ? "BUY LIMIT " : "SELL LIMIT ";
+      pend = "PENDING PLAN: " + pendType + NbPx(g_fqPlans[fqP].entry) + "  (5-question READY)";
+   }
+   NbLLabel("pend", ox + pad, y, pend, fqReady ? NbDirColor(fqDir) : cDim, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
+
+   // ---------------- 4: ACTION (exactly one) ----------------
+   NbLLabel("h4", ox + pad, y, NbSymDown() + "  4   ACTION", cMkt, fs, "Arial Black", ANCHOR_LEFT_UPPER);
+   y += rh;
+   string act = "WAIT";
+   string src = " ";
+   color ac = cWait;
+   string k[7] = {"TYPE", "ENTRY", "SL", "TP1", "TP2", "R:R", "LOTS"};
+   string v[7] = {"---", "---", "---", "---", "---", "---", "---"};
+   bool numsLive = false;
+   int aDir = 0;
+   double aEntry = 0.0;
+   string foot = "PLACE MANUALLY - NOTHING IS SENT";
+   // positions on this symbol (READ ONLY)
+   int pc = 0;
+   int pType = -1;
+   double pVol = 0.0;
+   double pOpen = 0.0;
+   double pSl = 0.0;
+   double pTp = 0.0;
+   datetime pTime = 0;
+   int total = PositionsTotal();
+   for(int q = 0; q < total; q++)
+   {
+      ulong tk = PositionGetTicket(q);
+      if(tk == 0)
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != g_sym)
+         continue;
+      datetime ot = (datetime)PositionGetInteger(POSITION_TIME);
+      pc++;
+      if(pTime == 0 || ot < pTime)
+      {
+         pTime = ot;
+         pType = (int)PositionGetInteger(POSITION_TYPE);
+         pVol = PositionGetDouble(POSITION_VOLUME);
+         pOpen = PositionGetDouble(POSITION_PRICE_OPEN);
+         pSl = PositionGetDouble(POSITION_SL);
+         pTp = PositionGetDouble(POSITION_TP);
+      }
+   }
+   if(lbl == "")
+   {
+      act = NbFqOnlyText();
+      ac = cDim;
+      foot = " ";
+   }
+   else if(!ok)
+   {
+      act = "NO DATA";
+      src = "history not loaded yet";
+      ac = cDim;
+   }
+   else if(pc > 0)
+   {
+      int pd = (pType == POSITION_TYPE_BUY) ? 1 : -1;
+      double cur = (pd > 0) ? bid : ask;
+      act = "POSITION ACTIVE";
+      ac = NB_RGB(80, 160, 255);
+      src = ((pd > 0) ? "BUY " : "SELL ") + DoubleToString(pVol, 2) + " @ " + NbPx(pOpen) + ((pc > 1) ? ("  (+" + IntegerToString(pc - 1) + " more)") : "");
+      k[0] = "NOW";
+      v[0] = NbPx(cur) + "   " + ((pd * (cur - pOpen) >= 0.0) ? "+" : "-") + DoubleToString(MathAbs(cur - pOpen), g_digits) + " from entry";
+      k[1] = "SL";
+      v[1] = (pSl > 0.0) ? (NbPx(pSl) + "   " + DoubleToString(MathAbs(cur - pSl), g_digits) + " away = " +
+                            DoubleToString(NbMoneyFor(cur - pSl, pVol), 2) + " " + g_accCcy) : "NONE SET - set a stop";
+      k[2] = "TP";
+      v[2] = (pTp > 0.0) ? (NbPx(pTp) + "   " + DoubleToString(MathAbs(pTp - cur), g_digits) + " away = " +
+                            DoubleToString(NbMoneyFor(pTp - cur, pVol), 2) + " " + g_accCcy) : "none set";
+      k[3] = "15M BOSS";
+      v[3] = NbModeText(boss);
+      k[4] = "ADVICE";
+      k[5] = " ";
+      if(!g_fresh)
+         v[4] = "CANNOT JUDGE - DATA STALE";
+      else if(g_adv == NB_ADV_EXIT)
+         v[4] = "EXIT / PROTECT - 15M BOSS TURNED AGAINST";
+      else if(g_adv == NB_ADV_HOLD)
+         v[4] = "HOLD - 15M REGIME INTACT";
+      else
+         v[4] = "PROTECT - 15M BOSS WAIT (not invalidated)";
+      v[5] = "you decide; this panel never closes anything";
+      k[6] = " ";
+      v[6] = " ";
+      numsLive = true;
+      foot = "READ ONLY - NOTHING IS CHANGED";
+      if(g_adv == NB_ADV_EXIT)
+         ac = cExit;
+   }
+   else if(!g_fresh)
+   {
+      act = "NO TRADE";
+      src = "DATA STALE / MARKET CLOSED - wait for live ticks";
+      ac = cDim;
+      foot = " ";
+   }
+   else if(g_final == NB_BUY || g_final == NB_SELL)
+   {
+      int cur = g_s5.sigOf[i5];
+      aDir = g_final;
+      act = (aDir > 0) ? "BUY VALID - CLICK BUY" : "SELL VALID - CLICK SELL";
+      src = "15M BOSS " + NbModeText(boss) + " + 5M CONFIRMED CLOSE";
+      ac = NbDirColor(aDir);
+      if(cur >= 0)
+      {
+         aEntry = g_sigs[cur].entry;
+         v[0] = (aDir > 0) ? "MARKET BUY (click)" : "MARKET SELL (click)";
+         v[1] = NbPx(g_sigs[cur].entry) + "   (5M close)";
+         v[2] = NbPx(g_sigs[cur].sl) + "   (5M swing)";
+         v[3] = NbPx(g_sigs[cur].tp1);
+         v[4] = NbPx(g_sigs[cur].tp2);
+         v[5] = "1 : " + DoubleToString(InpTp1R, 1) + "  /  1 : " + DoubleToString(InpTp2R, 1);
+         double atRisk = 0.0;
+         double lots = NbLotsForRisk(g_balance, InpRiskPercent, g_sigs[cur].risk, g_tick, g_tickValue, g_volMin, g_volStep, g_volMax, atRisk);
+         v[6] = (lots > 0.0) ? (DoubleToString(lots, 2) + "   (" + DoubleToString(atRisk, 2) + " " + g_accCcy + " = " +
+                                DoubleToString(InpRiskPercent, 1) + "%)") : "SKIP - min lot risks too much";
+         numsLive = true;
+      }
+      foot = "CLICK IT YOURSELF - NOTHING IS SENT";
+   }
+   else if(tDir != 0 && ((tDir > 0) ? NbNytLive(tB) : NbNytLive(tS)))
+   {
+      NbNytSide T;
+      if(tDir > 0)
+         NbNytSideCopy(T, tB);
+      else
+         NbNytSideCopy(T, tS);
+      v[0] = (tDir > 0) ? "MARKET BUY (click)" : "MARKET SELL (click)";
+      v[1] = NbPx(T.entry) + "   (5M close back inside)";
+      v[2] = NbPx(T.sl) + "   (beyond the sweep)";
+      v[3] = NbPx(T.tp1);
+      v[4] = NbPx(T.tp2);
+      v[5] = "1 : " + DoubleToString(InpTp1R, 1) + "  /  1 : " + DoubleToString(InpTp2R, 1);
+      double atRisk = 0.0;
+      double lots = NbLotsForRisk(g_balance, InpRiskPercent, T.risk, g_tick, g_tickValue, g_volMin, g_volStep, g_volMax, atRisk);
+      v[6] = (lots > 0.0) ? (DoubleToString(lots, 2) + "   (" + DoubleToString(atRisk, 2) + " " + g_accCcy + ")") : "SKIP - min lot risks too much";
+      if(boss == tDir)
+      {
+         aDir = tDir;
+         aEntry = T.entry;
+         act = (tDir > 0) ? "BUY VALID - CLICK BUY" : "SELL VALID - CLICK SELL";
+         string tSide = (tDir > 0) ? "BUY" : "SELL";
+         src = "NY TRAP " + tSide + " + 15M BOSS " + NbModeText(boss);
+         ac = NbDirColor(tDir);
+         numsLive = true;
+         foot = "CLICK IT YOURSELF - NOTHING IS SENT";
+      }
+      else if(boss == -tDir)
+      {
+         act = "NY TRAP vs 15M BOSS = CONFLICT";
+         src = "not a READY setup - the 15M boss is " + NbModeText(boss);
+         ac = cExit;
+         foot = "NO TRADE - THE LAYERS DISAGREE";
+      }
+      else
+      {
+         act = "WAIT";
+         src = "NY trap fired, but the 15M boss is not in mode";
+         foot = "NO TRADE UNTIL THE 15M BOSS AGREES";
+      }
+   }
+   else if(fqReady)
+   {
+      v[0] = (fqDir > 0) ? "BUY LIMIT (pending)" : "SELL LIMIT (pending)";
+      v[1] = NbPx(g_fqPlans[fqP].entry) + "   (retest of the level)";
+      v[2] = NbPx(g_fqPlans[fqP].sl);
+      v[3] = NbPx(g_fqPlans[fqP].tp1);
+      v[4] = (g_fqPlans[fqP].tp2 > 0.0) ? NbPx(g_fqPlans[fqP].tp2) : "--- (no 2nd level mapped)";
+      v[5] = "1 : " + DoubleToString(g_fqPlans[fqP].rr1, 2) + ((g_fqPlans[fqP].rr2 > 0.0) ? ("  /  1 : " + DoubleToString(g_fqPlans[fqP].rr2, 2)) : "");
+      double atRisk = 0.0;
+      double lots = NbLotsForRisk(g_balance, InpRiskPercent, g_fqPlans[fqP].risk, g_tick, g_tickValue, g_volMin, g_volStep, g_volMax, atRisk);
+      v[6] = (lots > 0.0) ? (DoubleToString(lots, 2) + "   (" + DoubleToString(atRisk, 2) + " " + g_accCcy + ")") : "SKIP - min lot risks too much";
+      if(boss == fqDir)
+      {
+         aDir = fqDir;
+         aEntry = g_fqPlans[fqP].entry;
+         act = "PENDING ORDER PLAN";
+         src = "5-QUESTION PLAN + 15M BOSS " + NbModeText(boss);
+         ac = NbDirColor(fqDir);
+         numsLive = true;
+      }
+      else if(boss == -fqDir)
+      {
+         act = "PLAN vs 15M BOSS = CONFLICT";
+         src = "not a READY setup - the 15M boss is " + NbModeText(boss);
+         ac = cExit;
+         foot = "NO TRADE - THE LAYERS DISAGREE";
+      }
+      else
+      {
+         act = "WAIT";
+         src = "pending plan exists, the 15M boss is not in mode";
+         foot = "NO ORDER UNTIL THE 15M BOSS AGREES";
+      }
+   }
+   else
+   {
+      act = "WAIT";
+      if(boss == NB_WAIT)
+         src = "15M: " + NbReasonAt(g_s15.mr[i15], 0);
+      else
+         src = "5M: " + NbReasonAt(g_s5.reasons[i5], 0);
+      foot = "NOTHING TO DO YET";
+   }
+   NbLRect("banner", ox + pad, y, W - 2 * pad, bannerH, cBg, ac);
+   NbLLabel("act", ox + W / 2, y + bannerH / 2, act, ac, fsB, "Arial Black", ANCHOR_CENTER);
+   y += bannerH + (int)MathRound(3 * sc);
+   NbLLabel("src", ox + pad, y, src, cKey, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
+   for(int r = 0; r < 7; r++)
+   {
+      string rid = IntegerToString(r);
+      NbLLabel("k" + rid, ox + pad, y, k[r], cKey, fs, "Arial", ANCHOR_LEFT_UPPER);
+      color vc = numsLive ? cVal : cDim;
+      if(numsLive && pc == 0 && r == 2)
+         vc = cDn;
+      if(numsLive && pc == 0 && (r == 3 || r == 4))
+         vc = cUp;
+      NbLLabel("v" + rid, x2, y, v[r], vc, fsS, "Arial Bold", ANCHOR_LEFT_UPPER);
+      y += rh;
+   }
+   // SCALP REFERENCE (not a promise): the typical move per metal
+   bool silver = (StringFind(lbl, "SILVER") == 0);
+   double sMin = silver ? InpScalpSilverMin : InpScalpGoldMin;
+   double sMax = silver ? InpScalpSilverMax : InpScalpGoldMax;
+   string metalW = silver ? "SILVER" : "GOLD";
+   string sc1 = "SCALP REF " + metalW + ": " + DoubleToString(sMin, g_digits) + " .. " + DoubleToString(sMax, g_digits) +
+                " price move (not a promise)";
+   string sc2 = "---";
+   if(ok && aDir != 0 && aEntry > 0.0 && pc == 0)
+   {
+      double a = NbRoundTick(aEntry + aDir * sMin, g_tick, g_digits, 0);
+      double b = NbRoundTick(aEntry + aDir * sMax, g_tick, g_digits, 0);
+      sc2 = "scalp TP " + NbPx(a) + " .. " + NbPx(b) + "   1.00 lot: " + DoubleToString(NbMoneyFor(sMin, 1.0), 0) + " .. " +
+            DoubleToString(NbMoneyFor(sMax, 1.0), 0) + " " + g_accCcy;
+   }
+   else if(ok && g_tick > 0.0)
+      sc2 = "= " + DoubleToString(sMin / g_tick, 0) + " .. " + DoubleToString(sMax / g_tick, 0) + " ticks; 1.00 lot: " +
+            DoubleToString(NbMoneyFor(sMin, 1.0), 0) + " .. " + DoubleToString(NbMoneyFor(sMax, 1.0), 0) + " " + g_accCcy;
+   double contract = SymbolInfoDouble(g_sym, SYMBOL_TRADE_CONTRACT_SIZE);
+   string sc3 = "broker: tick " + DoubleToString(g_tick, g_digits) + " = " + DoubleToString(g_tickValue, 2) + " " + g_accCcy +
+                " per lot, contract " + DoubleToString(contract, 0);
+   NbLLabel("s1", ox + pad, y, sc1, cKey, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
+   NbLLabel("s2", ox + pad, y, sc2, cVal, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
+   NbLLabel("s3", ox + pad, y, sc3, cDim, fsS, "Arial", ANCHOR_LEFT_UPPER);
+   y += rh;
+   NbLLabel("foot", ox + W / 2, y + (int)MathRound(2 * sc), foot, ac, fs, "Arial Black", ANCHOR_CENTER);
+}
 //+------------------------------------------------------------------+

@@ -40,10 +40,10 @@ enum { PLOT_EMPTY_VALUE = 1, PLOT_DRAW_TYPE = 2, PLOT_ARROW = 3, PLOT_ARROW_SHIF
 enum { DRAW_NONE = 0, DRAW_LINE = 1, DRAW_COLOR_LINE = 2, DRAW_ARROW = 3, DRAW_COLOR_ARROW = 4 };
 enum { INDICATOR_SHORTNAME = 1, INDICATOR_DIGITS = 2 };
 enum { SYMBOL_TIME = 99, SYMBOL_DIGITS = 1, SYMBOL_TRADE_TICK_SIZE, SYMBOL_POINT, SYMBOL_TRADE_TICK_VALUE, SYMBOL_VOLUME_MIN, SYMBOL_VOLUME_STEP, SYMBOL_VOLUME_MAX,
-       SYMBOL_BID, SYMBOL_CURRENCY_BASE, SYMBOL_CURRENCY_PROFIT };
+       SYMBOL_BID, SYMBOL_CURRENCY_BASE, SYMBOL_CURRENCY_PROFIT, SYMBOL_ASK, SYMBOL_TRADE_CONTRACT_SIZE };
 enum { ACCOUNT_CURRENCY = 1 };
 enum { ACCOUNT_BALANCE = 1, ACCOUNT_EQUITY = 2 };
-enum { POSITION_SYMBOL = 1, POSITION_TYPE, POSITION_VOLUME, POSITION_TIME };
+enum { POSITION_SYMBOL = 1, POSITION_TYPE, POSITION_VOLUME, POSITION_TIME, POSITION_PRICE_OPEN, POSITION_SL, POSITION_TP };
 enum { POSITION_TYPE_BUY = 0, POSITION_TYPE_SELL = 1 };
 enum { OBJ_LABEL = 1, OBJ_RECTANGLE_LABEL, OBJ_TEXT, OBJ_TREND, OBJ_RECTANGLE };
 enum { OBJPROP_CORNER = 1, OBJPROP_XDISTANCE, OBJPROP_YDISTANCE, OBJPROP_XSIZE, OBJPROP_YSIZE, OBJPROP_BGCOLOR,
@@ -72,12 +72,13 @@ struct SimPos
    int type;
    double vol;
    datetime time;
+   double price = 0.0, sl = 0.0, tp = 0.0;   // open price, stop loss, take profit
 };
 struct SimState
 {
    std::string sym = "XAUUSD", base = "XAU", profit = "USD";
    int digits = 2;
-   double tick = 0.01, tickValue = 1.0, volMin = 0.01, volStep = 0.01, volMax = 100.0, bid = 0.0;
+   double tick = 0.01, tickValue = 1.0, volMin = 0.01, volStep = 0.01, volMax = 100.0, bid = 0.0, ask = 0.0, contract = 100.0;
    double balance = 10000.0, equity = 10000.0;
    std::vector<MqlRates> m1, m5, m15;   // full history, may extend past `now`
    datetime now = 0;
@@ -172,6 +173,8 @@ inline double SymbolInfoDouble(const string &, int prop)
       case SYMBOL_VOLUME_STEP: return SIM.volStep;
       case SYMBOL_VOLUME_MAX: return SIM.volMax;
       case SYMBOL_BID: return SIM.bid;
+      case SYMBOL_ASK: return SIM.ask > 0.0 ? SIM.ask : SIM.bid;
+      case SYMBOL_TRADE_CONTRACT_SIZE: return SIM.contract;
    }
    return 0.0;
 }
@@ -216,7 +219,16 @@ inline long long PositionGetInteger(int prop)
    if(prop == POSITION_TIME) return p.time;
    return 0;
 }
-inline double PositionGetDouble(int prop) { return (SIM.selected >= 0 && prop == POSITION_VOLUME) ? SIM.pos[(size_t)SIM.selected].vol : 0.0; }
+inline double PositionGetDouble(int prop)
+{
+   if(SIM.selected < 0) return 0.0;
+   const SimPos &p = SIM.pos[(size_t)SIM.selected];
+   if(prop == POSITION_VOLUME) return p.vol;
+   if(prop == POSITION_PRICE_OPEN) return p.price;
+   if(prop == POSITION_SL) return p.sl;
+   if(prop == POSITION_TP) return p.tp;
+   return 0.0;
+}
 
 inline int ObjectFind(long, const string &name) { return SIM.objs.count(name) ? 0 : -1; }
 inline bool ObjectCreate(long, const string &name, int type, int, datetime t1, double p1, datetime t2 = 0, double p2 = 0)

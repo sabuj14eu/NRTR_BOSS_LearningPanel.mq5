@@ -1,5 +1,136 @@
 # CHANGELOG
 
+## v1.06 metals (2026-09-27): NY TRAP layer + DECISION LADDER on the gold / silver panel
+
+This is the full audit record of this change. Every claim below has a command that reproduces it
+(`./run_tests.sh` steps 5d and 5e, and `python3 tests/mutate_fq.py`).
+
+### What was asked (Shyam, 2026-09-27)
+
+Keep the metals architecture. Do NOT replace the 15M Boss / 5M confirmation system, the custom
+NRTR maths, EMA200, structure, or the S/R and liquidity logic. No new indicators. Then add:
+
+1. an **NY trap layer** for gold and silver: NY TRAP BUY / NY TRAP SELL, each with entry, SL, TP1
+   and TP2, states WAIT / VALID / TRIGGERED / INVALID, and lines on the chart. It is a separate
+   layer and never silently overrides the 15M boss;
+2. **timeframe clarity**: "15M = BOSS / DIRECTION" and "5M = ENTRY / SCALP TIMING". The forming
+   candle may show "IF IT CLOSED NOW" only as a preview, never as a confirmed signal;
+3. a **simple scalp display**: gold about 5-20, silver about 0.30-1.00, with no guarantee, and money
+   taken from the broker's contract size, tick size and lot;
+4. **one obvious action**: PENDING ORDER PLAN, BUY/SELL VALID - CLICK, or POSITION ACTIVE. The panel
+   stays read only;
+5. the **hierarchy** 15M boss -> 5M confirmation -> NY trap / pending -> BUY or SELL -> entry ->
+   SL / TP, with "NY TRAP vs 15M BOSS = CONFLICT" when they disagree, never READY;
+6. **tests on XAUUSD and XAGUSD separately**, covering ten points (table below).
+
+### What changed in `NRTR_BOSS_LearningPanel.mq5` (1.05 -> 1.06; line numbers in the NEW file)
+
+**Nothing that already existed was changed in behaviour.** The main panel, its chart objects,
+buffers, alerts and log are byte-identical to the v1.04 baseline over 53 scenarios (step 5c, test
+below). The 5-question table is unchanged, and its shared blocks are still byte-identical to the
+twins (step 6b). The NRTR maths, EMA200 and structure code were not touched.
+
+| Lines | What |
+|---|---|
+| 81-98 | Header paragraph for v1.06. |
+| 101 | `#property version "1.06"`. |
+| 2380-2804 | **New engine block `NB_NYT`** (between `NB_FQ_END` and `NB_ENGINE_END`; metals only, so it is not part of the twin check). |
+| 2425 / 2442 / 2459 | `NbNytCfg` (the settings), `NbNytSide` (one side: state, why, level, sweep, entry, SL, TP1, TP2, risk, estimate, trigger / outcome bar), `NbNytBar` (per 5M bar: phase, session id, range H/L/count, both sides, forming flag). |
+| 2511 | `NbNytRefs`: reference prices while WAIT / VALID. Entry ref = the range level. SL = the sweep extreme + buffer, or the level + `InpNytRefAtr` x ATR before any sweep. TP = R multiples. Marked `estimate`. |
+| 2530 | `NbNytStep`: one closed bar for one side. Triggered: SL first (the tick order inside a candle is unknown, so SL wins a candle that touches both), then TP1, then expiry after 6 bars. Untriggered: BEFORE/PRE = WAIT; NY window without a range = INVALID (NO RANGE); a wick beyond the range = VALID (the sweep extreme is recorded); a CLOSED candle back inside by `confirmAtr` x ATR **with a body in the trap's direction** = TRIGGERED, entry = that close, SL = sweep +/- `slBufAtr` x `slBufMult` x ATR (rounded outward on the tick grid), TP1/TP2 = `InpTp1R`/`InpTp2R` x risk. After the window = INVALID (OVER). |
+| 2638 | `NbRunNyt`: all 5M bars. Session day = UTC date of the bar in the server clock, NY open = `InpNyOpenTime`, range = `InpNytRangeHours` before it (needs `InpNytMinBars` bars), window = `InpNytWindowMin`. Weekend or no NY time = OFF, never guessed. **The forming bar is never evaluated** (`nEvalNy`); it carries the last closed answer. One trap per side per day. |
+| 2800 | `NbNytLive`: TRIGGERED and still ACTIVE (not TP1 / SL / expired). |
+| 2816-2817 | New prefixes `NBLP_N_` (trap lines) and `NBLP_L_` (ladder). |
+| 2874 on | New input group "NY TRAP + DECISION LADDER": `InpLadderShow`, `InpNytDraw`, `InpNytRangeHours` 4, `InpNytWindowMin` 90, `InpNytMinBars` 12, `InpNytRefAtr` 1.0, scalp refs gold 5.00 / 20.00 and silver 0.30 / 1.00, `InpSimpleView` false. |
+| 2955 | Globals `g_N`, `g_nt[]`. |
+| 3041 | `OnInit` refuses an NY open earlier than the range hours (the range would cross midnight). |
+| 3151, 3194 | `InpSimpleView`: hides the main panel and the table and keeps the ladder and the chart. Default off, so the existing view is unchanged. |
+| 2993-2995, 3156, 3204, 3363 | Recompute and draw calls. On a failed recompute the trap state and its lines are cleared. |
+| 5096 | `NbNytConfig`: silver uses the SAME wider stop and stronger confirmation as the 5Q table (`NbFqAsset`), and the broker's tick size and digits. |
+| 5117-5258 | `NbNytRecompute`, `NbNytDrawSide`, `NbNytDrawChart`: range H/L lines, and per side ENTRY / SL / TP1 / TP2 lines labelled `NY TRAP SELL  <STATE>`. Solid = triggered, dashed = reference. Trigger markers are drawn in the background. |
+| 5260 | `NbMoneyFor`: \|move\| / tick size x tick value x lots. These are the broker's own figures, read from `SymbolInfo`. |
+| 5268 | `NbLTrapRows`: the two trap rows of the ladder. |
+| 5292 | `NbLadderDraw`: the DECISION LADDER, top right (top left when the main panel is on the right). |
+
+### The DECISION LADDER, exactly (read top to bottom)
+
+```
+1  15M = BOSS / DIRECTION        NRTR, EMA200, HH/HL or LH/LL -> BOSS = BUY / SELL MODE / WAIT
+2  5M = ENTRY / SCALP TIMING     last CLOSED 5M candle, NRTR -> TIMING = CONFIRMED / WAIT: reason
+   FORMING 5M - PREVIEW ONLY, NOT A SIGNAL:  IF IT CLOSED NOW: BULLISH / BEARISH BODY
+3  NY TRAP / PENDING LOCATION    NY window, range H/L; NY TRAP SELL / BUY rows with state + prices
+   NY TRAP vs 15M BOSS = CONFLICT | ... AGREES WITH THE 15M BOSS | ... 15M BOSS NOT IN MODE
+   PENDING PLAN: BUY LIMIT <price> (5-question READY) | none
+4  ACTION (exactly one)          + TYPE / ENTRY / SL / TP1 / TP2 / R:R / LOTS, scalp reference
+```
+
+The action has exactly one value. The first rule that matches wins:
+
+1. unsupported symbol -> GOLD / SILVER ONLY;
+2. no data -> WAIT;
+3. **a position on this symbol -> POSITION ACTIVE**: direction, volume, entry, SL and TP with the
+   distance in price AND money, and EXIT / PROTECT / HOLD from the 15M boss. READ ONLY, nothing is
+   changed. A position is always shown first, even when the data is stale;
+4. stale data -> **NO TRADE**;
+5. the main engine is BUY/SELL (15M boss + 5M confirmed close) -> **BUY VALID - CLICK BUY** with the
+   engine's own entry / SL / TP1 / TP2 / lots;
+6. a live NY trap. If the boss agrees -> **BUY/SELL VALID - CLICK**, source "NY TRAP ... + 15M BOSS".
+   If the boss is opposite -> **NY TRAP vs 15M BOSS = CONFLICT**, "NO TRADE - THE LAYERS DISAGREE".
+   If the boss is in WAIT -> WAIT, "NO TRADE UNTIL THE 15M BOSS AGREES";
+7. a READY 5-question plan. If the boss agrees -> **PENDING ORDER PLAN**: BUY/SELL LIMIT, entry,
+   SL, TP1, TP2, R:R, "PLACE MANUALLY - NOTHING IS SENT". If the boss is opposite -> CONFLICT;
+8. otherwise WAIT, with the 15M or 5M reason.
+
+**Why only LIMIT and never STOP:** the only pending plan in this file is the 5-question retest of a
+level, and that is a limit order by construction. A BUY STOP / SELL STOP plan would need a new rule
+(a breakout entry), and the Evidence Law says that is not added without data. It is not built.
+
+### The ten verification points
+
+Runs are separate for XAUUSD (tick 0.01, 2 digits, tick value 1, contract 100) and XAGUSD (tick 0.001,
+3 digits, tick value 5, contract 5000). Source: `tests/test_nyt.cpp`, `./run_tests.sh` steps 5d/5e.
+
+| # | Point | Test | Result |
+|---|---|---|---|
+| 1 | 15M is always the boss | L2: every hour of 5 days (120 moments per metal). Step 1 always shows the engine's 15M mode, and no BUY/SELL action ever appears against or without it. L5: trap vs boss injected for all 6 combinations | PASS |
+| 2 | 5M is always the timing layer | L2: a CLICK from the main engine only with a confirmed closed 5M; L3: its prices are the engine's | PASS |
+| 3 | forming candle never confirms | N6 (engine: a trigger candle still forming stays VALID, and turns TRIGGERED only once closed). L6 (indicator: a huge forming candle changes only the PREVIEW row; action, 5M rows and both trap states are unchanged) | PASS |
+| 4 | NY trap lines correct | N1-N5 (exact prices by hand); L4: every 7th bar, the ENTRY / SL / TP1 / TP2 lines are compared with the engine and the states named, and the fixture shows all four states | PASS |
+| 5 | pending prices correct | L2 (PENDING ORDER PLAN only with the boss) + the 5Q suites (Q-tests: plan prices) | PASS |
+| 6 | SL/TP on the broker's tick grid / digits | L3, L4 `onGrid`; SL rounded outward (mutation M-series below) | PASS |
+| 7 | gold and silver use their own parameters | N4 (silver stop x2, confirm +0.25 ATR); L8 (config, scalp ref, money from tick value, contract shown) | PASS |
+| 8 | 01:00 metals reopen is not DATA STALE | L9: the 00:00-01:00 bars removed, now 01:12:07 -> LIVE, and the ladder is not NO TRADE; the last tick at 23:59 yesterday -> NO TRADE, DATA STALE | PASS |
+| 9 | no order is ever sent | safety scan (step 1: no trade / network / file API in the source); the simulator has no trade API, so a call would not compile; L7: the position is unchanged after drawing | PASS |
+| 10 | MetaEditor compilation | **NOT RUN HERE.** g++ -Werror surrogate compile of the whole file passes (step 3). Your F7 in MetaEditor is the real test | NOT TESTED |
+
+### Tests (`./run_tests.sh`, 2026-09-27)
+
+* 5d `tests/test_nyt.cpp`: **105 checks, 0 failed** (N1-N6 engine by hand, L1-L9 x XAUUSD and XAGUSD, L10).
+* 5e the same test built with `InpSimpleView = true`: **12 checks, 0 failed** (main panel and table
+  hidden, ladder drawn, still hidden after a refresh).
+* All earlier suites still pass, and all three "existing panel unchanged" dumps PASS.
+* `tests/mutate_fq.py` now also builds `test_nyt` for the metals file, and plants 13 new v1.06 mutations (35 in total). Results: PENDING - the run was still in progress at this commit; see the next commit.
+* The harness had a weakness, now fixed: a mutation that did not compile used to count as CAUGHT.
+  It now counts as NOT RUNNABLE, which is a failure.
+* L5 was rewritten before commit. The first version only checked inside an `if` that the random
+  fixture might never satisfy. It now injects the boss and the trap side and checks all six
+  combinations on every run.
+
+### Honest limits
+
+* **The NY trap rule has no evidence yet.** It is the textbook "sweep of the pre-NY range, then close
+  back inside" pattern, built so it can be journaled, not because it was validated. n = 0 on real
+  data. Evidence Law: judge nothing before n >= 20, ~100 to decide. Treat every VALID - CLICK from
+  the trap layer as a hypothesis.
+* The BTC screenshot (v1.05 table: TP1 8 / SL 36) is a reminder that a clean-looking rule can have no
+  edge. The same may be true here.
+* The session day is the UTC date of the server clock. The range is the `InpNytRangeHours` hours
+  before `InpNyOpenTime` in SERVER time. If your broker's server time is not what you typed, the
+  window is wrong: check the NY line on the ladder against the chart.
+* The scalp reference (5-20 / 0.30-1.00) is a display range from your message, not a tested target.
+* The ladder's SCALP money is for 1.00 lot. Your size changes it linearly.
+* MetaEditor F7 and a live chart are not run here.
+
 ## v1.06 twins + v1.05 metals (2026-09-27): screenshot fixes, and the table on the gold / silver panel
 
 This is the full audit record of this change. Every claim below has a command that reproduces it.

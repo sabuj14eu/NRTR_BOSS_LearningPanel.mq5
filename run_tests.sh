@@ -52,6 +52,13 @@ echo "== 5b. v1.05 five-question plan (metals): whole-indicator tests, gold and 
 g++ $FLAGS -Ibuild -DNB_TEST_MARKET=0 tests/test_fq_indicator.cpp -o build/test_fq_indicator_gold && ./build/test_fq_indicator_gold || rc=1
 echo "== 5c. existing gold panel unchanged: v1.04 baseline (git $BASELINE) vs this file, byte for byte =="
 unchanged gold NRTR_BOSS_LearningPanel.mq5 0 full.inc
+echo "== 5d. v1.06 NY trap + decision ladder (metals): engine + whole-indicator tests, XAUUSD and XAGUSD =="
+g++ $FLAGS -Ibuild tests/test_nyt.cpp -o build/test_nyt && ./build/test_nyt || rc=1
+echo "== 5e. v1.06 simple view (InpSimpleView = true): ladder only, main panel + table hidden =="
+sed 's/^const bool           InpSimpleView      = false;/const bool           InpSimpleView      = true; /' build/full.inc > build/full_simple.inc
+if grep -q 'InpSimpleView      = true;' build/full_simple.inc; then
+   g++ $FLAGS -Ibuild -DNYT_SIMPLE -DNYT_INC='"full_simple.inc"' tests/test_nyt.cpp -o build/test_nyt_simple && ./build/test_nyt_simple || rc=1
+else echo "SIMPLE VIEW: FAIL - input anchor not found"; rc=1; fi
 
 echo
 echo "================ NRTR_BOSS_Crypto_NYTrap.mq5 / NRTR_BOSS_Forex_NYTrap.mq5 ================"
