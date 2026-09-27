@@ -111,7 +111,35 @@ class BridgeFile(unittest.TestCase):
             for k, x in (("ref_entry", "entry"), ("ref_sl", "sl"), ("ref_tp1", "tp1")):
                 self.assertLessEqual(abs(pw[k] - e["pw_open"][x]), eps)
         self.assertTrue(s["change_key"].startswith("F|"))
+        if e["market"] == "METALS":
+            self.check_metals(tag, d, e, eps)
         return d
+
+    def check_metals(self, tag, d, e, eps):
+        """Gold / silver: the NY trap layer and the market state = the independent engine run."""
+        self.assertEqual(d["source"], "NRTR_BOSS_LearningPanel")
+        s = d["mt5_signal"]
+        ny = s["ny"]
+        self.assertTrue(ny["clock"].startswith("AUTO: server = UTC+3.0"), f"{tag}: the clock says how it was proven: {ny['clock']}")
+        self.assertIn("verdict", ny)
+        if s["boss_15m"] == "WAIT":
+            self.assertNotIn("CLICK", ny["verdict"], "no CLICK with the 15M boss in WAIT")
+        if e["ny_session"]:
+            for side in ("sell", "buy"):
+                g, x = ny[side], e["ny_" + side]
+                self.assertEqual((g["state"], g["why"]), (x["state"], x["why"]), f"{tag} NY {side}: state and why")
+                if x["has_prices"]:
+                    for k in ("entry", "sl", "tp1", "tp2"):
+                        self.assertLessEqual(abs(g[k] - x[k]), eps, f"{tag} NY {side} {k}")
+                    self.assertEqual(g["entry_is_reference"], x["ref"])
+                else:
+                    self.assertIsNone(g["entry"])
+            if e["pre_ny_high"] > 0:
+                self.assertLessEqual(abs(ny["pre_ny_high"] - e["pre_ny_high"]), eps)
+                self.assertLessEqual(abs(ny["pre_ny_low"] - e["pre_ny_low"]), eps)
+        ms = s["market_state"]
+        self.assertEqual(ms["state"], e["market_state"], f"{tag}: market state = the engine's")
+        self.assertIn("never a signal", ms["note"])
 
     def test_files(self):
         for tag in TAGS:
@@ -119,6 +147,10 @@ class BridgeFile(unittest.TestCase):
                 self.check_pair(tag, f"bridge_{tag}.json", f"bridge_expect_{tag}.json")
                 d = self.check_pair(tag, f"bridge_watch_{tag}.json", f"bridge_expect_watch_{tag}.json")
                 self.assertEqual(d["mt5_signal"]["pullback_watch"]["state"], "OPEN", "the watch fixture really has an open watch")
+                if tag in ("gold", "silver"):
+                    d = self.check_pair(tag, f"bridge_ny_{tag}.json", f"bridge_expect_ny_{tag}.json")
+                    states = {d["mt5_signal"]["ny"]["sell"]["state"], d["mt5_signal"]["ny"]["buy"]["state"]}
+                    self.assertTrue(states & {"VALID", "TRIGGERED"}, "the NY fixture really has a swept / triggered trap with prices")
 
     def test_stale_file(self):
         for tag in TAGS:
@@ -128,6 +160,10 @@ class BridgeFile(unittest.TestCase):
                 self.assertEqual(s["action"], "NO TRADE - DATA STALE / MARKET CLOSED")
                 self.assertIsNone(s["signal"])
                 self.assertEqual(s["pullback_watch"]["state"], "NONE")
+                if s.get("market_state") is not None:   # metals: no market state and no NY prices from stale data
+                    self.assertEqual(s["market_state"]["state"], "---")
+                    self.assertIsNone(s["ny"]["sell"])
+                    self.assertIn("DATA STALE", s["ny"]["verdict"])
 
 
 def no_network(*a, **k):
@@ -163,6 +199,21 @@ class Sender(unittest.TestCase):
         body = m[m.find("-- M5"):]
         self.assertEqual(sum(1 for ln in body.splitlines() if " O" in ln and "FORMING" not in ln), 18, "18 closed M5 lines")
         self.assertIn("Nothing was sent to any broker", m)
+
+    def test_metals_message(self):
+        if not os.path.exists(os.path.join(ROOT, "build", "bridge_ny_gold.json")):
+            self.skipTest("metals files not built")
+        d = load("bridge_ny_gold.json")
+        m = snd.format_message(d, False)
+        self.assertLessEqual(len(m), snd.TELEGRAM_LIMIT)
+        ny = d["mt5_signal"]["ny"]
+        self.assertIn("NY TRAP vs 15M BOSS: " + ny["verdict"], m)
+        self.assertIn(f"NY TRAP SELL: {ny['sell']['state']}", m)
+        self.assertIn(f"NY TRAP BUY: {ny['buy']['state']}", m)
+        self.assertIn("MARKET: " + d["mt5_signal"]["market_state"]["state"], m)
+        self.assertIn("a description, not a signal", m)
+        self.assertLess(m.find("== MT5 SIGNAL"), m.find("NY TRAP vs"), "NY and market state sit in the conclusion part")
+        self.assertLess(m.find("NY TRAP vs"), m.find("== RAW DATA =="))
 
     def test_message_fits_telegram(self):
         d = json.loads(json.dumps(self.src))

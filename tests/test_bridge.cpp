@@ -12,9 +12,18 @@
 #elif NB_TEST_MARKET == 1
 #include "full_crypto.inc"
 #else
-#error "test_bridge: twins only (NB_TEST_MARKET 1 or 2)"
+#include "full.inc"       // the metals file: 0 = XAUUSD, 3 = XAGUSD
+#define METALS 1
 #endif
+#ifdef METALS
+#define PFX "NBLP_"
+#define STRIP_BG PFX "Y_bg"      // the watch rows live on the metals NY strip
+#define WPFX PFX "Y_w"
+#else
 #define PFX "NBSP_"
+#define STRIP_BG PFX "W_bg"
+#define WPFX PFX "W_"
+#endif
 #include "../tests/synth.h"
 #include <cstdio>
 #include <fstream>
@@ -35,6 +44,14 @@ static const long long T0 = 1788220800LL;
 static const char *SYM = "EURUSD", *BASE = "EUR", *QUOTE = "USD", *MKT = "FOREX", *TAG = "forex";
 static const int DIGITS = 5;
 static const double TICK = 0.00001, PRICE = 1.08, VOL = 0.0004;
+#elif NB_TEST_MARKET == 0
+static const char *SYM = "XAUUSD", *BASE = "XAU", *QUOTE = "USD", *MKT = "METALS", *TAG = "gold";
+static const int DIGITS = 2;
+static const double TICK = 0.01, PRICE = 2400.0, VOL = 0.8;
+#elif NB_TEST_MARKET == 3
+static const char *SYM = "XAGUSD", *BASE = "XAG", *QUOTE = "USD", *MKT = "METALS", *TAG = "silver";
+static const int DIGITS = 3;
+static const double TICK = 0.001, PRICE = 30.0, VOL = 0.02;
 #else
 static const char *SYM = "BTCUSD", *BASE = "BTC", *QUOTE = "USD", *MKT = "CRYPTO", *TAG = "crypto";
 static const int DIGITS = 2;
@@ -79,7 +96,7 @@ static void calc()
    OnTimer();
 }
 static int start() { int rc = OnInit(); calc(); return rc; }
-static std::string W(const std::string &id) { return SIM.objs.count(PFX "W_" + id) ? SIM.objs[PFX "W_" + id].s[OBJPROP_TEXT] : "<missing>"; }
+static std::string W(const std::string &id) { return SIM.objs.count(WPFX + id) ? SIM.objs[WPFX + id].s[OBJPROP_TEXT] : "<missing>"; }
 static int countPrefix(const std::string &p)
 {
    int n = 0;
@@ -104,6 +121,11 @@ struct Ref
    int nSig = 0;
    std::vector<NbPwRec> pw;
    int nPw = 0, cur = -1;
+#ifdef METALS
+   std::vector<NbNytBar> nt;
+   int mk = 0, mkFlips = 0;
+   double mkDist = 0.0, mkWidth = 0.0;
+#endif
 };
 static void reference(const Market &m, long long now, Ref &r)
 {
@@ -111,9 +133,11 @@ static void reference(const Market &m, long long now, Ref &r)
    P.atrPeriod = InpNrtrAtrPeriod; P.nrtrMult = InpNrtrMultiplier; P.emaPeriod = InpEmaPeriod;
    P.swing = InpSwingStrength; P.slBufAtr = InpSlBufferAtr; P.tp1R = InpTp1R; P.tp2R = InpTp2R;
    P.validBars = InpSignalValidBars; P.tick = TICK; P.digits = DIGITS;
+#ifndef METALS
    NbSessCfg S;
    S.clockMode = NB_CLK_AUTO; S.clockOk = true; S.offset = 3 * 3600; S.manualOpenSec = 0;
    S.preHours = InpPreNyRangeHours; S.winMin = InpNyWindowMinutes; S.minRangeBars = InpMinRangeBars; S.pauseFlow = InpNyPauseFlow;
+#endif
    long long anchor = (now / 86400) * 86400 - (long long)InpHistoryDays * 86400;
    std::vector<SBar> v5, v15;
    for(const SBar &x : m.m5) if(x.t >= anchor && x.t + 300 <= now) v5.push_back(x);
@@ -123,7 +147,18 @@ static void reference(const Market &m, long long now, Ref &r)
    for(size_t i = 0; i < v5.size(); i++) { r.s5.t[i] = v5[i].t; r.s5.o[i] = v5[i].o; r.s5.h[i] = v5[i].h; r.s5.l[i] = v5[i].l; r.s5.c[i] = v5[i].c; }
    for(size_t i = 0; i < v15.size(); i++) { r.s15.t[i] = v15[i].t; r.s15.o[i] = v15[i].o; r.s15.h[i] = v15[i].h; r.s15.l[i] = v15[i].l; r.s15.c[i] = v15[i].c; }
    NbRun15(r.s15, r.p15, P);
+#ifdef METALS
+   NbRun5(r.s5, r.p5, r.s15, true, P, r.sig, r.nSig);
+   NbNytCfg N;   // the NY trap layer with the simulator's broker: UTC+3, AUTO clock
+   N.openSec = 0; N.autoClock = true; N.offset = 3 * 3600; N.preHours = InpNytRangeHours; N.winMin = InpNytWindowMin;
+   N.minBars = InpNytMinBars; N.slBufAtr = InpSlBufferAtr; N.slBufMult = (NB_TEST_MARKET == 3) ? InpFqSilverSlMult : 1.0;
+   N.confirmAtr = (NB_TEST_MARKET == 3) ? InpFqSilverConfirmAtr : 0.0; N.refAtr = InpNytRefAtr; N.tp1R = InpTp1R; N.tp2R = InpTp2R;
+   N.validBars = InpSignalValidBars; N.tick = TICK; N.digits = DIGITS;
+   NbRunNyt(r.s5, true, N, r.nt);
+   r.mk = NbMarketState(r.s15, r.s15.n - 1, r.s5.dir.back(), r.mkDist, r.mkFlips, r.mkWidth);
+#else
    NbRun5(r.s5, r.p5, r.s15, true, P, S, r.sig, r.nSig);
+#endif
    r.nPw = NbRunPw(r.s5.h, r.s5.l, r.s5.c, r.s5.atr, r.s5.flip, r.s5.stop, r.s5.boss, r.s5.n, true, InpSlBufferAtr, InpTp1R,
                    InpSignalValidBars, TICK, DIGITS, r.pw, r.cur);
 }
@@ -196,7 +231,22 @@ static void writeExpect(const Market &m, long long now, const Ref &r, const std:
      << ",\"m15_closed\":" << bars(m.m15, 900, false) << ",\"m15_forming\":" << bars(m.m15, 900, true)
      << ",\"m5_ind\":" << ind(r.s5, false) << ",\"m15_ind\":" << ind(r.s15, true)
      << ",\"boss\":" << r.s15.mode.back() << ",\"state\":" << r.s5.state.back() << ",\"pw_open\":" << pw
-     << ",\"pw_record\":{\"n\":" << n << ",\"tp1\":" << tp << ",\"sl\":" << sl << ",\"expired\":" << ex << "}}\n";
+     << ",\"pw_record\":{\"n\":" << n << ",\"tp1\":" << tp << ",\"sl\":" << sl << ",\"expired\":" << ex << "}";
+#ifdef METALS
+   auto side = [&](const NbNytSide &t) {
+      char buf[320];
+      bool pxs = (t.state != NB_NT_OFF && t.level > 0.0 && t.sl > 0.0);
+      std::snprintf(buf, sizeof buf, "{\"state\":\"%s\",\"why\":\"%s\",\"has_prices\":%s,\"entry\":%.*f,\"sl\":%.*f,\"tp1\":%.*f,\"tp2\":%.*f,\"ref\":%s}",
+                    NbNytStateText(t.state).c_str(), NbNytWhyText(t.why).c_str(), pxs ? "true" : "false", DIGITS, t.entry, DIGITS, t.sl, DIGITS,
+                    t.tp1, DIGITS, t.tp2, t.estimate ? "true" : "false");
+      return std::string(buf);
+   };
+   const NbNytBar &b = r.nt.back();
+   f << ",\"ny_session\":" << (b.sid >= 0 ? "true" : "false") << ",\"ny_sell\":" << side(b.sell) << ",\"ny_buy\":" << side(b.buy)
+     << ",\"pre_ny_high\":" << DoubleToString(b.rh, DIGITS) << ",\"pre_ny_low\":" << DoubleToString(b.rl, DIGITS)
+     << ",\"market_state\":\"" << NbMarketStateText(r.mk) << "\"";
+#endif
+   f << "}\n";
 }
 static void dumpFile(const std::string &path)
 {
@@ -328,7 +378,7 @@ int main()
       CHECK(!has(j.substr(0, pSig), "\"action\"") && !has(j.substr(0, pSig), "\"final\""), "no conclusion inside the raw / indicator / structure sections");
       CHECK(countSub(j.substr(pRaw, pInd - pRaw), "\"ts\":") == 2 * 18 + 2, "raw: 18 closed + 1 forming per timeframe");
       CHECK(has(j, "\"not_a_signal\":true") && has(j, "\"change_key\":"), "the watch is marked not a signal; a change key is present");
-      CHECK(countPrefix(PFX "W_") >= 5 && has(W("h"), "NOT A SIGNAL"), "the watch strip is drawn and says NOT A SIGNAL");
+      CHECK(countPrefix(WPFX) >= 4 && has(W("h"), "NOT A SIGNAL"), "the watch rows are drawn and say NOT A SIGNAL");
       bool ascii = true;
       for(unsigned char ch : j) if(ch > 126 || (ch < 32 && ch != '\n')) ascii = false;
       CHECK(ascii, "plain ASCII");
@@ -413,7 +463,7 @@ int main()
 #if NB_TEST_MARKET == 2
       load(mk, "BTCUSD", "BTC");
 #else
-      load(mk, "EURUSD", "EUR");
+      load(mk, "EURUSD", "EUR");   // crypto file, and the metals file: EURUSD is not theirs
 #endif
       SIM.now = mk.m5[12 * 288 + 50].t + 137;
       start();
@@ -436,7 +486,7 @@ int main()
          start();
          if(!g_fresh) { OnDeinit(0); continue; }
          moments++;
-         SimObj &wb = SIM.objs[PFX "W_bg"], &qb = SIM.objs[PFX "Q_bg"];
+         SimObj &wb = SIM.objs[STRIP_BG], &qb = SIM.objs[PFX "Q_bg"];
          if(wb.i[OBJPROP_XDISTANCE] != qb.i[OBJPROP_XDISTANCE] || wb.i[OBJPROP_XSIZE] != qb.i[OBJPROP_XSIZE] ||
             wb.i[OBJPROP_YDISTANCE] + wb.i[OBJPROP_YSIZE] != qb.i[OBJPROP_YDISTANCE]) badDock++;
          int n = 0, tp = 0, sl = 0, ex = 0;
@@ -456,7 +506,7 @@ int main()
          }
          else if(!has(W("st"), "none - ")) bad++;
          for(auto &kv : SIM.objs)
-            if(kv.first.compare(0, 7, PFX "W_") == 0 && kv.second.s.count(OBJPROP_TEXT) && cps(kv.second.s[OBJPROP_TEXT]) > 63)
+            if(kv.first.compare(0, std::string(WPFX).size(), WPFX) == 0 && kv.second.s.count(OBJPROP_TEXT) && cps(kv.second.s[OBJPROP_TEXT]) > 63)
             { too++; if(worst.empty()) worst = kv.first + ": " + kv.second.s[OBJPROP_TEXT]; }
          OnDeinit(0);
       }
@@ -494,6 +544,36 @@ int main()
       }
    }
    end("B6");
+
+#ifdef METALS
+   begin("B7 metals: a moment in the NY window with a swept / triggered trap, written for the Python check");
+   {
+      long long now = 0;
+      for(size_t k = 11 * 288; k + 1 < mk.m5.size() && now == 0; k++)
+      {
+         Ref r;
+         reference(mk, mk.m5[k].t + 320, r);
+         const NbNytBar &b = r.nt.back();
+         if(b.phase == NB_NTP_NY && (b.sell.state == NB_NT_VALID || b.sell.state == NB_NT_TRIGGERED || b.buy.state == NB_NT_VALID ||
+                                     b.buy.state == NB_NT_TRIGGERED))
+            now = mk.m5[k].t + 320;
+      }
+      CHECK(now > 0, "found");
+      if(now > 0)
+      {
+         load(mk);
+         SIM.now = now;
+         start();
+         Ref r;
+         reference(mk, now, r);
+         writeExpect(mk, now, r, std::string("build/bridge_expect_ny_") + TAG + ".json");
+         dumpFile(std::string("build/bridge_ny_") + TAG + ".json");
+         CHECK(has(SIM.files[FILE_JSON], "\"phase\":\"NY WINDOW\""), "the file is inside the NY window");
+         OnDeinit(0);
+      }
+   }
+   end("B7");
+#endif
 
    std::printf("\nBRIDGE + WATCH TESTS (%s): %d checks passed, %d failed\n", TAG, g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;

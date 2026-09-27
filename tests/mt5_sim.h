@@ -83,6 +83,7 @@ struct SimState
    std::vector<MqlRates> m1, m5, m15;   // full history, may extend past `now`
    datetime now = 0;
    long long gmtOff = 3 * 3600;   // server clock ahead of GMT (EEST); TimeGMT() = now - gmtOff
+   long long localOff = 2 * 3600; // the PC's clock ahead of GMT (Poland, CEST); TimeLocal()
    datetime tickTime = 0;   // 0 = auto: ticks flow while history flows, stop when it stops
    bool copyFail = false;
    std::vector<SimPos> pos;
@@ -230,6 +231,7 @@ inline double AccountInfoDouble(int prop) { return prop == ACCOUNT_BALANCE ? SIM
 inline datetime TimeTradeServer() { return SIM.now; }
 inline datetime TimeCurrent() { return simTick(); }
 inline datetime TimeGMT() { return SIM.now - SIM.gmtOff; }
+inline datetime TimeLocal() { return SIM.now - SIM.gmtOff + SIM.localOff; }   // the PC's clock
 inline string TimeToString(datetime t, int flags)
 {
    time_t tt = (time_t)t;

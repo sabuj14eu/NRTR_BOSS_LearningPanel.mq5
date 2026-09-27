@@ -116,9 +116,9 @@ MUTATIONS = [
     ("gold", "v1.07 NY rows: stale-data gate removed (old trap prices shown as current)",
      "   bool gate = ok && g_fresh;   // STALE DATA IS NEVER A TRAP", "   bool gate = ok;   // STALE DATA IS NEVER A TRAP"),
     ("gold", "v1.07 NY rows: trap against the 15M boss not called CONFLICT",
-     "   else if(tDir != 0 && boss == -tDir)\n   {\n      v = \"NY TRAP vs", "   else if(false)\n   {\n      v = \"NY TRAP vs"),
+     "   if(tDir != 0 && boss == -tDir)\n   {\n      vc = cExit;", "   if(false)\n   {\n      vc = cExit;"),
     ("gold", "v1.07 NY rows: a swept (not triggered) trap shown as VALID - CLICK",
-     "   else if(tDir != 0 && liveT && boss == tDir)\n   {\n      string tSide", "   else if(tDir != 0 && boss == tDir)\n   {\n      string tSide"),
+     "   if(tDir != 0 && liveT && boss == tDir)\n   {\n      string tSide", "   if(tDir != 0 && boss == tDir)\n   {\n      string tSide"),
     ("gold", "v1.07 lines: SL / TP lines left on the chart after a side is INVALID",
      "   if(!(trig || s.state == NB_NT_VALID) || s.sl <= 0.0)\n      return;\n   color c = NbNytStateColor",
      "   if(s.state == NB_NT_OFF || s.sl <= 0.0)\n      return;\n   color c = NbNytStateColor"),
@@ -147,6 +147,27 @@ MUTATIONS = [
     ("crypto", "v1.07 watch strip: not docked on the table",
      "   int oy = InpFqShow ? (ch - tableH - InpFqBottomY - H) : (ch - H - InpFqBottomY);",
      "   int oy = InpFqShow ? (ch - tableH - InpFqBottomY) : (ch - H - InpFqBottomY);"),
+    # ---- v1.07 metals: AUTO NY clock, market state, bridge (caught by test_nyt / test_bridge / test_bridge_py) ----
+    ("gold", "v1.07 clock: AUTO ignores the US DST calendar (an hour wrong in March / October)",
+     "   long sec = (NbUsDst(day) ? (13 * 3600 + 1800) : (14 * 3600 + 1800)) + N.offset;", "   long sec = (13 * 3600 + 1800) + N.offset;"),
+    ("gold", "v1.07 clock: the typed time used although AUTO is on",
+     "   if(!N.autoClock)\n      return (datetime)(day * 86400 + N.openSec);", "   if(true)\n      return (datetime)(day * 86400 + N.openSec);"),
+    ("gold", "v1.07 clock: the broker offset assumed when the witnesses disagree",
+     "      g_N.openSec = ok ? 0 : -1;", "      g_N.openSec = (ok || true) ? 0 : -1;"),
+    ("gold", "v1.07 clock: the main panel's NY row still on the typed time",
+     "   datetime open = NbNyOpenToday(now);   // v1.07: the same clock as the NY trap (AUTO or typed)\n   if(open <= 0)\n      return \"NY CLOCK UNKNOWN",
+     "   datetime open = (datetime)(((long)now / 86400) * 86400 + NbParseHHMM(InpNyOpenTime));\n   if(open <= 0)\n      return \"NY CLOCK UNKNOWN"),
+    ("gold", "v1.07 NY rows: the PC time shifted the wrong way",
+     "      when = when + \"  (PC \" + TimeToString(g_nt[i5].open + pcShift, TIME_MINUTES)", "      when = when + \"  (PC \" + TimeToString(g_nt[i5].open - pcShift, TIME_MINUTES)"),
+    ("gold", "v1.07 market state: SUPER BULLISH even with NRTR flips in the last 6 h",
+     "      return (dir5 > 0 && distAtr >= NB_MK_SUPER_ATR && flips == 0) ? NB_MK_SUPER_BULL : NB_MK_TREND_UP;",
+     "      return (dir5 > 0 && distAtr >= NB_MK_SUPER_ATR) ? NB_MK_SUPER_BULL : NB_MK_TREND_UP;"),
+    ("gold", "v1.07 market state: CHOP never named",
+     "   if(flips >= NB_MK_CHOP_FLIPS)\n      return NB_MK_CHOP;", "   if(false)\n      return NB_MK_CHOP;"),
+    ("gold", "v1.07 market state: shown from stale data",
+     "   if(!g_fresh)\n   {\n      detail = \"data stale - no market state\";", "   if(false)\n   {\n      detail = \"data stale - no market state\";"),
+    ("gold", "v1.07 bridge: NY trap SL written from the TP1 value",
+     "NbJk(\"sl\") + (px ? NbJp(t.sl) : \"null\");", "NbJk(\"sl\") + (px ? NbJp(t.tp1) : \"null\");"),
     ("gold", "v1.07 lines: NY HIGH / LOW keep counting after the NY window",
      "      if(g_s5.t[k] >= g_nt[i].winEnd)\n         continue;\n", ""),
 ]
@@ -178,7 +199,7 @@ def build_and_test(target, src_text, tag):
         elif inc.count(on) != 1:   # already on (a mutation may do that) = use as is; anything else = no build
             return {"BUILD": None}
         open(os.path.join(d, "full_ladder.inc"), "w").write(inc)
-        tests += [("test_nyt", []), ("test_nyt_ladder", ["-DNYT_LADDER", '-DNYT_INC="full_ladder.inc"'])]
+        tests += [("test_nyt", []), ("test_nyt_ladder", ["-DNYT_LADDER", '-DNYT_INC="full_ladder.inc"']), ("test_bridge", [])]
     if target == "crypto":   # v1.07 data bridge + counter-trend watch (twins)
         tests += [("test_bridge", [])]
     for test, extra in tests:
@@ -189,7 +210,8 @@ def build_and_test(target, src_text, tag):
             return {"BUILD": None}   # a mutation that does not compile proves nothing about the tests
         res[test] = run([exe]).returncode == 0
         if test == "test_bridge":   # it wrote build/bridge_*.json from the mutated file: check them too
-            res["test_bridge_py"] = res[test] and run([sys.executable, "tests/test_bridge_py.py", "crypto"]).returncode == 0
+            res["test_bridge_py"] = res[test] and run([sys.executable, "tests/test_bridge_py.py",
+                                                      "gold" if target == "gold" else "crypto"]).returncode == 0
     exe = os.path.join(d, "dump_new")
     r = run(["g++"] + FLAGS + ["-I" + d, "-DNB_TEST_MARKET=" + mk, '-DDUMP_INC="%s"' % full, "tests/dump_objects.cpp", "-o", exe])
     same = False

@@ -131,14 +131,21 @@ def format_message(d: dict, stale: bool, candles: int = 18) -> str:
                          f"TP1 {_px(plan.get('tp1'))}  TP2 {_px(plan.get('tp2'))}  R:R {plan.get('rr1')}")
         else:
             lines.append(f"5-Q PLAN: {fq.get('status')} - {fq.get('why')}")
+    ms = s.get("market_state")
+    if isinstance(ms, dict):
+        lines.append(f"MARKET: {ms.get('state')}  ({ms.get('detail')})  - a description, not a signal")
     ny = s.get("ny")
     if isinstance(ny, dict):
         if "phase" in ny:
-            lines.append(f"NY: {ny.get('phase')}  pre-NY H {_px(ny.get('pre_ny_high'))} L {_px(ny.get('pre_ny_low'))}")
+            win = f" {ny.get('window')}" if ny.get("window") else ""
+            lines.append(f"NY:{win} {ny.get('phase')}  pre-NY H {_px(ny.get('pre_ny_high'))} L {_px(ny.get('pre_ny_low'))}")
+        if ny.get("verdict"):
+            lines.append(f"NY TRAP vs 15M BOSS: {ny.get('verdict')}")
         for side in ("sell", "buy"):
             t = ny.get(side)
             if isinstance(t, dict):
-                lines.append(f"NY TRAP {side.upper()}: {t.get('state')}  E {_px(t.get('entry'))} SL {_px(t.get('sl'))} "
+                ref = " (ref)" if t.get("entry_is_reference") and t.get("entry") is not None else ""
+                lines.append(f"NY TRAP {side.upper()}: {t.get('state')} - {t.get('why')}  E {_px(t.get('entry'))}{ref} SL {_px(t.get('sl'))} "
                              f"TP1 {_px(t.get('tp1'))} TP2 {_px(t.get('tp2'))}")
     pw = s.get("pullback_watch") or {}
     rec = pw.get("record", {})

@@ -1,5 +1,112 @@
 # CHANGELOG
 
+## v1.08 metals (2026-09-27): the NY clock, the data bridge, the market state (crypto / forex unchanged)
+
+### What was asked (Shyam, 2026-09-27, 17:22 Poland time)
+
+"Check time before start metal. Keep crypto like this. Now Poland time 17:22 so now NY hot time.
+So metal update with proper everything. Me trade mainly gold and silver." Then: "also need to
+understand trend, range, super bullish. Left box can update", with a screenshot of another
+dashboard showing RANGE / CHOP per asset.
+
+### The time check (findings first)
+
+| | New York | broker server | Poland |
+|---|---|---|---|
+| NY open | 09:30 | 16:30 | 15:30 |
+| NY trap window ends (`InpNytWindowMin` 90) | 11:00 | 18:00 | 17:00 |
+| "now" in the message | 11:22 | 18:22 | 17:22 |
+
+1. At 17:22 Poland the NY session is running, but **the 90-minute trap window closed at 17:00
+   Poland**. So the NY rows correctly say "window over". Making the window longer is an input
+   (`InpNytWindowMin`, 5-480). It was **not changed**, because a threshold is never moved as a side
+   effect. It is Shyam's call; 120 would end the window at 17:30 Poland.
+2. **A real bug, fixed:** the metals file placed NY at a **typed `"16:30"` broker time**. The EU
+   and the US change daylight saving on different Sundays. From 25 Oct to 1 Nov 2026 and from 14 to
+   28 Mar 2027, NY opens at **15:30** broker time, so the typed time would put the NY trap window,
+   the pre-NY range, the NY row and the alert an hour late. The crypto / forex files already used
+   an AUTO clock; now metals does too (below).
+3. The broker clock of the screenshots is UTC+3 (the crypto panel's clock row, proven by two
+   witnesses). Poland is UTC+2 until 25 Oct.
+
+### What changed in `NRTR_BOSS_LearningPanel.mq5` (1.07 -> 1.08; line numbers in the NEW file)
+
+| Lines | What |
+|---|---|
+| 108-125, 127 | Header paragraph, `#property version "1.08"`. |
+| 2667-2720 | **NY clock:** `NbCivil` and `NbUsDst` (the same text as the crypto / forex session clock). `NbNytOpenOf`: AUTO = 09:30 New York (13:30 UTC in US summer, 14:30 in winter) + the broker offset; TYPED = `InpNyOpenTime`. `NbNytCfg` gains `autoClock` and `offset`. `NbRunNyt` takes the open from it. |
+| 3154 | `InpNyAutoClock = true` (new). `InpNyOpenTime` is now used only when it is false. |
+| 5472 on | `NbNytConfig`: AUTO takes the offset only when the two witnesses agree (`NbFqWitnessClock`, server vs PC GMT, on a half hour). Otherwise there is **no clock**: the NY trap is OFF and says "NY clock unknown - never guessed". |
+| 3584-3640 | The main panel's **NY row and NY alert** use the same clock (`NbNyOpenToday`). The text format is unchanged, so in normal weeks the left box prints exactly what it did (dump test). |
+| 2889-3033 | **`NB_PW`**, the counter-trend watch engine: identical text to crypto / forex. |
+| 3035-3115 | **`NbMarketState`** (engine): the MARKET STATE, see below. |
+| 3121, 3184-3188 | `NB_BR_VERSION "1.08"`. Inputs `InpBridgeOn`, `InpBridgeCandles`, `InpBridgeEverySec`, `InpPwShow` (same as the twins). |
+| 4259 | **Left box:** the MARKET chip on the title line (right aligned) + a detail line on the symbol line. These are the **only two new labels in the left box**; nothing else moved (dump test excludes exactly `P_mk` and `P_mkd`). |
+| 6216-6410 | NY strip: the header also shows the window on **your PC's clock** ("NY TRAP 16:30-18:00 (PC 15:30-17:00)"). Two new rows: the COUNTER-TREND WATCH and its record + the bridge status. `NbNytVerdict` is the verdict row as a function, so the strip and the bridge file say the same words. |
+| 6413-6782 | **`NB_BR`**, the data bridge: the crypto block with exactly three named adapters (`NbBrLabel`, `NbBrSigKind`, and the `market_state` field). `tests/check_bridge_blocks.py` enforces that. |
+| 6790-6921 | Metals adapters: `NbPwRecompute`. `NbBrNy`: clock, verdict, window, phase, pre-NY H/L, NY H/L, and SELL / BUY with state, why, entry (flagged as reference before the trigger), SL, TP1, TP2, in_play. `NbMarketChip`, `NbBrMarketState`. |
+
+### MARKET STATE (the left box) - a description, never a signal
+
+It uses only what the panel already computes: the 15M boss mode, the 5M NRTR, the distance of the
+15M close from EMA200 in 15M ATRs, and the NRTR flips and high-low width over the last 24 closed
+15M bars (6 h). There is no new indicator.
+
+| State | Rule |
+|---|---|
+| SUPER BULLISH | 15M BUY MODE + 5M bullish + >= 1.5 ATR above EMA200 + no 15M NRTR flip in 6 h |
+| TREND UP | 15M BUY MODE, anything less |
+| CHOP | boss WAIT + >= 3 NRTR flips in 6 h |
+| RANGE | boss WAIT + 6 h high-low width <= 4 ATR |
+| TRANSITION | boss WAIT, neither |
+| TREND DOWN / SUPER BEARISH | the mirror |
+
+The thresholds (1.5 ATR, 3 flips, 4 ATR, 6 h) describe the chart; **no backtest has shown an edge
+for them**. The state never changes CLICK / WAIT. Stale data shows `MARKET ---`, never the last
+known state.
+
+### Data bridge on metals
+
+It is the same file as crypto / forex (`bridge/README.md`), with the metals NY trap layer inside
+`mt5_signal.ny` (both sides with prices, the verdict, the clock used) and `mt5_signal.market_state`.
+The Telegram message now also prints the MARKET line, the NY window and the verdict
+("NY TRAP vs 15M BOSS: ..."), and every NY trap side with its state and why.
+
+**Crypto and forex files: not changed** (Shyam: "keep crypto like this"; `git diff` = 0 lines).
+
+### Tests (`./run_tests.sh`, 2026-09-27)
+
+* `tests/test_nyt.cpp` default build: **99 checks, 0 failed.**
+  * **N8** checks the AUTO clock on 5 dates: 28 Sep 2026 16:30, **26 Oct 2026 15:30**, 2 Nov 2026
+    16:30, **15 Mar 2027 15:30**, 29 Mar 2027 16:30. It also checks that the typed clock stays at
+    16:30, and that the trap engine opens its window at 15:30 on 26 Oct.
+  * **N9** checks the market state on hand-built 15M bars: every state, and unknown without EMA.
+  * **Y5**: the chip equals an independent engine run over 131 moments per metal, and stale data
+    gives no state.
+  * **Y6** runs the whole indicator on 27 Oct 2026 (broker UTC+2, PC in Poland UTC+1): the main
+    panel says NY OPEN 15:30, the NY rows say 15:30-17:00 (PC 14:30-16:00), and the bridge names
+    its clock. When the witnesses disagree by 7 minutes, the NY trap is OFF and the NY row says
+    NY CLOCK UNKNOWN.
+* `tests/test_bridge.cpp` on XAUUSD and XAGUSD: **50 checks each** (the twins' B-tests plus B7, a
+  moment in the NY window).
+* `tests/test_bridge_py.py` (gold, silver, crypto, forex): **10 of 10**. The metals NY sides,
+  pre-NY range and market state equal the independent engine; stale data gives no state and no NY
+  prices; the metals Telegram message layout is checked.
+* `tests/check_bridge_blocks.py`: `NB_PW` is identical in all three files; `NB_BR` metals = crypto
+  + the three adapters.
+* All earlier suites PASS. The left box is identical to v1.04 except the two MARKET labels (53
+  scenarios).
+* Mutations (`python3 tests/mutate_fq.py`): **61 planted, 61 caught.** That includes 9 new for
+  metals: AUTO ignores US DST, the typed time used with AUTO on, the offset assumed when the
+  witnesses disagree, the main panel's NY row on the typed time, the PC time shifted the wrong
+  way, SUPER without the no-flip rule, CHOP never named, the market state from stale data, the NY
+  SL written from TP1.
+  * The full run gave 58 of 61. None of the three was a test gap:
+    * M39 and M40 pointed at verdict code that moved into `NbNytVerdict`;
+    * M54 did not compile (an unused variable under `-Werror`), which the harness correctly calls
+      NOT RUNNABLE, not caught.
+  * All three were re-anchored and re-run (`python3 tests/mutate_fq.py 39 40 54`): CAUGHT.
+
 ## v1.07 twins (2026-09-27): DATA BRIDGE to Telegram + COUNTER-TREND WATCH (crypto and forex; metals next)
 
 ### What was asked (Shyam, 2026-09-27)

@@ -27,6 +27,14 @@ nrtr_telegram_sender.py  ──reads──┘  ──posts──►  your Telegr
 The file is rewritten on every new closed 5M candle and every 10 seconds (input
 `InpBridgeEverySec`), so the forming candle stays current. Stale data is written as stale.
 
+## Gold / silver (v1.08)
+
+The metals file writes the same file, plus `mt5_signal.ny`: the clock it used, the verdict
+("NY TRAP vs 15M BOSS = CONFLICT - NO TRADE", "... VALID - CLICK ...", ...), the window, the
+pre-NY and NY high / low, and NY TRAP SELL and BUY with state, why, entry (`entry_is_reference`
+before the trigger), SL, TP1 and TP2. It also writes `mt5_signal.market_state` (SUPER BULLISH ...
+SUPER BEARISH: a description, never a signal). The message prints them in the conclusion part.
+
 ## Setup (Windows, once)
 
 1. **Make a Telegram bot:** in Telegram, talk to **@BotFather** → `/newbot` → copy the token.

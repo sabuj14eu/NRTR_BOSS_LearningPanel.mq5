@@ -59,6 +59,9 @@ sed 's/^const bool           InpLadderShow      = false;/const bool           In
 if grep -q 'InpLadderShow      = true;' build/full_ladder.inc; then
    g++ $FLAGS -Ibuild -DNYT_LADDER -DNYT_INC='"full_ladder.inc"' tests/test_nyt.cpp -o build/test_nyt_ladder && ./build/test_nyt_ladder || rc=1
 else echo "LADDER: FAIL - input anchor not found"; rc=1; fi
+echo "== 5f. v1.07 metals data bridge + counter-trend watch + market state, XAUUSD and XAGUSD =="
+g++ $FLAGS -Ibuild -DNB_TEST_MARKET=0 tests/test_bridge.cpp -o build/test_bridge_gold && ./build/test_bridge_gold || rc=1
+g++ $FLAGS -Ibuild -DNB_TEST_MARKET=3 tests/test_bridge.cpp -o build/test_bridge_silver && ./build/test_bridge_silver || rc=1
 echo "== 5e. simple view (InpSimpleView = true): NY rows + chart only, main panel + table hidden =="
 sed 's/^const bool           InpSimpleView      = false;/const bool           InpSimpleView      = true; /' build/full.inc > build/full_simple.inc
 if grep -q 'InpSimpleView      = true;' build/full_simple.inc; then
@@ -73,6 +76,8 @@ echo "== 6b. the five-question plan blocks are identical in all three files =="
 python3 tests/check_fq_blocks.py || rc=1
 echo "== 6c. the safety scan refuses file access outside the bridge block, reads, and foreign paths (planted variants) =="
 python3 tests/check_safety_neg.py || rc=1
+echo "== 6d. v1.07 the watch engine and the bridge do not drift apart between the three files =="
+python3 tests/check_bridge_blocks.py || rc=1
 for m in crypto forex; do
    if [ $m = crypto ]; then SRC=NRTR_BOSS_Crypto_NYTrap.mq5; M=1; else SRC=NRTR_BOSS_Forex_NYTrap.mq5; M=2; fi
    echo "== 7.$m safety scan =="
@@ -95,8 +100,8 @@ for m in crypto forex; do
    echo "== 14.$m v1.07 data bridge file + counter-trend watch: engine + whole-indicator tests =="
    g++ $FLAGS -Ibuild -DNB_TEST_MARKET=$M tests/test_bridge.cpp -o build/test_bridge_$m && ./build/test_bridge_$m || rc=1
 done
-echo "== 15. v1.07 bridge JSON vs the raw history + independent engine, and the Telegram sender (no network) =="
-python3 tests/test_bridge_py.py crypto forex || rc=1
+echo "== 15. v1.07 bridge JSON (gold, silver, crypto, forex) vs the raw history + independent engine, and the Telegram sender (no network) =="
+python3 tests/test_bridge_py.py gold silver crypto forex || rc=1
 
 echo
 if [ $rc -ne 0 ]; then echo "SOME SUITES FAILED"

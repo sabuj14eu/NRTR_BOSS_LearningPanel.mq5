@@ -35,6 +35,24 @@ conditions are aligned for the educational setup*. It is **not** a profit signal
 
 Personal tool. No SignalMesh, no Telegram, no network, no DLLs, no files.
 
+## v1.08: NY clock, MARKET state, data bridge (gold / silver)
+
+* **MARKET chip** at the top of the left box: **SUPER BULLISH / TREND UP / RANGE / CHOP /
+  TRANSITION / TREND DOWN / SUPER BEARISH**, from the last closed 15M bars (boss mode, 5M NRTR,
+  distance from EMA200 in ATRs, NRTR flips and width over 6 h). The line under it shows the
+  numbers, e.g. `6h: 0 flips  width 7.9 ATR  EMA -0.9 ATR`. **A description, never a signal**:
+  it does not change CLICK / WAIT. Stale data = `MARKET ---`.
+* **NY clock AUTO** (`InpNyAutoClock`, on): NY = 09:30 New York with the US daylight-saving
+  calendar, converted with the broker offset that the server and PC clocks agree on. A typed
+  `16:30` is an hour wrong for ~3 weeks a year (late March, late October), because the US and the
+  EU switch on different Sundays. The NY rows also show the window on **your PC's clock**:
+  `NY TRAP 16:30-18:00 (PC 15:30-17:00)`.
+* **NY trap window** = `InpNytWindowMin` (90). In Poland summer time that is 15:30-17:00. If you
+  trade later in the NY morning, set it longer (e.g. 120 = until 17:30 Poland). The default is
+  unchanged.
+* **Data bridge + counter-trend WATCH**: the same as crypto / forex (see section 2), plus the NY
+  trap rows and the market state in the file and in the Telegram message.
+
 ## v1.07: the NY trap on the bottom-middle table (gold / silver)
 
 The top-right corner is left free, so MT5's price scale shows the current price. The NY trap sits in

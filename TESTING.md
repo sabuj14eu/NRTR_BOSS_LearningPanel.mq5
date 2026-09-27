@@ -270,6 +270,27 @@ the session engine tests (two of them by the indicator tests as well):
 | Clock accepted whatever the PC said (no half-hour check) | yes |
 | The forming 5M bar evaluated for a trap | yes |
 
+## Results (2026-09-27, v1.08 metals: NY clock, market state, data bridge)
+
+```
+NY TRAP + NY STRIP TESTS (metals):   99 passed, 0 failed  (step 5d: + N8 AUTO clock, N9 market state, Y5 chip, Y6 clock on the indicator)
+BRIDGE + WATCH TESTS:                gold 50 / silver 50 passed (step 5f)
+BRIDGE PYTHON TESTS:                 10 of 10 (gold, silver, crypto, forex)
+BRIDGE BLOCK CHECK:                  PASS (step 6d)
+EXISTING PANEL UNCHANGED (gold):     PASS - only the two new MARKET labels differ from v1.04
+CRYPTO / FOREX FILES:                not changed
+MUTATION TESTS:  61 planted, 61 caught (9 new; M39/M40 re-anchored, M54 made buildable, re-run: CAUGHT)
+MetaEditor F7:   metals v1.08 NOT YET
+```
+
+**Manual check (gold / silver):**
+1. F7, then attach to XAUUSD M5 and XAGUSD M5.
+2. The top line of the left box shows MARKET: ... in colour.
+3. The NY rows show `NY TRAP 16:30-18:00 (PC 15:30-17:00)` in summer time.
+4. `XAUUSD.json` and `XAGUSD.json` appear in the NRTR_BRIDGE folder.
+5. `python bridge\nrtr_telegram_sender.py --dry-run --once` prints a MARKET line and the NY trap
+   lines for both.
+
 ## Results (2026-09-27, v1.07 twins: data bridge + counter-trend watch)
 
 ```

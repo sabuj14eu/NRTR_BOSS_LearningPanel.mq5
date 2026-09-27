@@ -28,7 +28,7 @@ static const long long D0 = 1788220800LL;   // 2026-09-01, a Tuesday (UTC midnig
 [[maybe_unused]] static NbNytCfg ncfg(double slMult = 1.0, double confirm = 0.0)
 {
    NbNytCfg N;
-   N.openSec = 16 * 3600 + 1800; N.preHours = 4; N.winMin = 90; N.minBars = 12;
+   N.openSec = 16 * 3600 + 1800; N.autoClock = false; N.offset = 0; N.preHours = 4; N.winMin = 90; N.minBars = 12;
    N.slBufAtr = 0.10; N.slBufMult = slMult; N.confirmAtr = confirm; N.refAtr = 1.0;
    N.tp1R = 1.0; N.tp2R = 2.0; N.validBars = 6; N.tick = 0.01; N.digits = 2;
    return N;
@@ -150,7 +150,8 @@ static void reference(const Metal &m, long long now, Ref &r)
    Pp.atrPeriod = InpNrtrAtrPeriod; Pp.nrtrMult = InpNrtrMultiplier; Pp.emaPeriod = InpEmaPeriod; Pp.swing = InpSwingStrength;
    Pp.slBufAtr = InpSlBufferAtr; Pp.tp1R = InpTp1R; Pp.tp2R = InpTp2R; Pp.validBars = InpSignalValidBars; Pp.tick = m.tick; Pp.digits = m.digits;
    NbNytCfg N;
-   N.openSec = NbParseHHMM(InpNyOpenTime); N.preHours = InpNytRangeHours; N.winMin = InpNytWindowMin; N.minBars = InpNytMinBars;
+   N.openSec = InpNyAutoClock ? 0 : NbParseHHMM(InpNyOpenTime); N.autoClock = InpNyAutoClock; N.offset = 3 * 3600;   // the simulator's broker: UTC+3
+   N.preHours = InpNytRangeHours; N.winMin = InpNytWindowMin; N.minBars = InpNytMinBars;
    N.slBufAtr = InpSlBufferAtr; N.slBufMult = m.silver ? InpFqSilverSlMult : 1.0; N.confirmAtr = m.silver ? InpFqSilverConfirmAtr : 0.0;
    N.refAtr = InpNytRefAtr; N.tp1R = InpTp1R; N.tp2R = InpTp2R; N.validBars = InpSignalValidBars; N.tick = m.tick; N.digits = m.digits;
    long long anchor = (now / 86400) * 86400 - (long long)InpHistoryDays * 86400;
@@ -397,6 +398,70 @@ int main()
    }
    end("N7");
 
+   begin("N8 v1.07 AUTO clock: 09:30 New York in broker time, right in the weeks the US and EU disagree");
+   {
+      NbNytCfg A = ncfg();
+      A.autoClock = true;
+      long day = 0;
+      struct Case { int y, m, d; long off; const char *want; const char *why; } cases[] = {
+         {2026, 9, 28, 3 * 3600, "16:30", "Sep 28 2026: EU summer (UTC+3), US summer: 16:30"},
+         {2026, 10, 26, 2 * 3600, "15:30", "Oct 26 2026: EU winter already (UTC+2), US still summer: 15:30"},
+         {2026, 11, 2, 2 * 3600, "16:30", "Nov 2 2026: both winter: 16:30"},
+         {2027, 3, 15, 2 * 3600, "15:30", "Mar 15 2027: US summer from Mar 14, EU still winter: 15:30"},
+         {2027, 3, 29, 3 * 3600, "16:30", "Mar 29 2027: both summer: 16:30"},
+      };
+      for(const Case &c : cases)
+      {
+         // days since 1970 for the date (inverse of NbCivil, checked against it)
+         long dd = 0;
+         for(long k = 20000; k < 22000; k++) { int y, m, d; NbCivil(k, y, m, d); if(y == c.y && m == c.m && d == c.d) { dd = k; break; } }
+         A.offset = c.off;
+         datetime o = NbNytOpenOf((datetime)(dd * 86400 + 12 * 3600), A, day);
+         CHECK(TimeToString(o, TIME_MINUTES) == c.want && day == dd, c.why);
+      }
+      NbNytCfg T = ncfg();
+      long dd = 0;
+      for(long k = 20000; k < 22000; k++) { int y, m, d; NbCivil(k, y, m, d); if(y == 2026 && m == 10 && d == 26) { dd = k; break; } }
+      CHECK(TimeToString(NbNytOpenOf((datetime)(dd * 86400), T, day), TIME_MINUTES) == "16:30", "TYPED clock: 16:30 whatever the date (the old behaviour)");
+      // the whole trap engine follows the clock: on Oct 26 the window opens at 15:30
+      Day w;
+      long long d26 = dd * 86400LL;
+      for(long long t = d26 + 11 * 3600 + 1800; t < d26 + 17 * 3600; t += 300) bar(w, t, 100.0, 100.5, 99.5, 100.1);
+      A.offset = 2 * 3600;
+      runDay(w, A);
+      CHECK(w.nt[(size_t)idxAt(w, d26 + 15 * 3600 + 1800)].phase == NB_NTP_NY && w.nt[(size_t)idxAt(w, d26 + 15 * 3600 + 1500)].phase == NB_NTP_PRE,
+            "AUTO on Oct 26: 15:25 = pre-NY range, 15:30 = NY window");
+   }
+   end("N8");
+
+   begin("N9 v1.07 MARKET STATE on hand-made 15M bars (a description, never a signal)");
+   {
+      auto mk = [](int mode, double c, double ema, double atr, int flips, double width, int dir5, double &dist, int &fl, double &wd) {
+         NbSeries b;
+         int n = NB_MK_LOOKBACK + 1;
+         NbSeriesResize(b, n);
+         ArrayResize(b.atr, n); ArrayResize(b.ema, n); ArrayResize(b.flip, n); ArrayResize(b.mode, n);
+         for(int j = 0; j < n; j++)
+         {
+            b.c[(size_t)j] = c; b.h[(size_t)j] = c + width * atr / 2.0; b.l[(size_t)j] = c - width * atr / 2.0;
+            b.atr[(size_t)j] = atr; b.ema[(size_t)j] = ema; b.mode[(size_t)j] = mode; b.flip[(size_t)j] = (j >= n - flips) ? 1 : 0;
+         }
+         return NbMarketState(b, n - 1, dir5, dist, fl, wd);
+      };
+      double dist; int fl; double wd;
+      CHECK(mk(NB_BUY, 102.0, 100.0, 1.0, 0, 3.0, 1, dist, fl, wd) == NB_MK_SUPER_BULL && near(dist, 2.0), "BUY MODE, 5M up, +2.0 ATR, no flip = SUPER BULLISH");
+      CHECK(mk(NB_BUY, 101.0, 100.0, 1.0, 0, 3.0, 1, dist, fl, wd) == NB_MK_TREND_UP, "+1.0 ATR only = TREND UP");
+      CHECK(mk(NB_BUY, 102.0, 100.0, 1.0, 1, 3.0, 1, dist, fl, wd) == NB_MK_TREND_UP, "one flip in 6 h = TREND UP, not SUPER");
+      CHECK(mk(NB_BUY, 102.0, 100.0, 1.0, 0, 3.0, -1, dist, fl, wd) == NB_MK_TREND_UP, "5M against = TREND UP, not SUPER");
+      CHECK(mk(NB_SELL, 98.0, 100.0, 1.0, 0, 3.0, -1, dist, fl, wd) == NB_MK_SUPER_BEAR, "the mirror: SUPER BEARISH");
+      CHECK(mk(NB_SELL, 99.5, 100.0, 1.0, 0, 3.0, -1, dist, fl, wd) == NB_MK_TREND_DOWN, "TREND DOWN");
+      CHECK(mk(NB_WAIT, 100.0, 100.0, 1.0, 3, 3.0, 1, dist, fl, wd) == NB_MK_CHOP && fl == 3, "boss WAIT + 3 flips = CHOP");
+      CHECK(mk(NB_WAIT, 100.0, 100.0, 1.0, 1, 3.5, 1, dist, fl, wd) == NB_MK_RANGE && near(wd, 3.5), "boss WAIT, 1 flip, width 3.5 ATR = RANGE");
+      CHECK(mk(NB_WAIT, 100.0, 100.0, 1.0, 1, 6.0, 1, dist, fl, wd) == NB_MK_TRANSITION, "boss WAIT, width 6 ATR = TRANSITION");
+      CHECK(mk(NB_BUY, 102.0, 0.0, 1.0, 0, 3.0, 1, dist, fl, wd) == NB_MK_UNKNOWN, "no EMA yet = unknown, never guessed");
+   }
+   end("N9");
+
    //============================================================ v1.07 default view: NY strip + lines
    for(int mi = 0; mi < 2; mi++)
    {
@@ -564,6 +629,83 @@ int main()
       }
       end(title);
    }
+
+   //============================================================ v1.07: MARKET chip, clock, PC time
+   for(int mi = 0; mi < 2; mi++)
+   {
+      Metal m = makeMetal(mi == 1, mi == 1 ? 11 : 7);
+      const char *tag = m.silver ? "XAGUSD" : "XAUUSD";
+      char title[160];
+      std::snprintf(title, sizeof title, "Y5 %s: the MARKET chip on the left box = the engine; stale = no state", tag);
+      begin(title);
+      {
+         int moments = 0, bad = 0, too = 0;
+         std::map<std::string, int> seen;
+         for(size_t k = 11 * 288; k + 1 < m.m5.size(); k += 11)
+         {
+            long long now = m.m5[k].t + 320;
+            Ref r;
+            reference(m, now, r);
+            load(m);
+            SIM.now = now;
+            start();
+            if(!g_fresh) { OnDeinit(0); continue; }
+            double dist; int fl; double wd;
+            int want = NbMarketState(r.s15, r.s15.n - 1, r.s5.dir.back(), dist, fl, wd);
+            std::string chip = P("mk");
+            if(chip != "MARKET: " + NbMarketStateText(want) && !(want == NB_MK_UNKNOWN && chip == "MARKET ---")) bad++;
+            if(want != NB_MK_UNKNOWN && !has(P("mkd"), "6h: " + std::to_string(fl) + " flips")) bad++;
+            if(cps(chip) > 63 || cps(P("mkd")) > 63) too++;
+            seen[chip]++;
+            OnDeinit(0);
+            moments++;
+         }
+         std::printf("    %d moments:", moments);
+         for(auto &kv : seen) std::printf("  %s x%d", kv.first.c_str(), kv.second);
+         std::printf("\n");
+         CHECK(moments > 80 && seen.size() >= 3, "the fixture shows at least three market states");
+         CHECK(bad == 0, "chip and detail = the independent engine run");
+         CHECK(too == 0, "within 63 characters");
+         Metal gap = m;
+         load(gap);
+         SIM.now = m.m5[12 * 288 + 50].t + 320;
+         SIM.tickTime = SIM.now - 3600;
+         start();
+         CHECK(P("mk") == "MARKET ---" && has(P("mkd"), "stale"), "dead feed: no market state");
+         OnDeinit(0);
+      }
+      end(title);
+   }
+
+   begin("Y6 v1.07 clock on the whole indicator: Oct 27 2026 (EU winter, US summer) = NY 15:30; PC time shown; two witnesses or no clock");
+   {
+      long long dOct = 0;
+      for(long k = 20000; k < 22000; k++) { int y, mo, d; NbCivil(k, y, mo, d); if(y == 2026 && mo == 10 && d == 13) { dOct = k * 86400LL; break; } }
+      Metal m = makeMetal(false, 7);
+      m.m5 = gen5m(7, 16 * 288, dOct, m.price, m.tick, m.vol);
+      m.m15 = agg(m.m5, 900);
+      load(m);
+      SIM.gmtOff = 2 * 3600;     // the broker is on EET (UTC+2) after Oct 25
+      SIM.localOff = 1 * 3600;   // the PC in Poland is on CET (UTC+1)
+      long long day = dOct + 14 * 86400;   // Tuesday Oct 27
+      SIM.now = day + 15 * 3600 + 5 * 60 + 20;   // 15:05 broker
+      start();
+      CHECK(has(P("ny"), "NY OPEN 15:30 in") || has(P("vny"), "NY OPEN 15:30 in") || [&] { for(auto &kv : SIM.objs) if(kv.first.compare(0, 7, "NBLP_P_") == 0 && has(kv.second.s[OBJPROP_TEXT], "NY OPEN 15:30 in")) return true; return false; }(),
+            "main panel: NY OPEN 15:30 (the typed 16:30 would be an hour late this week)");
+      CHECK(has(Y("h"), "NY TRAP  15:30-17:00") && has(Y("h"), "(PC 14:30-16:00)"), "NY rows: window 15:30-17:00 broker = 14:30-16:00 on the PC");
+      CHECK(has(SIM.files["NRTR_BRIDGE\\XAUUSD.json"], "AUTO: server = UTC+2.0"), "the bridge file says which clock it used");
+      OnDeinit(0);
+      load(m);
+      SIM.gmtOff = 2 * 3600 + 7 * 60;   // the witnesses disagree by 7 minutes: no clock, never guessed
+      SIM.now = day + 15 * 3600 + 5 * 60 + 20;
+      start();
+      CHECK(g_N.openSec < 0 && has(Y("s_st"), "NY clock unknown"), "witnesses disagree: the NY trap is OFF and says why");
+      bool unknownRow = false;
+      for(auto &kv : SIM.objs) if(kv.first.compare(0, 7, "NBLP_P_") == 0 && has(kv.second.s[OBJPROP_TEXT], "NY CLOCK UNKNOWN")) unknownRow = true;
+      CHECK(unknownRow, "and the main panel's NY row says NY CLOCK UNKNOWN");
+      OnDeinit(0);
+   }
+   end("Y6");
 #endif
 
 #ifdef NYT_LADDER
