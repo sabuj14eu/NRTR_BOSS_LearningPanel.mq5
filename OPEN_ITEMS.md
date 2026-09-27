@@ -16,6 +16,17 @@ spread on each replay so the evidence says how often it mattered. No strategy ch
 Measure first: session label on every shadow record + a per-session report (5M ATR, MFE / MAE,
 TP1 / SL hit rate). Change TP / SL per session only after the numbers (n >= 20 per session).
 
+## 3. US EQUITIES / INDEX module (US100 / USTEC first) - PROPOSAL, waiting for Shyam's go
+
+Architecture and test plan in `docs/US100_PLAN.md`; four decisions listed in its section 6. The
+three existing files stay unchanged. Stocks (NVDA, AMD, ...) only after US100 is validated.
+
+## 4. Gaps in the current metals / forex files - measure first
+
+No gap concept today: ATR jumps after a weekend gap, a gap across a level can count as a sweep or a
+breakout in the five-question engine, and the replay fills gapped SLs at the SL price. Details
+and the measure-first proposal (`after_gap` on each record): `docs/US100_PLAN.md` section 5.
+
 ## Done
 
 * "Give me final crypto" (the metals v1.10 port to crypto / forex): done 2026-09-27. Proof:
