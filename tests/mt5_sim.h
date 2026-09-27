@@ -76,6 +76,8 @@ struct SimPos
    datetime time;
    double price = 0.0, sl = 0.0, tp = 0.0;   // open price, stop loss, take profit
 };
+// v1.11 US100: MT5's economic calendar (the tester has none: calOk = false = unavailable)
+struct SimCal { datetime time; int importance; std::string name; std::string country; std::string currency; };
 struct SimState
 {
    std::string sym = "XAUUSD", base = "XAU", profit = "USD";
@@ -110,6 +112,9 @@ struct SimState
    int nextHandle = 1;
    bool fileFail = false;                       // FileOpen refuses (disk full, no rights)
    int fileWrites = 0;                          // successful FileMove count
+   bool calOk = false;                          // v1.11: CalendarValueHistory succeeds
+   std::vector<SimCal> cal;                     // v1.11: calendar entries (server time)
+   int calCalls = 0;                            // v1.11: how often the calendar was read
 };
 static SimState SIM;
 static std::string _Symbol = "XAUUSD";
@@ -322,3 +327,30 @@ inline void EventKillTimer() {}
 inline void Print(const string &s) { SIM.log.push_back(s); }
 inline void Alert(const string &s) { SIM.alerts.push_back(s); }
 inline bool PlaySound(const string &s) { SIM.sounds.push_back(s); return true; }
+
+// v1.11 US100: the economic calendar, READ ONLY (same shape as MQL5)
+enum ENUM_CALENDAR_EVENT_IMPORTANCE { CALENDAR_IMPORTANCE_NONE = 0, CALENDAR_IMPORTANCE_LOW = 1, CALENDAR_IMPORTANCE_MODERATE = 2,
+                                      CALENDAR_IMPORTANCE_HIGH = 3 };
+struct MqlCalendarValue { ulong id; ulong event_id; datetime time; };
+struct MqlCalendarEvent { ulong id; int importance; string name; };
+inline bool CalendarValueHistory(std::vector<MqlCalendarValue> &v, datetime from, datetime to, const string &country, const string &ccy)
+{
+   SIM.calCalls++;
+   v.clear();
+   if(!SIM.calOk) return false;
+   for(size_t k = 0; k < SIM.cal.size(); k++)
+   {
+      const SimCal &c = SIM.cal[k];
+      if(c.time < from || c.time > to || c.country != country || c.currency != ccy) continue;
+      v.push_back({(ulong)(k + 1), (ulong)(k + 1), c.time});
+   }
+   return true;
+}
+inline bool CalendarEventById(ulong id, MqlCalendarEvent &e)
+{
+   if(id < 1 || id > SIM.cal.size()) return false;
+   e.id = id;
+   e.importance = SIM.cal[(size_t)(id - 1)].importance;
+   e.name = SIM.cal[(size_t)(id - 1)].name;
+   return true;
+}

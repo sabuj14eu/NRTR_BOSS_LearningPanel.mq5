@@ -101,8 +101,19 @@ for m in crypto forex; do
    echo "== 14.$m v1.07 data bridge file + counter-trend watch: engine + whole-indicator tests =="
    g++ $FLAGS -Ibuild -DNB_TEST_MARKET=$M tests/test_bridge.cpp -o build/test_bridge_$m && ./build/test_bridge_$m || rc=1
 done
+echo "================ NRTR_BOSS_US100.mq5 (US100 / USTEC, v1.11) ================"
+echo "== 16. generated from crypto + the declared US patches (tests/make_us100.py --check): no drift =="
+python3 tests/make_us100.py --check || rc=1
+echo "== 17. safety scan =="
+python3 tests/check_safety.py NRTR_BOSS_US100.mq5 || rc=1
+echo "== 18. translate + surrogate compile of the WHOLE US100 indicator =="
+python3 tests/mql2cpp.py NRTR_BOSS_US100.mq5 build/full_us100.inc full
+printf '#include "../tests/mt5_sim.h"\n#include "full_us100.inc"\nint main(){return 0;}\n' > build/full_compile_us100.cpp
+g++ $FLAGS -fsyntax-only build/full_compile_us100.cpp && echo "FULL FILE (us100): 0 errors, 0 warnings" || rc=1
+echo "== 19. US100 tests: sessions, US levels, gap, causality, stale, too far, forming, lots, no cross-asset, news UNKNOWN, DST per bar =="
+g++ $FLAGS -Ibuild tests/test_us100.cpp -o build/test_us100 && ./build/test_us100 || rc=1
 echo "== 15. v1.07 bridge JSON (gold, silver, crypto, forex) vs the raw history + independent engine, and the Telegram sender (no network) =="
-python3 tests/test_bridge_py.py gold silver crypto forex || rc=1
+python3 tests/test_bridge_py.py gold silver crypto forex || rc=1   # includes the US100 message test (build/bridge_us100.json)
 
 echo
 if [ $rc -ne 0 ]; then echo "SOME SUITES FAILED"

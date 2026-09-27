@@ -249,6 +249,25 @@ class Sender(unittest.TestCase):
         self.assertLess(m.find("== MT5 SIGNAL"), m.find("NY VERDICT"), "NY and market state sit in the conclusion part")
         self.assertLess(m.find("NY VERDICT"), m.find("== RAW DATA =="))
 
+    def test_us100_message(self):
+        if not os.path.exists(os.path.join(ROOT, "build", "bridge_us100.json")):
+            self.skipTest("US100 file not built")
+        d = load("bridge_us100.json")
+        self.assertEqual(d["source"], "NRTR_BOSS_US100")
+        self.assertEqual(d["mt5_order_action"], "NONE")
+        ny = d["mt5_signal"]["ny"]
+        self.assertEqual(ny["module"], "US SESSION MAP")
+        self.assertTrue(ny["not_a_signal"])
+        self.assertEqual(ny["news"]["direction"], "UNKNOWN")
+        self.assertIsNone(ny["context"])
+        m = snd.format_message(d, False)
+        self.assertLessEqual(len(m), snd.TELEGRAM_LIMIT)
+        self.assertIn("US SESSION (context): " + ny["session_now"], m)
+        self.assertIn("US MAP (reference, not a signal): PDH", m)
+        self.assertIn("(direction UNKNOWN)", m)
+        self.assertNotIn("NY TRAP", m)
+        self.assertLess(m.find("US MAP"), m.find("== RAW DATA =="))
+
     def test_message_fits_telegram(self):
         d = json.loads(json.dumps(self.src))
         for c in d["raw"]["m5"]["closed"] + d["raw"]["m15"]["closed"]:

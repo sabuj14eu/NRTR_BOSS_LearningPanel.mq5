@@ -1,5 +1,52 @@
 # CHANGELOG
 
+## v1.11 US100 / USTEC (2026-09-27): a new file, `NRTR_BOSS_US100.mq5` - read-only, record, shadow
+
+Shyam's spec plus his four decisions (2026-09-27): separate OVERNIGHT and PRE-MARKET labels, VWAP
+off, no NY trap copy (the US levels replace it), and no peers in v1. The design is in
+`docs/US100_PLAN.md`. **The metals, crypto and forex files are unchanged.**
+
+**How it is built.** `tests/make_us100.py` = the crypto file + 59 declared patches, each anchored
+exactly once, plus the US code in `us100/`. `run_tests.sh` fails if the committed file drifts
+from that. NB_PW, NB_BR, NB_MK, NB_RP and NB_SH are byte-identical in all four files.
+
+| Layer | US100 |
+|---|---|
+| Direction | 15M boss (BUY / SELL / WAIT, structure MIXED / UNCONFIRMED), unchanged engine. Starting values are not validated for US100. |
+| Levels (reference only) | PDH / PDL / close of the previous regular session (>= 36 bars); ONH / ONL; PMH / PML; the 09:30 open; OR 5 / 15 / 30; regular session so far; gap in points, % and 15M ATR, filled / open. Each is published only when its window has ended, and only when complete. |
+| Sessions | context labels in NY time, converted per bar (server DST rule input + US DST). |
+| Reaction / confirmation | the 5-question engine on US levels. **Gap rule:** a level strictly between the previous close and the bar's open is never a sweep or a breakout. |
+| Risk | the same entry / SL / TP1 / TP2 / R:R, PRICE IN THE MIDDLE, PRICE TOO FAR click guard, and broker volume step. |
+| News | MT5 calendar, a label only, direction UNKNOWN; empty / unavailable = UNKNOWN. |
+| Bridge | `mt5_signal.ny` = the US map (`module: "US SESSION MAP"`, `not_a_signal`, levels, gap, news, `context: null`). The Telegram sender prints it. |
+| Off | NY trap, VWAP, peers, stocks. |
+
+**Found while building (Freshness Law, "a clock needs two witnesses").** The existing files
+convert the NY open of past bars with today's server offset. On a broker whose server offset
+changes with DST, history before a switch is one hour off. US100 converts per bar. The existing
+files are unchanged, and this is recorded in OPEN_ITEMS.
+
+**No schema change** in the append-only sense: fields were only added.
+
+### Tests - `tests/test_us100.cpp`, 108 checks
+
+* The fixture is a synthetic USTEC with real hours: Sunday 18:00 to Friday 17:00 NY and the
+  17:00-18:00 daily break. Its server clock follows the broker DST rule.
+* Expected NY times come from a **hand-written 2026 DST date table**, not from the indicator.
+* What the checks cover:
+  * U0: sessions and symbols.
+  * U15: DST, for every tradable hour of 2026, with US / EU / fixed servers and winter and summer
+    witnesses, plus the whole indicator across 1 November.
+  * U1-U3: every US field vs an independent reference, bar by bar. Planted pre-market and
+    09:30 spikes. A thin session. A missing OR bar.
+  * U4: gaps; U4b / U5 / U6 / U12: no plan starts on a gap, sweeps and breaks are sound, the
+    SL / TP / R:R order is right, fills happen only on a retest, and MIDDLE is never READY.
+  * U7: causality; U8: stale data; U9: too far; U10: a forming spike.
+  * U11: volume steps 1 / 0.1 / 0.01 / 0.005.
+  * U13: only its own symbol is read; U14: news is UNKNOWN with decisions identical; U16: no
+    execution and no NY trap.
+* 16 US100 mutations; the Python sender test covers the US100 message.
+
 ## v1.10 crypto / forex (2026-09-27): the metals v1.10 parity - click guard, lots, arrow, pending, MARKET chip, pullback watch
 
 Shyam: "finish crypto and Forex file together similar metal". The engine is unchanged in both twins:

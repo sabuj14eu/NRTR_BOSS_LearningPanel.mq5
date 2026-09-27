@@ -1,6 +1,6 @@
 # NRTR BOSS Learning Panels (MT5)
 
-Three standalone MT5 **indicators**, one per market. Each one is a single `.mq5` file: copy,
+Four standalone MT5 **indicators**, one per market. Each one is a single `.mq5` file: copy,
 compile with F7, drag onto the chart. None of them ever places, modifies or closes an order.
 
 | File | Market | Extra |
@@ -8,6 +8,7 @@ compile with F7, drag onto the chart. None of them ever places, modifies or clos
 | `NRTR_BOSS_LearningPanel.mq5` | Gold, Silver | the original 15M-boss / 5M-trigger panel **+ 5-question table (v1.05) + NY trap rows and lines (v1.06/v1.07)** |
 | `NRTR_BOSS_Crypto_NYTrap.mq5` | BTC ETH SOL LTC XRP BNB ADA DOGE AVAX DOT LINK BCH (USD, USDT, USDC) | **+ NY-open trap module + 5-question table (v1.05)** |
 | `NRTR_BOSS_Forex_NYTrap.mq5` | EURUSD USDJPY GBPUSD and every pair of USD EUR GBP JPY CHF AUD NZD CAD SGD NOK SEK DKK PLN ZAR MXN HKD CNH | **+ NY-open trap module + 5-question table (v1.05)** |
+| `NRTR_BOSS_US100.mq5` (v1.11) | USTEC / US100 / NAS100 (stocks: phase 2) | **+ US session map in NY time (PDH/PDL, ONH/ONL, PMH/PML, open, OR 5/15/30, gap), news label; the NY trap is OFF** |
 
 The crypto and forex files are twins: the same text except one `#define` (the market filter)
 and the description lines. `tests/check_twins.py` enforces that. The NY-trap module is
@@ -34,6 +35,36 @@ symbol only to show EXIT / PROTECT. You click, or you don't. "CLICK BUY" means *
 conditions are aligned for the educational setup*. It is **not** a profit signal.
 
 Personal tool. No SignalMesh, no Telegram, no network, no DLLs, no files.
+
+## v1.11: US100 / USTEC (new file, `NRTR_BOSS_US100.mq5`)
+
+Built from the crypto file by `tests/make_us100.py` (every difference is declared there), so the
+engine, the click guard, lots, MARKET chip, pullback watch and bridge are the same text. What is
+different:
+
+* **US SESSION MAP** (left box, where the NY trap rows were), all in **New York time**:
+  * **PDH / PDL / close** of the previous **regular** session (09:30-16:00), not the broker day.
+  * **ONH / ONL** (overnight 18:00-04:00) and **PMH / PML** (pre-market 04:00-09:30). They are
+    shown only after their window has ended and never mix with the regular session.
+  * The **09:30 open**, the opening range **OR 5 / 15 / 30** (each shown only once its window is
+    complete), and the regular-session high / low so far.
+  * **GAP** = open - previous close, in points, % and 15M ATR: UP / DOWN / NONE, FILLED / OPEN.
+* **Session labels** (overnight, pre-market, open 0-5 / 5-15 / 15-30 min, morning, lunch, afternoon,
+  final hour, after-hours, closed) are context only. They change no rule.
+* The **5-question table** uses PDH / PDL, PMH / PML and the opening range (input
+  `InpUsOrMinutes`, default 15) plus the 15M swings. **A level the price gapped over is never a
+  sweep and never a breakout**, because nothing traded there.
+* **News**: MT5's economic calendar (USD, high impact), shown as a label.
+  * Its direction is always UNKNOWN.
+  * An empty or unavailable calendar = UNKNOWN, never "no news".
+  * It never changes a signal.
+* **Clock**: every bar is converted to NY time **per bar**, through the broker server's DST rule
+  (input `InpUsServerDst`, default US = the usual NY-close UTC+2/+3 broker; also EU or NONE) and
+  the US DST calendar. It is never one scalar offset for the whole history.
+* The NY trap module is OFF. VWAP is off (a CFD has tick volume only). Peers (NVDA, AMD, ...) and
+  stocks come in phase 2.
+* The starting values are the crypto file's and are **not validated for US100**. The order is
+  read-only, record, shadow, test, validate.
 
 ## v1.10 crypto / forex: the same as gold / silver
 

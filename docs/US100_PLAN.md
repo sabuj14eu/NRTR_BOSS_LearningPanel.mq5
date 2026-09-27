@@ -1,6 +1,9 @@
 # US EQUITIES / INDEX module - proposed architecture and test plan (US100 / USTEC first)
 
-Status: **PROPOSAL, nothing built.** Waiting for Shyam's go and the four decisions at the end.
+Status: **BUILT as v1.11 (shadow)** on 2026-09-27, after Shyam's four decisions (section 6: all four
+recommended options). What differs from this plan: the NY clock converts per bar through the
+server's DST rule (input `InpUsServerDst`); there is no holiday calendar yet (OPEN_ITEMS 3); and the
+spread-aware stop check is still waiting for its go (OPEN_ITEMS 1).
 Pipeline for this module: READ-ONLY -> RECORD -> SHADOW -> TEST -> VALIDATE. Evidence before
 any rule change (n < 20 is luck, ~100 to judge).
 

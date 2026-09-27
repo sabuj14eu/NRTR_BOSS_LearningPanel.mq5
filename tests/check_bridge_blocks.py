@@ -9,7 +9,8 @@ NbBrRegimeKey), which must all exist in every file."""
 import re
 import sys
 
-FILES = {"crypto": "NRTR_BOSS_Crypto_NYTrap.mq5", "forex": "NRTR_BOSS_Forex_NYTrap.mq5", "metals": "NRTR_BOSS_LearningPanel.mq5"}
+FILES = {"crypto": "NRTR_BOSS_Crypto_NYTrap.mq5", "forex": "NRTR_BOSS_Forex_NYTrap.mq5", "metals": "NRTR_BOSS_LearningPanel.mq5",
+         "us100": "NRTR_BOSS_US100.mq5"}   # v1.11: the US index file shares the same blocks
 ADAPTERS = ["NbBrLabel", "NbBrSigKind", "NbBrSource", "NbBrMarket", "NbBrNy", "NbBrNyKey", "NbBrMarketState", "NbBrRegime", "NbBrRegimeKey",
             "NbBrAction", "NbBrSigExtra", "NbBrClickKey"]
 
@@ -40,7 +41,7 @@ def main() -> int:
     if bad:
         print(f"BRIDGE BLOCK CHECK: FAIL ({bad})")
         return 1
-    print(f"BRIDGE BLOCK CHECK: PASS - NB_PW, NB_BR, NB_MK, NB_RP, NB_SH identical in all 3 files; {len(ADAPTERS)} bridge functions defined in each")
+    print(f"BRIDGE BLOCK CHECK: PASS - NB_PW, NB_BR, NB_MK, NB_RP, NB_SH identical in all {len(FILES)} files; {len(ADAPTERS)} bridge functions defined in each")
     return 0
 
 

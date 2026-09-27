@@ -152,7 +152,22 @@ def format_message(d: dict, stale: bool, candles: int = 18) -> str:
     if isinstance(ms, dict):
         lines.append(f"MARKET: {ms.get('state')}  ({ms.get('detail')})  - a description, not a signal")
     ny = s.get("ny")
-    if isinstance(ny, dict):
+    if isinstance(ny, dict) and ny.get("module") == "US SESSION MAP":   # v1.11 US100: context and reference levels
+        if ny.get("state"):
+            lines.append(f"US MAP: {ny.get('state')}")
+        else:
+            lv = ny.get("levels") or {}
+            gp = ny.get("gap") or {}
+            nw = ny.get("news") or {}
+            lines.append(f"US SESSION (context): {ny.get('session_now')}")
+            lines.append(f"US MAP (reference, not a signal): PDH {_px(lv.get('prev_day_high'))} PDL {_px(lv.get('prev_day_low'))} "
+                         f"close {_px(lv.get('prev_close'))}  PMH {_px(lv.get('premarket_high'))} PML {_px(lv.get('premarket_low'))}  "
+                         f"OR15 {_px(lv.get('or15_high'))}/{_px(lv.get('or15_low'))}")
+            fill = "filled" if gp.get("filled") else "open"
+            lines.append(f"GAP: {gp.get('direction')} {gp.get('points')} ({gp.get('atr15')} ATR) {fill}"
+                         + (f"  gapped over {gp.get('gapped_through')}" if gp.get("gapped_through") else ""))
+            lines.append(f"NEWS: {nw.get('text')}  (direction {nw.get('direction')})")
+    elif isinstance(ny, dict):
         if "phase" in ny:
             win = f" {ny.get('window')}" if ny.get("window") else ""
             lines.append(f"NY:{win} {ny.get('phase')}  pre-NY H {_px(ny.get('pre_ny_high'))} L {_px(ny.get('pre_ny_low'))}")

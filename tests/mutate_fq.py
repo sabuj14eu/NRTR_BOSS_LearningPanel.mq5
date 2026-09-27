@@ -20,6 +20,7 @@ FLAGS = ["-std=c++17", "-O1", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wer
 TARGETS = {   # tag: (source file, NB_TEST_MARKET, engine inc name, full inc name)
     "crypto": ("NRTR_BOSS_Crypto_NYTrap.mq5", "1", "engine_crypto.inc", "full_crypto.inc"),
     "gold": ("NRTR_BOSS_LearningPanel.mq5", "0", "engine.inc", "full.inc"),
+    "us100": ("NRTR_BOSS_US100.mq5", "3", "engine_us100.inc", "full_us100.inc"),   # v1.11: its own suite, no v1.04 baseline
 }
 
 MUTATIONS = [
@@ -233,7 +234,42 @@ MUTATIONS = [
     ("crypto", "v1.10 twins MARKET chip: shown on stale data",
      "   if(!g_fresh)\n   {\n      detail = \"data stale - no market state\";\n      return \"MARKET ---\";\n   }\n", ""),
     ("crypto", "v1.10 twins regime watch: missing 1H / 4H not said",
-     "         st = (b.why == NB_RPW_NO_HTF) ? \"none - 1H / 4H data missing\" :", "         st = (false) ? \"none - 1H / 4H data missing\" :"),
+     "         st = (b.why == NB_RPW_NO_HTF) ? \"none - 1H / 4H data missing\" :", "         st = (false) ? \"none - 1H / 4H data missing\" :"),    # ---- v1.11 US100: its own rules ----
+    ("us100", "v1.11 US: the first regular 5M bar labelled PRE-MARKET",
+     "   if(mn < 9 * 60 + 30)\n      return NB_US_PRE;", "   if(mn < 9 * 60 + 35)\n      return NB_US_PRE;"),
+    ("us100", "v1.11 US: LUNCH starts at 12:00 instead of 11:30",
+     "   if(mn < 11 * 60 + 30)\n      return NB_US_MORNING;", "   if(mn < 12 * 60)\n      return NB_US_MORNING;"),
+    ("us100", "v1.11 US: regular-session bars mixed into the pre-market range",
+     "      if(ss == NB_US_PRE)\n      {\n         pmH", "      if(ss == NB_US_PRE || NbUsIsRth(ss))\n      {\n         pmH"),
+    ("us100", "v1.11 US: a thin session (< 36 regular bars) becomes 'the previous day'",
+     "         if(curDay >= 0 && rN >= NB_US_RTH_MIN_BARS)", "         if(curDay >= 0 && rN > 0)"),
+    ("us100", "v1.11 US: opening range published with a bar missing",
+     "            if(op > 0.0 && oN[q] == orMin[q] / 5)", "            if(op > 0.0 && oN[q] > 0)"),
+    ("us100", "v1.11 US: opening range published one bar early",
+     "         if(!oPub[q] && endEt >= base + 9 * 3600 + 1800 + orMin[q] * 60)", "         if(!oPub[q] && endEt >= base + 9 * 3600 + 1800 + orMin[q] * 60 - 300)"),
+    ("us100", "v1.11 US: gap 'filled' measured against the open, not the previous close",
+     "         if(gapDir > 0 && lo <= pcl)", "         if(gapDir > 0 && lo <= op)"),
+    ("us100", "v1.11 US: a gap over a level counted as a SWEEP",
+     "            if(pierce && NbUsGapped(s5.c[j - 1], s5.o[j], L))", "            if(false && pierce && NbUsGapped(s5.c[j - 1], s5.o[j], L))"),
+    ("us100", "v1.11 US: a gap over a level counted as a BREAKOUT",
+     "               if(NbUsGapped(s5.c[j - 1], s5.o[j], L))\n                  continue;", "               if(false)\n                  continue;"),
+    ("us100", "v1.11 US: history converted with ONE scalar offset (the 2026-08-20 incident)",
+     "   long utc = (long)t - offBase - 3600;      // try the summer hour first\n   if(!NbSrvDstOn(srvRule, utc))\n      utc = (long)t - offBase;",
+     "   long utc = (long)t - offBase - (NbSrvDstOn(srvRule, (long)TimeTradeServer() - offBase) ? 3600 : 0);"),
+    ("us100", "v1.11 US: the EU server DST switch on the wrong hour",
+     "      return (d > lastSun) || (d == lastSun && hr >= 1);", "      return (d >= lastSun);"),
+    ("us100", "v1.11 US: news given a direction in an event window",
+     "NbJk(\"event\") + ((g_usNewsName != \"\") ? NbJs(g_usNewsName) : \"null\") + \",\" + NbJk(\"direction\") + \"\\\"UNKNOWN\\\",\"",
+     "NbJk(\"event\") + ((g_usNewsName != \"\") ? NbJs(g_usNewsName) : \"null\") + \",\" + NbJk(\"direction\") + ((g_usNewsState == NB_NEWS_WINDOW) ? \"\\\"UP\\\",\" : \"\\\"UNKNOWN\\\",\")"),
+    ("us100", "v1.11 US: an empty calendar read as 'no news'",
+     "   if(hi == 0)\n   {\n      g_usNewsState = NB_NEWS_UNKNOWN;", "   if(false)\n   {\n      g_usNewsState = NB_NEWS_UNKNOWN;"),
+    ("us100", "v1.11 US: the US map shown as live on stale data",
+     "   if(ok && !g_fresh)\n      u2 = \"DATA STALE - NOT SHOWN AS LIVE\";\n   else if", "   if(false)\n      u2 = \"\";\n   else if"),
+    ("us100", "v1.11 US: another symbol (NVDA) read as context for the gap row",
+     "   if(b.pcl <= 0.0)\n      return \"--- (no previous regular close yet)\";",
+     "   if(SymbolInfoDouble(\"NVDA\", SYMBOL_BID) > 0.0)\n      return \"NVDA UP\";\n   if(b.pcl <= 0.0)\n      return \"--- (no previous regular close yet)\";"),
+    ("us100", "v1.11 US: the NY trap module switched back on",
+     "   g_Seng.clockOk = false;", "   g_Seng.clockOk = g_S.clockOk;"),
 ]
 
 
@@ -254,6 +290,8 @@ def build_and_test(target, src_text, tag):
             return {"translate": False}
     res = {}
     tests = [("test_fq_engine", []), ("test_fq_indicator", [])]
+    if target == "us100":   # the US file has its own whole-indicator suite (and no v1.04 baseline to compare with)
+        tests = [("test_us100", [])]
     if target == "gold":   # v1.06/v1.07 NY trap: metals only; the ladder build is the same source with InpLadderShow = true
         inc = open(os.path.join(d, full)).read()
         anchor = "const bool           InpLadderShow      = false;"
@@ -276,6 +314,8 @@ def build_and_test(target, src_text, tag):
         if test == "test_bridge":   # it wrote build/bridge_*.json from the mutated file: check them too
             res["test_bridge_py"] = res[test] and run([sys.executable, "tests/test_bridge_py.py",
                                                       "gold" if target == "gold" else "crypto"]).returncode == 0
+    if target == "us100":
+        return res
     exe = os.path.join(d, "dump_new")
     r = run(["g++"] + FLAGS + ["-I" + d, "-DNB_TEST_MARKET=" + mk, '-DDUMP_INC="%s"' % full, "tests/dump_objects.cpp", "-o", exe])
     same = False
@@ -310,7 +350,7 @@ def main():
     os.makedirs(os.path.join("build", "mut"), exist_ok=True)
     texts = {}
     for t in TARGETS:
-        err = baseline(t)
+        err = baseline(t) if t != "us100" else ""
         if err:
             print("NOT RUNNABLE (%s): %s" % (t, err))
             return 2
@@ -319,7 +359,7 @@ def main():
         if not all(clean.values()):
             print("NOT RUNNABLE: the UNMUTATED %s file does not pass (%s)" % (t, clean))
             return 2
-        print("unmutated %-6s: engine PASS, indicator PASS, existing panel unchanged PASS" % t)
+        print("unmutated %-6s: %s" % (t, "US100 suite PASS" if t == "us100" else "engine PASS, indicator PASS, existing panel unchanged PASS"))
     escaped = 0
     only = set(int(a) for a in sys.argv[1:])   # optional: mutation numbers to run, e.g. 22 36
     for k, (t, name, old, new) in enumerate(MUTATIONS, 1):
