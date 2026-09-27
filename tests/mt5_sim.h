@@ -21,7 +21,7 @@ struct MqlRates
    long long real_volume;
 };
 
-enum ENUM_TIMEFRAMES { PERIOD_CURRENT = 0, PERIOD_M1 = 1, PERIOD_M5 = 5, PERIOD_M15 = 15, PERIOD_H1 = 16385 };
+enum ENUM_TIMEFRAMES { PERIOD_CURRENT = 0, PERIOD_M1 = 1, PERIOD_M5 = 5, PERIOD_M15 = 15, PERIOD_H1 = 16385, PERIOD_H4 = 16388 };
 inline int PeriodSeconds(ENUM_TIMEFRAMES tf)
 {
    switch(tf)
@@ -30,6 +30,7 @@ inline int PeriodSeconds(ENUM_TIMEFRAMES tf)
       case PERIOD_M5: return 300;
       case PERIOD_M15: return 900;
       case PERIOD_H1: return 3600;
+      case PERIOD_H4: return 14400;
       default: return 900;
    }
 }
@@ -40,7 +41,7 @@ enum { PLOT_EMPTY_VALUE = 1, PLOT_DRAW_TYPE = 2, PLOT_ARROW = 3, PLOT_ARROW_SHIF
 enum { DRAW_NONE = 0, DRAW_LINE = 1, DRAW_COLOR_LINE = 2, DRAW_ARROW = 3, DRAW_COLOR_ARROW = 4 };
 enum { INDICATOR_SHORTNAME = 1, INDICATOR_DIGITS = 2 };
 enum { SYMBOL_TIME = 99, SYMBOL_DIGITS = 1, SYMBOL_TRADE_TICK_SIZE, SYMBOL_POINT, SYMBOL_TRADE_TICK_VALUE, SYMBOL_VOLUME_MIN, SYMBOL_VOLUME_STEP, SYMBOL_VOLUME_MAX,
-       SYMBOL_BID, SYMBOL_CURRENCY_BASE, SYMBOL_CURRENCY_PROFIT, SYMBOL_ASK, SYMBOL_TRADE_CONTRACT_SIZE };
+       SYMBOL_BID, SYMBOL_CURRENCY_BASE, SYMBOL_CURRENCY_PROFIT, SYMBOL_ASK, SYMBOL_TRADE_CONTRACT_SIZE, SYMBOL_SPREAD };
 enum { ACCOUNT_CURRENCY = 1 };
 enum { ACCOUNT_BALANCE = 1, ACCOUNT_EQUITY = 2 };
 enum { POSITION_SYMBOL = 1, POSITION_TYPE, POSITION_VOLUME, POSITION_TIME, POSITION_PRICE_OPEN, POSITION_SL, POSITION_TP };
@@ -81,6 +82,10 @@ struct SimState
    double tick = 0.01, tickValue = 1.0, volMin = 0.01, volStep = 0.01, volMax = 100.0, bid = 0.0, ask = 0.0, contract = 100.0;
    double balance = 10000.0, equity = 10000.0;
    std::vector<MqlRates> m1, m5, m15;   // full history, may extend past `now`
+   std::vector<MqlRates> m60, m240;     // v1.09: 1H / 4H (empty = MT5 has none: the indicator must say so, never substitute)
+   bool askMissing = false;             // v1.09: MT5 gives no ask (SYMBOL_ASK = 0)
+   long long spreadPts = 25;            // SYMBOL_SPREAD in points
+   bool moveFail = false;               // v1.09: FileMove fails (the old .json must survive whole)
    datetime now = 0;
    long long gmtOff = 3 * 3600;   // server clock ahead of GMT (EEST); TimeGMT() = now - gmtOff
    long long localOff = 2 * 3600; // the PC's clock ahead of GMT (Poland, CEST); TimeLocal()
@@ -131,7 +136,7 @@ inline uint FileWriteString(int h, const string &txt, int len = -1)
 inline void FileClose(int h) { SIM.openFiles.erase(h); }
 inline bool FileMove(const string &src, int cf, const string &dst, int mode)
 {
-   if(!SIM.files.count(src)) return false;
+   if(SIM.moveFail || !SIM.files.count(src)) return false;
    if(SIM.files.count(dst) && !(mode & FILE_REWRITE)) return false;
    if(((cf & FILE_COMMON) != 0) != ((mode & FILE_COMMON) != 0)) return false;
    SIM.files[dst] = SIM.files[src];
@@ -145,6 +150,8 @@ inline bool FileMove(const string &src, int cf, const string &dst, int mode)
 inline const std::vector<MqlRates> &simSeries(ENUM_TIMEFRAMES tf)
 {
    if(tf == PERIOD_M1) return SIM.m1;
+   if(tf == PERIOD_H1) return SIM.m60;
+   if(tf == PERIOD_H4) return SIM.m240;
    return tf == PERIOD_M5 ? SIM.m5 : SIM.m15;
 }
 // bars that exist at SIM.now: the last one is the forming bar (series index 0)
@@ -202,6 +209,7 @@ inline long long SymbolInfoInteger(const string &, int prop)
 {
    if(prop == SYMBOL_DIGITS) return SIM.digits;
    if(prop == SYMBOL_TIME) return simTick();
+   if(prop == SYMBOL_SPREAD) return SIM.spreadPts;
    return 0;
 }
 inline double SymbolInfoDouble(const string &, int prop)
@@ -215,7 +223,7 @@ inline double SymbolInfoDouble(const string &, int prop)
       case SYMBOL_VOLUME_STEP: return SIM.volStep;
       case SYMBOL_VOLUME_MAX: return SIM.volMax;
       case SYMBOL_BID: return SIM.bid;
-      case SYMBOL_ASK: return SIM.ask > 0.0 ? SIM.ask : SIM.bid;
+      case SYMBOL_ASK: return SIM.askMissing ? 0.0 : (SIM.ask > 0.0 ? SIM.ask : SIM.bid);
       case SYMBOL_TRADE_CONTRACT_SIZE: return SIM.contract;
    }
    return 0.0;

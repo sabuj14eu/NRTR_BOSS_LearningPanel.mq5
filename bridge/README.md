@@ -35,6 +35,17 @@ pre-NY and NY high / low, and NY TRAP SELL and BUY with state, why, entry (`entr
 before the trigger), SL, TP1 and TP2. It also writes `mt5_signal.market_state` (SUPER BULLISH ...
 SUPER BEARISH: a description, never a signal). The message prints them in the conclusion part.
 
+## v1.09: the completed schema (the same in all three files)
+
+* Top level: `bid`, `ask`, `spread_points`, `spread_price` (null when MT5 gives no ask; never
+  invented), `fresh`, `freshness`, `mt5_order_action: "NONE"`, `read_only: true`, `full_data`.
+* Every candle: `forming` (false for closed, true for the forming one), `confirmed`,
+  `real_volume` (null when the broker reports none, which is normal for CFDs).
+* The forming candles: `age_seconds`, `seconds_left`, `FORMING / PREVIEW ONLY / NEVER A SIGNAL`.
+* `mt5_signal.market_state` and `mt5_signal.regime_pullback`: metals; `null` in crypto / forex.
+* The Telegram message may show fewer candles than the file. It always says `FULL DATA: JSON = 18
+  CLOSED + FORMING per timeframe (M5, M15)`.
+
 ## Setup (Windows, once)
 
 1. **Make a Telegram bot:** in Telegram, talk to **@BotFather** → `/newbot` → copy the token.

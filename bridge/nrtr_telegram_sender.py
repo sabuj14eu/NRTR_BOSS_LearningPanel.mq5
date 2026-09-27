@@ -114,6 +114,7 @@ def format_message(d: dict, stale: bool, candles: int = 18) -> str:
     s = d.get("mt5_signal", {})
     lines = ["== MT5 SIGNAL (conclusion) =="]
     lines.append(f"ACTION: {s.get('action', '?')}")
+    lines.append(f"MT5 ORDER ACTION: {d.get('mt5_order_action', 'NONE')} (read only - you place the order)")
     lines.append(f"15M BOSS: {s.get('boss_15m', '?')}   5M TIMING: {s.get('timing_5m', '?')}")
     if s.get("reason"):
         lines.append(f"why: {s.get('reason')}")
@@ -131,6 +132,22 @@ def format_message(d: dict, stale: bool, candles: int = 18) -> str:
                          f"TP1 {_px(plan.get('tp1'))}  TP2 {_px(plan.get('tp2'))}  R:R {plan.get('rr1')}")
         else:
             lines.append(f"5-Q PLAN: {fq.get('status')} - {fq.get('why')}")
+    rp = s.get("regime_pullback")
+    if isinstance(rp, dict) and rp.get("applicable"):
+        dr = rp.get("direction") or {}
+        lines.append(f"DIRECTION: {dr.get('regime')}  (4H {dr.get('h4')}, 1H {dr.get('h1')}, 15M {dr.get('m15_boss')})")
+        why = f" - {rp.get('why')}" if rp.get("why") else ""
+        lines.append(f"PULLBACK WATCH (shadow, not a signal): {rp.get('state')}{why}")
+        loc = rp.get("location")
+        if isinstance(loc, dict):
+            yn = lambda v: "YES" if v else "no"
+            lines.append(f"  1 pull {loc.get('pull_atr')} ATR  2 at structure {yn(loc.get('at_structure'))} ({_px(loc.get('structure_15m'))})  "
+                         f"3 sweep {yn(loc.get('swept'))}  4 reject {yn(loc.get('rejection'))}  5 close {yn(loc.get('confirming_close'))}  "
+                         f"6 R:R {loc.get('rr') if loc.get('rr') is not None else '--'} (min {loc.get('min_rr')})")
+        cand = rp.get("candidate")
+        if isinstance(cand, dict):
+            lines.append(f"  {cand.get('side')} RE-ENTRY CANDIDATE: entry {_px(cand.get('entry'))}  SL {_px(cand.get('sl'))}  "
+                         f"target {_px(cand.get('target'))}  R:R {cand.get('rr')}  (shadow)")
     ms = s.get("market_state")
     if isinstance(ms, dict):
         lines.append(f"MARKET: {ms.get('state')}  ({ms.get('detail')})  - a description, not a signal")
@@ -140,7 +157,7 @@ def format_message(d: dict, stale: bool, candles: int = 18) -> str:
             win = f" {ny.get('window')}" if ny.get("window") else ""
             lines.append(f"NY:{win} {ny.get('phase')}  pre-NY H {_px(ny.get('pre_ny_high'))} L {_px(ny.get('pre_ny_low'))}")
         if ny.get("verdict"):
-            lines.append(f"NY TRAP vs 15M BOSS: {ny.get('verdict')}")
+            lines.append(f"NY VERDICT: {ny.get('verdict')}")
         for side in ("sell", "buy"):
             t = ny.get(side)
             if isinstance(t, dict):
@@ -162,7 +179,7 @@ def format_message(d: dict, stale: bool, candles: int = 18) -> str:
     raw = d.get("raw", {})
     ind = d.get("indicators", {})
     m15i = (ind.get("m15", {}).get("per_closed_candle") or [{}])[-1]
-    data = ["", "== RAW DATA =="]
+    data = ["", "== RAW DATA ==", f"FULL DATA: JSON = {d.get('full_data', '18 CLOSED + FORMING')} - this message may show fewer"]
     data.append(f"15M structure: {st.get('m15', {}).get('state')}  swing H {_px(st.get('m15', {}).get('swing_high'))} "
                 f"L {_px(st.get('m15', {}).get('swing_low'))}  EMA200 {_px(m15i.get('ema200'))}")
     data.append(f"5M structure: {st.get('m5', {}).get('state')}  swing H {_px(st.get('m5', {}).get('swing_high'))} "

@@ -93,9 +93,10 @@ static Metal makeMetal(bool silver, uint64_t seed)
    m.m15 = agg(m.m5, 900);
    return m;
 }
-static void load(const Metal &m)
+static void load(const Metal &m, bool htf = true)
 {
    SIM = SimState();
+   if(htf) { SIM.m60 = toRates(agg(m.m5, 3600)); SIM.m240 = toRates(agg(m.m5, 14400)); }   // v1.09: 1H / 4H for the regime
    SIM.sym = m.sym; SIM.base = m.base; SIM.profit = "USD"; SIM.digits = m.digits; SIM.tick = m.tick;
    SIM.tickValue = m.tickValue; SIM.volMin = 0.01; SIM.gmtOff = 3 * 3600; SIM.contract = m.silver ? 5000.0 : 100.0;
    SIM.m5 = toRates(m.m5); SIM.m15 = toRates(m.m15);
@@ -462,6 +463,154 @@ int main()
    }
    end("N9");
 
+   //============================================================ v1.09 regime pullback (engine, hand-made bars)
+   // 15M ATR 1.0, 5M ATR 0.2, start 0.5 ATR, location 0.25 ATR, SL buffer 0.1 x 5M ATR, min R:R 1.5
+   struct RpCase
+   {
+      NbSeries s;
+      std::vector<int> d60, d240;
+      std::vector<double> a15, r15, s15, r60, s60;
+      std::vector<NbRpBar> rb;
+      std::vector<NbRpRec> rec;
+      int nInv = 0, nRec = 0;
+      RpCase() { NbSeriesResize(s, 0); s.sec = 300; }
+      void add(double o, double h, double l, double c, int boss = NB_SELL, int h1 = -1, int h4 = -1, double res = 102.0, double sup = 95.0)
+      {
+         int n = s.n;
+         NbSeriesResize(s, n + 1);
+         s.t[(size_t)n] = D0 + 12 * 3600 + n * 300; s.o[(size_t)n] = o; s.h[(size_t)n] = h; s.l[(size_t)n] = l; s.c[(size_t)n] = c;
+         ArrayResize(s.atr, n + 1); s.atr[(size_t)n] = 0.2;
+         ArrayResize(s.boss, n + 1); s.boss[(size_t)n] = boss;
+         ArrayResize(s.dir, n + 1); s.dir[(size_t)n] = (c >= o) ? 1 : -1;
+         d60.push_back(h1); d240.push_back(h4); a15.push_back(1.0); r15.push_back(res); s15.push_back(sup); r60.push_back(0.0); s60.push_back(0.0);
+      }
+      void run(bool lastClosed = true, double minRR = 1.5)
+      {
+         NbRpCfg C;
+         C.startAtr = 0.5; C.locAtr = 0.25; C.slBufAtr = 0.1; C.minRR = minRR; C.validBars = 6; C.trackBars = 24; C.tick = 0.01; C.digits = 2;
+         nRec = NbRunRp(s, d60, d240, a15, r15, s15, r60, s60, lastClosed, C, rb, rec, nInv);
+      }
+   };
+   // the textbook bearish re-entry: leg to 98.50, pull-up to the 15M lower high 102.00, rejection, bearish close
+   auto bearCase = [](RpCase &k) {
+      k.add(100.0, 100.2, 99.8, 100.0);     // 0 regime appears: leg low 99.80
+      k.add(100.0, 100.0, 98.5, 98.7);      // 1 new leg low 98.50
+      k.add(98.7, 100.0, 98.6, 99.9);       // 2 close 99.90 = 1.4 ATR above the leg: PULL-UP WATCH, level 102.00
+      k.add(99.9, 101.9, 99.8, 101.6);      // 3 high 101.90 within 0.25 ATR of 102.00: at structure
+      k.add(101.6, 101.95, 101.0, 101.1);   // 4 new pull high 101.95, closes in its lower half: rejection
+      k.add(101.1, 101.3, 100.5, 100.6);    // 5 bearish close 100.60 < 101.00: SL 101.95 + 0.02 = 101.97, risk 1.37, reward 2.10, R:R 1.53
+   };
+   begin("R1 v1.09 BEARISH regime (4H/1H/15M) + pull-up to structure + rejection + bearish 5M close = SELL re-entry candidate");
+   {
+      RpCase k;
+      bearCase(k);
+      k.add(100.6, 100.7, 98.4, 98.6);      // 6 low 98.40 <= target 98.50
+      k.run();
+      CHECK(k.rb[0].state == NB_RP_TREND && k.rb[0].regime == NB_SELL, "bar 0: bearish regime, tracking the leg");
+      CHECK(k.rb[2].state == NB_RP_PULLBACK && k.rb[2].why == NB_RPW_WAIT_LOCATION && near(k.rb[2].level, 102.0) && near(k.rb[2].pullAtr, 1.5),
+            "bar 2: PULL-UP WATCH, structure 102.00, pull 1.5 ATR (98.50 -> 100.00)");
+      CHECK(k.rb[3].atLoc && k.rb[3].why == NB_RPW_WAIT_REJECT, "bar 3: at structure, waiting for a rejection");
+      CHECK(k.rb[4].rejected && k.rb[4].why == NB_RPW_WAIT_CLOSE, "bar 4: rejection, waiting for the confirming close");
+      CHECK(k.rb[5].state == NB_RP_CANDIDATE && k.nRec == 1 && k.rec[0].dir == NB_SELL, "bar 5: SELL PULLBACK / RE-ENTRY CANDIDATE (with the regime)");
+      CHECK(near(k.rec[0].entry, 100.6) && near(k.rec[0].sl, 101.97) && near(k.rec[0].target, 98.5) && std::fabs(k.rec[0].rr - 2.1 / 1.37) < 1e-9,
+            "entry 100.60, SL 101.97, target 98.50 (the leg low), R:R 1.53");
+      CHECK(k.rec[0].status == NB_RPO_TARGET && k.rec[0].outIdx == 6, "bar 6: target reached (recorded)");
+      std::printf("    SELL re-entry: entry %.2f SL %.2f target %.2f R:R %.2f\n", k.rec[0].entry, k.rec[0].sl, k.rec[0].target, k.rec[0].rr);
+   }
+   end("R1");
+
+   begin("R2 a 5M close above the bearish structure = BEARISH THESIS INVALIDATED until a new leg low");
+   {
+      RpCase k;
+      k.add(100.0, 100.2, 99.8, 100.0);
+      k.add(100.0, 100.0, 98.5, 98.7);
+      k.add(98.7, 100.0, 98.6, 99.9);
+      k.add(99.9, 102.5, 99.8, 102.3);      // closes 102.30 > 102.00
+      k.add(102.3, 102.4, 100.0, 100.1);    // back down, no new low: still invalidated
+      k.add(100.1, 100.2, 98.3, 98.4);      // new leg low 98.30: the bearish thesis is armed again
+      k.run();
+      CHECK(k.rb[3].state == NB_RP_INVALIDATED && k.rb[3].why == NB_RPW_INVALIDATED && k.nInv == 1, "bar 3: INVALIDATED (counted)");
+      CHECK(k.rb[4].state == NB_RP_INVALIDATED && k.nRec == 0, "bar 4: stays invalidated, no candidate - wait for bullish confirmation");
+      CHECK(k.rb[5].state == NB_RP_TREND && near(k.rb[5].legExt, 98.3), "bar 5: a new leg low re-arms the bearish watch");
+   }
+   end("R2");
+
+   begin("R3 a pull-up in a bearish regime NEVER becomes a BUY - whatever the bullish candles do");
+   {
+      RpCase k;
+      bearCase(k);
+      for(int j = 0; j < 30; j++)                           // strong bullish candles, sweeps, rejections, all of it
+         k.add(100.6 + j * 0.05, 101.99, 100.4 + j * 0.05, 100.9 + j * 0.05 + ((j % 3 == 0) ? -0.6 : 0.3));
+      k.run();
+      int buys = 0;
+      for(int r = 0; r < k.nRec; r++) if(k.rec[(size_t)r].dir != NB_SELL) buys++;
+      bool anyBuyState = false;
+      for(auto &b : k.rb) if(b.regime == NB_BUY) anyBuyState = true;
+      CHECK(buys == 0 && !anyBuyState && k.nRec >= 1, "every record is a SELL, no bar is in a bullish regime");
+      CHECK(k.rec[0].status == NB_RPO_SL || k.rec[0].status == NB_RPO_EXPIRED || k.rec[0].status == NB_RPO_TARGET, "the candidate got an outcome");
+   }
+   end("R3");
+
+   begin("R4 not taken: confirming close away from structure; R:R below the minimum; one candidate per pull");
+   {
+      RpCase far;
+      bearCase(far);
+      for(int j = 0; j < (int)far.r15.size(); j++) far.r15[(size_t)j] = 105.0;   // the structure is far above the pull
+      far.run();
+      CHECK(far.nRec == 0 && far.rb[5].why == NB_RPW_NOT_AT_LEVEL && far.rb[5].state == NB_RP_PULLBACK, "rejection + close far from 105.00: not taken");
+      RpCase lo;
+      bearCase(lo);
+      lo.run(true, 2.0);
+      CHECK(lo.nRec == 0 && lo.rb[5].why == NB_RPW_LOW_RR, "R:R 1.53 < 2.0: not taken");
+      RpCase once;
+      bearCase(once);
+      for(int j = 0; j < 8; j++) once.add(100.6, 101.9, 100.5, (j % 2) ? 100.55 : 101.5);   // chop at the level after the candidate
+      once.run();
+      CHECK(once.nRec == 1, "no second candidate from the same pull (needs a new leg low first)");
+      CHECK(once.rb[12].state == NB_RP_TREND && once.rb[12].why == NB_RPW_NO_CHASE, "after 6 bars: candidate expired - do not chase");
+   }
+   end("R4");
+
+   begin("R5 DIRECTION needs 4H + 1H + 15M together; 1H / 4H missing is said, never guessed");
+   {
+      RpCase a;
+      a.add(100.0, 100.2, 99.8, 100.0, NB_SELL, +1, -1);
+      a.add(100.0, 100.2, 99.8, 100.0, NB_SELL, -1, 0);
+      a.add(100.0, 100.2, 99.8, 100.0, NB_WAIT, -1, -1);
+      a.run();
+      CHECK(a.rb[0].state == NB_RP_NONE && a.rb[0].why == NB_RPW_NOT_ALIGNED, "1H up, 4H down: not aligned");
+      CHECK(a.rb[1].state == NB_RP_NONE && a.rb[1].why == NB_RPW_NO_HTF, "4H unknown: 1H / 4H data missing");
+      CHECK(a.rb[2].state == NB_RP_NONE && a.rb[2].why == NB_RPW_NOT_ALIGNED, "15M boss WAIT: not aligned");
+   }
+   end("R5");
+
+   begin("R6 the forming candle never confirms a candidate");
+   {
+      RpCase k;
+      bearCase(k);
+      k.run(false);                          // bar 5 (the confirming close) still forming
+      CHECK(k.nRec == 0 && k.rb[5].state == NB_RP_PULLBACK && k.rb[5].why == NB_RPW_WAIT_CLOSE, "forming: no candidate, the rejection state is carried");
+      k.run(true);
+      CHECK(k.nRec == 1, "the same bar closed: the candidate appears");
+   }
+   end("R6");
+
+   begin("R7 the BULLISH mirror: pull-down to the 15M higher low + rejection + bullish close = BUY re-entry (with the regime)");
+   {
+      RpCase b;
+      auto m = [&](double o, double h, double l, double c) { b.add(200 - o, 200 - l, 200 - h, 200 - c, NB_BUY, +1, +1, 105.0, 98.0); };
+      m(100.0, 100.2, 99.8, 100.0);
+      m(100.0, 100.0, 98.5, 98.7);
+      m(98.7, 100.0, 98.6, 99.9);
+      m(99.9, 101.9, 99.8, 101.6);
+      m(101.6, 101.95, 101.0, 101.1);
+      m(101.1, 101.3, 100.5, 100.6);
+      b.run();
+      CHECK(b.nRec == 1 && b.rec[0].dir == NB_BUY && b.rb[5].state == NB_RP_CANDIDATE, "BUY PULLBACK / RE-ENTRY CANDIDATE");
+      CHECK(near(b.rec[0].entry, 99.4) && near(b.rec[0].sl, 98.03) && near(b.rec[0].target, 101.5), "entry 99.40, SL 98.03, target 101.50 (mirror of R1)");
+   }
+   end("R7");
+
    //============================================================ v1.07 default view: NY strip + lines
    for(int mi = 0; mi < 2; mi++)
    {
@@ -625,6 +774,146 @@ int main()
          CHECK(!g_fresh && Y("v") == "NO TRADE  -  DATA STALE / MARKET CLOSED", "dead feed: NO TRADE, DATA STALE");
          CHECK(Y("s_st") == "---" && Y("s_px") == "---" && Y("b_st") == "---" && Y("b_px") == "---" && Y("hr") == "---",
                "no state and no price is shown from stale data");
+         OnDeinit(0);
+      }
+      end(title);
+   }
+
+   //============================================================ v1.09: regime pullback on the whole indicator
+   for(int mi = 0; mi < 2; mi++)
+   {
+      Metal m = makeMetal(mi == 1, mi == 1 ? 11 : 7);
+      const char *tag = m.silver ? "XAGUSD" : "XAUUSD";
+      char title[180];
+      std::snprintf(title, sizeof title, "Y7 %s: regime pullback rows = an independent 1H/4H/15M/5M run; stale and missing 1H/4H are said", tag);
+      begin(title);
+      {
+         // independent: our own 1H / 4H bars, mapping (last CLOSED bar at the 5M close) and structure (last CONFIRMED swing)
+         auto refRp = [&](long long now, NbRpBar &last, std::vector<NbRpRec> &recs, int &nRec) {
+            Ref r;
+            reference(m, now, r);
+            long long anchor = (now / 86400) * 86400 - (long long)InpHistoryDays * 86400;
+            auto series = [&](int sec, NbSeries &x) {
+               std::vector<SBar> v;
+               for(const SBar &b : agg(m.m5, sec)) if(b.t >= anchor && b.t + sec <= now) v.push_back(b);
+               NbSeriesResize(x, (int)v.size()); x.sec = sec;
+               for(size_t k = 0; k < v.size(); k++) { x.t[k] = v[k].t; x.o[k] = v[k].o; x.h[k] = v[k].h; x.l[k] = v[k].l; x.c[k] = v[k].c; }
+               NbCalcATR(x.h, x.l, x.c, x.n, InpNrtrAtrPeriod, x.atr);
+               NbCalcNRTR(x.c, x.atr, x.n, InpNrtrMultiplier, x.dir, x.stop, x.ext, x.flip);
+            };
+            NbSeries h1, h4;
+            series(3600, h1);
+            series(14400, h4);
+            std::vector<NbPivot> p60;
+            int np60 = NbFindPivots(h1.h, h1.l, h1.n, InpSwingStrength, p60);
+            int n = r.s5.n;
+            std::vector<int> d60((size_t)n), d240((size_t)n);
+            std::vector<double> a15((size_t)n), r15((size_t)n), s15((size_t)n), r60((size_t)n), s60((size_t)n);
+            for(int i = 0; i < n; i++)
+            {
+               long long close5 = (long long)r.s5.t[(size_t)i] + 300;
+               int k1 = -1, k4 = -1, k15 = -1;
+               for(int k = 0; k < h1.n; k++) if((long long)h1.t[(size_t)k] + 3600 <= close5) k1 = k;
+               for(int k = 0; k < h4.n; k++) if((long long)h4.t[(size_t)k] + 14400 <= close5) k4 = k;
+               for(int k = 0; k < r.s15.n; k++) if((long long)r.s15.t[(size_t)k] + 900 <= close5) k15 = k;
+               d60[(size_t)i] = k1 >= 0 ? h1.dir[(size_t)k1] : 0;
+               d240[(size_t)i] = k4 >= 0 ? h4.dir[(size_t)k4] : 0;
+               a15[(size_t)i] = k15 >= 0 ? r.s15.atr[(size_t)k15] : 0.0;
+               double hi = 0, lo = 0, hi1 = 0, lo1 = 0;
+               for(const NbPivot &p : r.p15) if(p.confirmIdx <= k15) { if(p.kind > 0) hi = p.price; else lo = p.price; }
+               for(int q = 0; q < np60; q++) if(p60[(size_t)q].confirmIdx <= k1) { if(p60[(size_t)q].kind > 0) hi1 = p60[(size_t)q].price; else lo1 = p60[(size_t)q].price; }
+               r15[(size_t)i] = hi; s15[(size_t)i] = lo; r60[(size_t)i] = hi1; s60[(size_t)i] = lo1;
+            }
+            NbRpCfg C;
+            C.startAtr = InpRpStartAtr; C.locAtr = 0.25; C.slBufAtr = InpSlBufferAtr; C.minRR = InpRpMinRR; C.validBars = InpSignalValidBars;
+            C.trackBars = 24; C.tick = m.tick; C.digits = m.digits;
+            std::vector<NbRpBar> rb;
+            int nInv = 0;
+            nRec = NbRunRp(r.s5, d60, d240, a15, r15, s15, r60, s60, true, C, rb, recs, nInv);
+            last = rb.back();
+         };
+         int moments = 0, bad = 0, badTxt = 0, too = 0, buyInBear = 0;
+         std::map<int, int> seen;
+         for(size_t k = 11 * 288; k + 1 < m.m5.size(); k += 6)
+         {
+            long long now = m.m5[k].t + 320;
+            NbRpBar want;
+            std::vector<NbRpRec> recs;
+            int nRec = 0;
+            refRp(now, want, recs, nRec);
+            load(m);
+            SIM.now = now;
+            start();
+            if(!g_fresh) { OnDeinit(0); continue; }
+            moments++;
+            const NbRpBar &got = g_rp.back();
+            if(got.regime != want.regime || got.state != want.state || got.why != want.why || !near(got.level, want.level) ||
+               !near(got.legExt, want.legExt) || g_nRp != nRec)
+               bad++;
+            seen[want.state]++;
+            std::string st = Y("rpst"), ttl = Y("rph");
+            if(want.state == NB_RP_CANDIDATE && want.cand >= 0)
+            {
+               const NbRpRec &c = recs[(size_t)want.cand];
+               if(ttl != (want.regime < 0 ? "SELL PULLBACK / RE-ENTRY CANDIDATE" : "BUY PULLBACK / RE-ENTRY CANDIDATE") ||
+                  !has(st, "entry " + px(c.entry, m.digits) + "  SL " + px(c.sl, m.digits))) badTxt++;
+               if(want.regime < 0 && c.dir != NB_SELL) buyInBear++;
+            }
+            else if(want.state == NB_RP_PULLBACK && !has(st, want.regime < 0 ? "PULL-UP " : "PULL-DOWN ")) badTxt++;
+            else if(want.state == NB_RP_INVALIDATED && !has(ttl, "THESIS INVALIDATED")) badTxt++;
+            else if(want.state == NB_RP_NONE && !has(st, "none - ")) badTxt++;
+            for(auto &kv : SIM.objs)
+               if(kv.first.compare(0, 9, "NBLP_Y_rp") == 0 && cps(kv.second.s[OBJPROP_TEXT]) > 63) too++;
+            OnDeinit(0);
+         }
+         std::printf("    %d moments; states NONE %d TREND %d PULLBACK %d CANDIDATE %d INVALIDATED %d\n", moments, seen[0], seen[1], seen[2], seen[3], seen[4]);
+         CHECK(moments > 150 && seen[NB_RP_TREND] + seen[NB_RP_PULLBACK] > 0, "the fixture has aligned regimes (else this proves nothing)");
+         CHECK(bad == 0, "the indicator's regime, state, why, structure, leg and record = the independent run");
+         CHECK(badTxt == 0, "the strip names the state; a candidate shows its entry / SL");
+         CHECK(buyInBear == 0, "no BUY candidate from a bearish regime");
+         CHECK(too == 0, "within 63 characters");
+         // injected (candidates are rare on random data): the strip and the bridge show exactly the engine's candidate
+         load(m);
+         SIM.now = m.m5[12 * 288 + 50].t + 320;
+         start();
+         if(g_fresh && !g_rp.empty())
+         {
+            int i5 = g_s5.n - 1;
+            NbRpRec rc;
+            rc.idx = i5; rc.dir = NB_SELL; rc.entry = NormalizeDouble(g_s5.c[i5], m.digits); rc.sl = NormalizeDouble(rc.entry + 30 * m.tick, m.digits);
+            rc.target = NormalizeDouble(rc.entry - 60 * m.tick, m.digits); rc.rr = 2.0; rc.status = NB_RPO_OPEN; rc.outIdx = -1;
+            g_rpRec.push_back(rc);
+            g_nRp = (int)g_rpRec.size();
+            NbRpBar &b = g_rp.back();
+            b.regime = NB_SELL; b.state = NB_RP_CANDIDATE; b.why = NB_RPW_CANDIDATE; b.cand = g_nRp - 1; b.level = rc.sl + 10 * m.tick;
+            b.atLoc = true; b.swept = false; b.rejected = true; b.rr = 2.0; b.pullAtr = 1.2;
+            NbNyStripDraw();
+            CHECK(Y("rph") == "SELL PULLBACK / RE-ENTRY CANDIDATE" && Y("rpst") == "entry " + px(rc.entry, m.digits) + "  SL " + px(rc.sl, m.digits) +
+                  "  TP " + px(rc.target, m.digits) + "  R:R 2.0", "injected candidate: title and prices on the strip");
+            CHECK(has(Y("rpc2"), "5 close YES") && has(Y("rpc2"), "6 R:R 2.0"), "the checklist says all six");
+            std::string rj = NbBrRegime();
+            CHECK(has(rj, "\"state\":\"SELL PULLBACK / RE-ENTRY CANDIDATE\"") && has(rj, "\"side\":\"SELL\"") &&
+                  has(rj, "\"entry\":" + px(rc.entry, m.digits)) && has(rj, "\"not_a_signal\":true") && has(rj, "\"regime\":\"BEARISH\""),
+                  "the bridge: direction BEARISH, location = the SELL candidate, not a signal");
+            CHECK(g_final != NB_BUY || g_s5.state[i5] == NB_BUY, "the candidate never changes the main engine");
+            b.state = NB_RP_INVALIDATED; b.why = NB_RPW_INVALIDATED; b.cand = -1;
+            NbNyStripDraw();
+            CHECK(Y("rph") == "BEARISH THESIS INVALIDATED" && has(Y("rpst"), "wait for bullish confirmation") &&
+                  has(NbBrRegime(), "\"state\":\"BEARISH THESIS INVALIDATED\""), "injected invalidation: strip and bridge");
+         }
+         else
+            CHECK(false, "fixture moment is fresh with regime rows");
+         OnDeinit(0);
+         load(m, false);                          // MT5 has no 1H / 4H history
+         SIM.now = m.m5[12 * 288 + 50].t + 320;
+         start();
+         CHECK(!g_htfOk && Y("rpst") == "none - 1H / 4H data missing", "no 1H / 4H: said, never substituted");
+         OnDeinit(0);
+         load(m);
+         SIM.now = m.m5[12 * 288 + 50].t + 320;
+         SIM.tickTime = SIM.now - 3600;
+         start();
+         CHECK(Y("rpst") == "---  (data stale - no watch)" && Y("rpc1") == " ", "stale data: no regime watch shown");
          OnDeinit(0);
       }
       end(title);

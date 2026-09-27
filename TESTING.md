@@ -270,6 +270,26 @@ the session engine tests (two of them by the indicator tests as well):
 | Clock accepted whatever the PC said (no half-hour check) | yes |
 | The forming 5M bar evaluated for a trap | yes |
 
+## Results (2026-09-27, v1.09 metals / v1.08 twins: regime pullback + completed bridge schema)
+
+```
+NY TRAP + NY STRIP + REGIME PULLBACK (metals):  146 passed, 0 failed  (R1-R7 engine by hand, Y7 vs an independent 1H/4H run)
+BRIDGE + WATCH TESTS:  gold 70 / silver 70 / crypto 67 / forex 67 passed  (B8 forming spike, B9 nulls, B10 atomic write)
+BRIDGE PYTHON TESTS:   11 of 11  (same schema in all four files, forming flags, FULL DATA label)
+BRIDGE BLOCK CHECK:    NB_PW and NB_BR identical in all three files
+EXISTING PANELS:       unchanged (gold / crypto / forex)
+MUTATION TESTS:  73 planted, 73 caught in one full run (12 new)
+MetaEditor F7:   metals v1.09 and twins v1.08 NOT YET
+```
+
+**Manual check:**
+1. F7 all three files.
+2. On XAUUSD / XAGUSD M5, the NY strip has two PULLBACK WATCH rows. With MT5's 1H / 4H history
+   loaded they show the regime; without it they say "1H / 4H data missing".
+3. Open the JSON: every candle has `forming` and `confirmed`, `real_volume` is null on a CFD
+   broker, and `mt5_order_action` is `"NONE"`.
+4. The Telegram dry run shows the `FULL DATA:` line.
+
 ## Results (2026-09-27, v1.08 metals: NY clock, market state, data bridge)
 
 ```

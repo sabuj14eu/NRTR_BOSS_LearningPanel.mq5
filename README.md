@@ -35,6 +35,34 @@ conditions are aligned for the educational setup*. It is **not** a profit signal
 
 Personal tool. No SignalMesh, no Telegram, no network, no DLLs, no files.
 
+## v1.09: REGIME PULLBACK WATCH (gold / silver) - shadow only
+
+**Direction and entry location are separate.**
+
+* **DIRECTION** = the regime: 4H NRTR + 1H NRTR + the 15M boss, all bearish (or all bullish).
+* **LOCATION** = 5M. In a bearish regime, a pull-up is a **WATCH, never a BUY**. The NY strip
+  shows two rows:
+
+```
+PULLBACK WATCH - SHADOW ONLY          PULL-UP 1.3 ATR in BEARISH regime - WATCH, NO BUY
+1 pull 1.3 ATR   2 at 15M high 2560.27: YES      3 sweep no   4 reject YES   5 close no   6 R:R --
+```
+
+When all six checks pass, the rows read **SELL PULLBACK / RE-ENTRY CANDIDATE** with entry, SL,
+target (the leg low) and R:R. The six checks are:
+1. the pull distance / ATR;
+2. price is at the 15M / 1H structure, or
+3. it swept it;
+4. a 5M rejection;
+5. a bearish 5M close below the rejection;
+6. an SL beyond the pull high and R:R >= 1.5.
+
+A 5M close above the structure reads **BEARISH THESIS INVALIDATED - wait for bullish
+confirmation**. Everything here is **shadow**: it never changes CLICK / WAIT, never sends
+anything, and is recorded (target / SL / expired, invalidations) so ~2 days of evidence, then n
+>= 20 / ~100, can judge it. It is in the bridge file as `mt5_signal.regime_pullback`
+(`direction` apart from `location`) and in the Telegram message.
+
 ## v1.08: NY clock, MARKET state, data bridge (gold / silver)
 
 * **MARKET chip** at the top of the left box: **SUPER BULLISH / TREND UP / RANGE / CHOP /

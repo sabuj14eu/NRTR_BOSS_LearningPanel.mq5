@@ -1,5 +1,162 @@
 # CHANGELOG
 
+## v1.09 metals / v1.08 twins (2026-09-27): REGIME PULLBACK WATCH (shadow) + the completed bridge schema
+
+### What was asked (Shyam, 2026-09-27)
+
+Keep the JSON -> Python -> Telegram architecture unchanged. Collect about **2 days of real / shadow
+evidence before changing the main strategy**. Do not change the V18 execution signal. Do not
+redesign NRTR, the NY trap, the council or execution. Then:
+
+1. **The pullback logic (metals; crypto: note only).** The current `pullback_watch` (15M boss +
+   5M NRTR flip against it) detects a counter-trend move but not the missed-entry problem. Needed:
+   BEARISH REGIME (1H, 4H, 15M, 5M bearish) -> price pulls up -> WATCH PULLBACK. Monitor the pull
+   distance / ATR, the previous 15M / 1H structure, the sweep / retest, a 5M rejection, a 5M
+   bearish close, a valid SL and the minimum R:R. Only then: `SELL PULLBACK / RE-ENTRY
+   CANDIDATE`. Never turn the pull-up into a BUY. A close above the bearish structure =
+   `BEARISH THESIS INVALIDATED`, then wait for independent bullish confirmation. **Direction and
+   entry location stay separate.**
+2. **Final bridge fixes (all three files):**
+   * JSON = the full source of truth: 18 closed M5 + M15 candles, separate forming candles,
+     `forming` true / false, confirmed, age / seconds left, tick_volume, `real_volume` (null when
+     MT5 gives none), bid, ask and spread (null when missing), fresh / stale, the conclusion,
+     `MT5_ORDER_ACTION = NONE`.
+   * Telegram stays change-only, and may show fewer candles if it labels `FULL DATA: JSON = 18
+     CLOSED + FORMING`.
+   * Tests prove each point.
+
+### Findings first
+
+1. **Confirmed: the existing watch cannot represent the missed entry.** `NbRunPw` fires when the
+   15M boss is in full mode and the 5M NRTR flips against it. It never looks at 1H / 4H, at the
+   structure the pull-up retests, at a rejection, or at R:R. So it cannot tell "a pull-up to sell
+   again" from "the start of a reversal". The metals file did not even load 1H / 4H. It stays as
+   what it is: the counter-trend BUY **hypothesis** recorder (unchanged, identical in all three
+   files).
+2. **The bridge schema was incomplete and not identical.** It had no `real_volume`, no ask /
+   spread, no `forming` flag on closed candles, no top-level fresh flag and no
+   `mt5_order_action`. The metals block differed from crypto by three substitutions.
+3. **The simulator hid two things.** `SYMBOL_ASK` returned the bid when no ask was set, so
+   "missing ask = null" could not be tested. `PERIOD_H1` returned 15M data, which would have made
+   any 1H / 4H test meaningless. Both are fixed: the simulator now has 1H / 4H series (empty = MT5
+   has none), `askMissing`, `spreadPts` and `moveFail`.
+4. A test-harness bug: `start()` ran `OnInit` (which writes the file) before the simulated bid
+   existed, so the first file had `"bid": null`. The indicator was right to write null for a
+   missing bid; the harness now provides a quote first, as a live terminal does.
+
+### The REGIME PULLBACK WATCH (metals, `NB_RP` engine block) - shadow only
+
+**DIRECTION** (the regime) = 4H NRTR + 1H NRTR (the same custom NRTR maths, applied to CLOSED 1H /
+4H bars) + the 15M boss in full mode, all known at the 5M close. Bearish = all three bearish; the
+bullish regime is the mirror. 1H / 4H history missing = "1H / 4H data missing", never
+substituted.
+
+**ENTRY LOCATION** (5M), per closed bar, in a bearish regime:
+
+| State | When |
+|---|---|
+| TREND | the regime is on; the leg low is tracked |
+| PULLBACK WATCH (NO BUY) | close >= leg low + `InpRpStartAtr` (0.5) x 15M ATR, with a confirmed 15M swing high above price (the bearish structure; the 1H swing high is the second level) |
+| checks | 1 pull distance / 15M ATR - 2 at structure (pull high within 0.25 x 15M ATR of the 15M / 1H level) - 3 sweep (wick above a level, close back below) - 4 rejection (the bar making the pull high closes in its lower half) - 5 confirming close (a later bearish 5M candle closes below the rejection low) - 6 SL = pull high + `InpSlBufferAtr` x 5M ATR (outward), target = the leg low, R:R >= `InpRpMinRR` (1.5) |
+| SELL PULLBACK / RE-ENTRY CANDIDATE | 5 and 6, and 2 or 3. Fresh for `InpSignalValidBars` bars, then "candidate expired - do not chase". One candidate per pull (the next needs a new leg low). Recorded: target / SL / expired after 24 bars. |
+| BEARISH THESIS INVALIDATED | a 5M close above the 15M structure. It stays that way until a new leg low; independent bullish confirmation is the main engine's job. Counted. |
+
+The pull-up **never** produces a BUY record or a BUY state. A BUY re-entry exists only in a
+bullish regime (the mirror). The layer never changes CLICK / WAIT, the NY trap, the 5-question
+table, alerts or the V18 signal. The forming bar is never evaluated. **No threshold here has
+evidence yet**: it exists to collect the 2 days (and more) of shadow records.
+
+On the chart: two rows on the NY strip, "PULLBACK WATCH - SHADOW ONLY" plus the state, then the
+six checks (or the shadow record). In the file: `mt5_signal.regime_pullback` with `direction`
+(regime, h4, h1, m15_boss, m5) **separate from** `location` (pull_atr, leg / pull extreme,
+structure_15m / 1h, at_structure, swept, rejection, confirming_close, rr, min_rr), `candidate`,
+`record` and `not_a_signal: true`. With stale data it is `SUPPRESSED - DATA STALE`. The change_key
+includes the regime pullback state, so Telegram posts when a WATCH starts, a candidate appears or
+the thesis is invalidated, and not on every tick of the pull.
+
+### Every change (line numbers in the NEW files)
+
+`NRTR_BOSS_LearningPanel.mq5` (1.08 -> 1.09):
+
+| Lines | What |
+|---|---|
+| 125-137, 139 | Header, `#property version "1.09"`. |
+| 3121-3560 | **`NB_RP` engine**: `NbRpCfg`, `NbRpBar`, `NbRpRec`, `NbRunRp`, `NbRpStats`, `NbRpWhyText`. |
+| 3634-3636 | Inputs: `InpRpShow` (true), `InpRpStartAtr` (0.5), `InpRpMinRR` (1.5). |
+| 3719 on | Globals: the 1H / 4H series, per-5M direction / ATR / structure arrays, records. |
+| 4216 | `NbRpRecompute()` after every recompute. |
+| 6903-7298 | **`NB_BR`**: the completed schema, identical text in all three files (`NbJv` for volumes MT5 reports as 0). |
+| 7444-7670 | `NbRpRecompute` (loads 1H / 4H, NRTR, 1H swings, maps to each 5M bar), `NbRpRows` (the two strip rows), `NbBrRegime` / `NbBrRegimeKey` (the bridge). |
+
+`NRTR_BOSS_Crypto_NYTrap.mq5` / `NRTR_BOSS_Forex_NYTrap.mq5` (1.07 -> 1.08):
+* Lines 115-119 are the header. Lines 5494-5889 are the same `NB_BR` block.
+* Lines 6063-6086 are the adapters `NbBrLabel`, `NbBrSigKind`, `NbBrMarketState` (null),
+  `NbBrRegime` (null) and `NbBrRegimeKey`.
+* **The panels are unchanged** (dump tests).
+
+`bridge/nrtr_telegram_sender.py`: new lines `MT5 ORDER ACTION: NONE`, `DIRECTION: ...`,
+`PULLBACK WATCH (shadow, not a signal): ...` with the six checks, the candidate line, and
+`FULL DATA: JSON = 18 CLOSED + FORMING per timeframe (M5, M15) - this message may show fewer`.
+`NY VERDICT:` replaces a doubled "NY TRAP vs 15M BOSS". Still change-only.
+
+### The JSON schema (append-only; `schema: nrtr_bridge/1`)
+
+New in every file:
+* **Top level:** `ask`, `spread_points`, `spread_price` (all null without an ask), `fresh`,
+  `freshness`, `mt5_order_action: "NONE"`, `read_only: true`, `full_data`.
+* **Every candle:** `real_volume` (null when MT5 reports 0, as CFD brokers do), `forming`,
+  `confirmed`.
+* **Forming candles:** `age_seconds`, and the note `FORMING / PREVIEW ONLY / NEVER A SIGNAL`.
+* **`mt5_signal`:** `market_state` and `regime_pullback` (null in the twins).
+
+Nothing was renamed or removed.
+
+### Tests (`./run_tests.sh`, 2026-09-27) - ALL SUITES PASSED
+
+The main panels of all three files are identical to v1.04 (metals except its two MARKET labels).
+
+* `test_nyt.cpp`: **146 checks** (+R1-R7, +Y7).
+  * **R1** is the textbook bearish re-entry, by hand: entry 100.60, SL 101.97, target 98.50,
+    R:R 1.53, target reached.
+  * **R2** invalidation.
+  * **R3** has 30 bullish candles in a bearish regime, and there is **never a BUY**.
+  * **R4** checks the cases that are not taken (away from structure, R:R below the minimum, one
+    candidate per pull, do-not-chase).
+  * **R5** checks the direction alignment, and that missing 1H / 4H is said.
+  * **R6** checks that the forming bar never confirms.
+  * **R7** is the bullish mirror.
+  * **Y7**: over 240 moments per metal, the regime / state / why / structure / leg / record equal
+    an **independent** 1H / 4H / 15M / 5M run (our own bars, mapping and swings). The candidate
+    and the invalidation are injected into the strip and the bridge. Missing 1H / 4H is said;
+    stale data shows no watch.
+* `test_bridge.cpp`, gold / silver / crypto / forex: **70 / 70 / 67 / 67 checks**.
+  * B1 checks the schema flags.
+  * **B8**: both forming candles spiking 3% leave change_key, final / action / signal, watch,
+    regime pullback and plan unchanged.
+  * **B9**: real volume is copied when the broker has it and null when not; a missing ask gives
+    ask / spread null.
+  * **B10**: a failed rename leaves the previous JSON whole and says WRITE FAILED.
+* `test_bridge_py.py`: **11 of 11**. New: the same schema (key sets) in all four files, forming /
+  confirmed on every candle, real_volume null, and the FULL DATA and ORDER ACTION lines in the
+  message.
+* `check_bridge_blocks.py`: `NB_PW` and `NB_BR` identical in all three files, 9 adapters each.
+* Mutations (`python3 tests/mutate_fq.py`): **73 planted, 73 caught** in one full run, nothing re-run. 12 are new: a pull-up recorded as BUY, 4H ignored, the forming bar evaluated, no invalidation, a candidate without location, min R:R ignored, an unconfirmed 15M swing (look-ahead), stale not suppressed, the forming candle marked confirmed, missing real volume written as 0, spread invented without an ask, a non-atomic write.
+
+### Notes for the crypto file (found, NOT changed - Shyam's decision after the 2-day evidence)
+
+1. **The same pullback gap.** Crypto's only pullback logic is `NbRunPw` (15M boss + 5M flip). It
+   has no 1H / 4H, no structure, no rejection and no R:R, so it cannot flag the missed BTC-type
+   re-entry. The `NB_RP` engine is written to be portable: the crypto file would need 1H / 4H
+   loading and the adapter `NbBrRegime`. Port it only once the metals shadow records say it is
+   worth it.
+2. **The crypto session clock uses today's witness offset for all 10 history days.**
+   `NbNyOpenOf` applies one scalar offset, so sessions from before an EU DST change inside the
+   10-day window are drawn an hour off. This happens twice a year and affects **history only**:
+   the live session is right. The metals clock has the same limit for its history. A per-day
+   broker offset would need the broker's own DST calendar, which MT5 does not expose; guessing it
+   would break "a clock needs two witnesses".
+3. Crypto has no market state (`null`): metals only so far.
+
 ## v1.08 metals (2026-09-27): the NY clock, the data bridge, the market state (crypto / forex unchanged)
 
 ### What was asked (Shyam, 2026-09-27, 17:22 Poland time)

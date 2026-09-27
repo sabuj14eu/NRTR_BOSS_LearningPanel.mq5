@@ -152,6 +152,30 @@ class BridgeFile(unittest.TestCase):
                     states = {d["mt5_signal"]["ny"]["sell"]["state"], d["mt5_signal"]["ny"]["buy"]["state"]}
                     self.assertTrue(states & {"VALID", "TRIGGERED"}, "the NY fixture really has a swept / triggered trap with prices")
 
+    def test_same_schema_in_all_files(self):
+        """One bridge schema for crypto, forex and metals (null where a file has nothing)."""
+        files = [load(f"bridge_{t}.json") for t in TAGS]
+        top = [list(d.keys()) for d in files]
+        self.assertTrue(all(k == top[0] for k in top), f"top-level keys differ: {top}")
+        sig = [list(d["mt5_signal"].keys()) for d in files]
+        self.assertTrue(all(k == sig[0] for k in sig), f"mt5_signal keys differ: {sig}")
+        for part in ("closed", "forming"):
+            ks = [list((d["raw"]["m5"][part][0] if part == "closed" else d["raw"]["m5"][part]).keys()) for d in files]
+            self.assertTrue(all(k == ks[0] for k in ks), f"raw {part} candle keys differ")
+        for d in files:
+            self.assertEqual(d["mt5_order_action"], "NONE")
+            self.assertIs(d["read_only"], True)
+            for tf in ("m5", "m15"):
+                for c in d["raw"][tf]["closed"]:
+                    self.assertEqual((c["forming"], c["confirmed"]), (False, True))
+                    self.assertIsNone(c["real_volume"], "no real volume in the fixture: null, never 0")
+                f = d["raw"][tf]["forming"]
+                self.assertEqual((f["forming"], f["confirmed"]), (True, False))
+                self.assertEqual(f["note"], "FORMING / PREVIEW ONLY / NEVER A SIGNAL")
+                self.assertTrue(0 <= f["age_seconds"] < (300 if tf == "m5" else 900))
+            self.assertIsNotNone(d["bid"])
+            self.assertTrue(d["spread_points"] is None or isinstance(d["spread_points"], int))
+
     def test_stale_file(self):
         for tag in TAGS:
             with self.subTest(tag=tag):
@@ -199,6 +223,8 @@ class Sender(unittest.TestCase):
         body = m[m.find("-- M5"):]
         self.assertEqual(sum(1 for ln in body.splitlines() if " O" in ln and "FORMING" not in ln), 18, "18 closed M5 lines")
         self.assertIn("Nothing was sent to any broker", m)
+        self.assertIn("FULL DATA: JSON = 18 CLOSED + FORMING per timeframe (M5, M15)", m, "a shortened message is labelled")
+        self.assertIn("MT5 ORDER ACTION: NONE", m)
 
     def test_metals_message(self):
         if not os.path.exists(os.path.join(ROOT, "build", "bridge_ny_gold.json")):
@@ -207,13 +233,16 @@ class Sender(unittest.TestCase):
         m = snd.format_message(d, False)
         self.assertLessEqual(len(m), snd.TELEGRAM_LIMIT)
         ny = d["mt5_signal"]["ny"]
-        self.assertIn("NY TRAP vs 15M BOSS: " + ny["verdict"], m)
+        self.assertIn("NY VERDICT: " + ny["verdict"], m)
         self.assertIn(f"NY TRAP SELL: {ny['sell']['state']}", m)
         self.assertIn(f"NY TRAP BUY: {ny['buy']['state']}", m)
         self.assertIn("MARKET: " + d["mt5_signal"]["market_state"]["state"], m)
         self.assertIn("a description, not a signal", m)
-        self.assertLess(m.find("== MT5 SIGNAL"), m.find("NY TRAP vs"), "NY and market state sit in the conclusion part")
-        self.assertLess(m.find("NY TRAP vs"), m.find("== RAW DATA =="))
+        rp = d["mt5_signal"]["regime_pullback"]
+        self.assertIn("PULLBACK WATCH (shadow, not a signal): " + rp["state"], m)
+        self.assertIn("DIRECTION: " + rp["direction"]["regime"], m)
+        self.assertLess(m.find("== MT5 SIGNAL"), m.find("NY VERDICT"), "NY and market state sit in the conclusion part")
+        self.assertLess(m.find("NY VERDICT"), m.find("== RAW DATA =="))
 
     def test_message_fits_telegram(self):
         d = json.loads(json.dumps(self.src))

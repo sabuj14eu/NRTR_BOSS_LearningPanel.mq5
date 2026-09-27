@@ -112,9 +112,14 @@
 //|    against it = a recorded WATCH with ref SL / TP1 and its count. |
 //|    NEVER a signal (counter-trend is the #1 documented loss        |
 //|    driver): no CLICK, no alert, no READY. Evidence decides.       |
+//|  v1.08 bridge schema completed (identical in all three files):   |
+//|    forming / confirmed on every candle, real_volume, ask, spread  |
+//|    (null when MT5 has none), fresh, mt5_order_action = NONE,     |
+//|    market_state / regime_pullback = null here (metals only).     |
+//|    The panel is unchanged.                                       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - learning tool"
-#property version     "1.07"
+#property version     "1.08"
 #property description "Forex NRTR BOSS learning panel: 15M direction, 5M timing, NY-open trap. CUSTOM ATR-NRTR."
 #property description "EURUSD USDJPY GBPUSD and the other pairs of USD EUR GBP JPY CHF AUD NZD CAD ..."
 #property description "Visual decision support only - never places, modifies or closes orders."
@@ -166,7 +171,7 @@
 #define NB_MKT_FOREX  2
 // THE ONLY CODE LINE THAT DIFFERS BETWEEN THE TWO TWIN FILES
 #define NB_MARKET NB_MKT_FOREX
-#define NB_BR_VERSION "1.07"   // written into the data-bridge file
+#define NB_BR_VERSION "1.08"   // written into the data-bridge file
 
 // decision / trade direction
 #define NB_WAIT   0
@@ -3202,6 +3207,11 @@ string NbBrSource();
 string NbBrMarket();
 string NbBrNy();
 string NbBrNyKey();
+string NbBrLabel();
+string NbBrSigKind(int k);
+string NbBrMarketState();
+string NbBrRegime();
+string NbBrRegimeKey();
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -5481,7 +5491,7 @@ void NbFqDrawTable()
 }
 //=== NB_FQT_END ===
 //+------------------------------------------------------------------+
-//=== NB_BR_BEGIN === (v1.07 data bridge - identical text in every file that has it)
+//=== NB_BR_BEGIN === (data bridge v1.07, schema completed v1.09 - IDENTICAL text in all three files: tests/check_bridge_blocks.py)
 //+------------------------------------------------------------------+
 //| DATA BRIDGE (v1.07). Writes ONE JSON file per symbol for a       |
 //| separate sender (bridge/nrtr_telegram_sender.py) to post to      |
@@ -5500,6 +5510,13 @@ void NbFqDrawTable()
 //|                change_key: the sender posts only when it changes.|
 //| Written on every new CLOSED 5M bar and every InpBridgeEverySec   |
 //| seconds (the forming candle). Stale data is written as stale.    |
+//| v1.09 schema (append-only): every candle says forming true/false |
+//| and confirmed; real_volume (null when MT5 gives none); bid, ask, |
+//| spread (null when MT5 gives none - never invented); fresh at the |
+//| top level; mt5_order_action = NONE; market_state and             |
+//| regime_pullback (null where a file has none). Per-file adapters: |
+//| NbBrLabel, NbBrSigKind, NbBrSource, NbBrMarket, NbBrNy,          |
+//| NbBrNyKey, NbBrMarketState, NbBrRegime, NbBrRegimeKey.           |
 //+------------------------------------------------------------------+
 string NbJs(string s)
 {
@@ -5523,6 +5540,14 @@ string NbJs(string s)
 string NbJk(string k)
 {
    return "\"" + k + "\":";
+}
+
+//--- a volume MT5 reports as 0 when it has none (real volume on CFDs): null
+string NbJv(long v)
+{
+   if(v <= 0)
+      return "null";
+   return IntegerToString(v);
 }
 
 //--- a price on the symbol's digits; 0 / negative = unknown = null
@@ -5646,7 +5671,8 @@ bool NbBrTf(ENUM_TIMEFRAMES tf, const NbSeries &s, bool is15, int want, string &
       }
       rc = rc + "{" + NbJk("t") + NbJt(r[k].time) + "," + NbJk("ts") + IntegerToString((long)r[k].time) + "," + NbJk("o") +
            NbJp(r[k].open) + "," + NbJk("h") + NbJp(r[k].high) + "," + NbJk("l") + NbJp(r[k].low) + "," + NbJk("c") + NbJp(r[k].close) +
-           "," + NbJk("tv") + IntegerToString((long)r[k].tick_volume) + "," + NbJk("body") + NbJBody(r[k].open, r[k].close) + "}";
+           "," + NbJk("tv") + IntegerToString((long)r[k].tick_volume) + "," + NbJk("real_volume") + NbJv((long)r[k].real_volume) + "," +
+           NbJk("body") + NbJBody(r[k].open, r[k].close) + "," + NbJk("forming") + "false," + NbJk("confirmed") + "true}";
       int j = NbBrFind(s, r[k].time);
       string one = "{" + NbJk("t") + NbJt(r[k].time);
       if(j < 0)
@@ -5669,9 +5695,10 @@ bool NbBrTf(ENUM_TIMEFRAMES tf, const NbSeries &s, bool is15, int want, string &
       long left = (long)r[last].time + sec - (long)now;
       fm = "{" + NbJk("t") + NbJt(r[last].time) + "," + NbJk("ts") + IntegerToString((long)r[last].time) + "," + NbJk("o") +
            NbJp(r[last].open) + "," + NbJk("h") + NbJp(r[last].high) + "," + NbJk("l") + NbJp(r[last].low) + "," + NbJk("c") +
-           NbJp(r[last].close) + "," + NbJk("tv") + IntegerToString((long)r[last].tick_volume) + "," + NbJk("seconds_left") +
-           IntegerToString(left) + "," + NbJk("preview_body") + NbJBody(r[last].open, r[last].close) + "," + NbJk("confirmed") +
-           "false," + NbJk("note") + NbJs("FORMING - PREVIEW ONLY, NEVER A SIGNAL") + "}";
+           NbJp(r[last].close) + "," + NbJk("tv") + IntegerToString((long)r[last].tick_volume) + "," + NbJk("real_volume") +
+           NbJv((long)r[last].real_volume) + "," + NbJk("age_seconds") + IntegerToString((long)now - (long)r[last].time) + "," +
+           NbJk("seconds_left") + IntegerToString(left) + "," + NbJk("preview_body") + NbJBody(r[last].open, r[last].close) + "," +
+           NbJk("forming") + "true," + NbJk("confirmed") + "false," + NbJk("note") + NbJs("FORMING / PREVIEW ONLY / NEVER A SIGNAL") + "}";
    }
    raw = "{" + NbJk("tf") + (is15 ? "\"M15\"" : "\"M5\"") + "," + NbJk("closed") + "[" + rc + "]," + NbJk("forming") + fm + "}";
    ind = "{" + NbJk("tf") + (is15 ? "\"M15\"" : "\"M5\"") + "," + NbJk("per_closed_candle") + "[" + ic + "]}";
@@ -5729,7 +5756,7 @@ string NbBrBuild(string &key)
    string sig = "null";
    if(live)
    {
-      sig = "{" + NbJk("kind") + ((g_sigs[cur].kind == NB_K_TRAP) ? "\"NY TRAP\"" : "\"FLOW\"") + "," + NbJk("side") +
+      sig = "{" + NbJk("kind") + NbBrSigKind(cur) + "," + NbJk("side") +
             NbJSide(g_sigs[cur].dir) + "," + NbJk("bar") + NbJt(g_s5.t[g_sigs[cur].idx]) + "," + NbJk("entry") + NbJp(g_sigs[cur].entry) +
             "," + NbJk("sl") + NbJp(g_sigs[cur].sl) + "," + NbJk("tp1") + NbJp(g_sigs[cur].tp1) + "," + NbJk("tp2") + NbJp(g_sigs[cur].tp2) +
             "," + NbJk("status") + NbJs(NbSignalStatusText(g_sigs[cur].status)) + "}";
@@ -5773,21 +5800,30 @@ string NbBrBuild(string &key)
    string fk = g_fresh ? "F" : "S";
    key = fk + "|" + IntegerToString(g_final) + "|" + (live ? (IntegerToString(cur) + "." + IntegerToString(g_sigs[cur].status)) : "-") +
          "|" + IntegerToString(g_s15.mode[i15]) + "|" + IntegerToString(g_s5.state[i5]) + "|" + fqKey + "|" +
-         (pOpen ? IntegerToString(g_pw[g_pwCur].idx) : "-") + "|" + NbBrNyKey() + "|" + IntegerToString(g_buyCnt + g_sellCnt);
+         (pOpen ? IntegerToString(g_pw[g_pwCur].idx) : "-") + "|" + NbBrNyKey() + "|" + IntegerToString(g_buyCnt + g_sellCnt) + "|" + NbBrRegimeKey();
    string sgn = "{" + NbJk("note") + NbJs("MT5 CONCLUSION - separate from the raw data. Read only; you decide and you place the order.") +
                 "," + NbJk("fresh") + (g_fresh ? "true" : "false") + "," + NbJk("freshness") + NbJs(NbFreshText(g_freshCode)) + "," +
                 NbJk("boss_15m") + NbJs(NbModeText(g_s15.mode[i15])) + "," + NbJk("timing_5m") + NbJSide(g_s5.state[i5]) + "," +
                 NbJk("timing_reason") + NbJs(NbReasonAt(g_s5.reasons[i5], 0)) + "," + NbJk("final") + NbJSide(g_final) + "," +
                 NbJk("action") + NbJs(action) + "," + NbJk("reason") + NbJs(NbReasonAt(g_finalR, 0)) + "," + NbJk("signal") + sig + "," +
-                NbJk("ny") + NbBrNy() + "," + NbJk("five_question") + fq + "," + NbJk("pullback_watch") + pw + "," + NbJk("positions") + pos +
+                NbJk("ny") + NbBrNy() + "," + NbJk("market_state") + NbBrMarketState() + "," + NbJk("regime_pullback") + NbBrRegime() + "," + NbJk("five_question") + fq + "," + NbJk("pullback_watch") + pw + "," + NbJk("positions") + pos +
                 "," + NbJk("change_key") + NbJs(key) + "}";
 
+   // quotes: what MT5 does not give is null, never invented
+   double bidNow = SymbolInfoDouble(g_sym, SYMBOL_BID);
+   double askNow = SymbolInfoDouble(g_sym, SYMBOL_ASK);
+   bool quotes = (bidNow > 0.0 && askNow > 0.0 && askNow >= bidNow);
+   string spPts = quotes ? IntegerToString(SymbolInfoInteger(g_sym, SYMBOL_SPREAD)) : "null";
+   string spPx = quotes ? NbJd(askNow - bidNow, g_digits) : "null";
    string j = "{\n" + NbJk("schema") + "\"nrtr_bridge/1\"," + NbJk("source") + NbJs(NbBrSource()) + "," + NbJk("version") +
               NbJs(NB_BR_VERSION) + "," + NbJk("market") + NbJs(NbBrMarket()) + "," + NbJk("symbol") + NbJs(g_sym) + "," + NbJk("label") +
-              NbJs(g_label) + "," + NbJk("digits") + IntegerToString(g_digits) + "," + NbJk("tick_size") + NbJd(g_tick, g_digits + 2) + ",\n" +
+              NbJs(NbBrLabel()) + "," + NbJk("digits") + IntegerToString(g_digits) + "," + NbJk("tick_size") + NbJd(g_tick, g_digits + 2) + ",\n" +
               NbJk("written_server") + NbJs(TimeToString(now, TIME_DATE | TIME_SECONDS)) + "," + NbJk("written_ts") +
               IntegerToString((long)now) + "," + NbJk("last_tick") + NbJs(TimeToString((datetime)SymbolInfoInteger(g_sym, SYMBOL_TIME),
-              TIME_DATE | TIME_SECONDS)) + "," + NbJk("bid") + NbJp(SymbolInfoDouble(g_sym, SYMBOL_BID)) + ",\n" +
+              TIME_DATE | TIME_SECONDS)) + "," + NbJk("bid") + NbJp(bidNow) + "," + NbJk("ask") + NbJp(askNow) + "," + NbJk("spread_points") +
+              spPts + "," + NbJk("spread_price") + spPx + ",\n" + NbJk("fresh") + (g_fresh ? "true" : "false") + "," + NbJk("freshness") +
+              NbJs(NbFreshText(g_freshCode)) + "," + NbJk("mt5_order_action") + "\"NONE\"," + NbJk("read_only") + "true," + NbJk("full_data") +
+              NbJs(IntegerToString(InpBridgeCandles) + " CLOSED + FORMING per timeframe (M5, M15)") + ",\n" +
               NbJk("raw") + "{" + NbJk("m5") + raw5 + ",\n" + NbJk("m15") + raw15 + "},\n" +
               NbJk("indicators") + "{" + NbJk("m5") + ind5 + ",\n" + NbJk("m15") + ind15 + "},\n" +
               NbJk("structure") + "{" + NbJk("m5") + s5 + "," + NbJk("m15") + s15 + "},\n" +
@@ -5819,7 +5855,7 @@ void NbBridgeUpdate()
       g_brStatus = "BRIDGE OFF";
       return;
    }
-   if(g_label == "")
+   if(NbBrLabel() == "")
    {
       g_brOk = false;
       g_brStatus = "BRIDGE: symbol not supported";
@@ -6020,4 +6056,31 @@ string NbBrNyKey()
    if(!g_ready || g_s5.n < 1)
       return "-";
    return IntegerToString(g_s5.ph[g_s5.n - 1]);
+}
+
+//--- v1.09 bridge adapters (twins): the same schema as the metals file;
+//    what this file does not compute is null, never invented
+string NbBrLabel()
+{
+   return g_label;
+}
+
+string NbBrSigKind(int k)
+{
+   return (g_sigs[k].kind == NB_K_TRAP) ? "\"NY TRAP\"" : "\"FLOW\"";
+}
+
+string NbBrMarketState()
+{
+   return "null";   // metals only (so far)
+}
+
+string NbBrRegime()
+{
+   return "null";   // metals only (so far) - see CHANGELOG v1.09 "notes for the crypto file"
+}
+
+string NbBrRegimeKey()
+{
+   return "-";
 }

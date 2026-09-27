@@ -61,11 +61,16 @@ static const std::string FILE_JSON = std::string("NRTR_BRIDGE\\") + SYM + ".json
 static const std::string FILE_TMP = std::string("NRTR_BRIDGE\\") + SYM + ".tmp";
 
 struct Market { std::vector<SBar> m5, m15; };
+static bool g_realVol = false;   // v1.09: does this "broker" report real volume? (CFD brokers: no = 0 in MqlRates)
 static std::vector<MqlRates> toRates(const std::vector<SBar> &v)
 {
    std::vector<MqlRates> r;
    long long k = 0;
-   for(const SBar &b : v) r.push_back({b.t, b.o, b.h, b.l, b.c, 100 + (k++ % 37), 0, 0});   // tick volume varies: it must be copied, not assumed
+   for(const SBar &b : v)
+   {
+      r.push_back({b.t, b.o, b.h, b.l, b.c, 100 + (k % 37), 0, g_realVol ? 5000 + (k % 101) : 0});   // volumes vary: copied, not assumed
+      k++;
+   }
    return r;
 }
 static void load(const Market &m, const char *sym = SYM, const char *base = BASE)
@@ -74,6 +79,7 @@ static void load(const Market &m, const char *sym = SYM, const char *base = BASE
    SIM.sym = sym; SIM.base = base; SIM.profit = QUOTE; SIM.digits = DIGITS; SIM.tick = TICK;
    SIM.tickValue = TICK * 100.0; SIM.volMin = 0.01; SIM.gmtOff = 3 * 3600;
    SIM.m5 = toRates(m.m5); SIM.m15 = toRates(m.m15);
+   SIM.m60 = toRates(agg(m.m5, 3600)); SIM.m240 = toRates(agg(m.m5, 14400));
    _Symbol = sym;
    _Period = PERIOD_M5;
 }
@@ -95,7 +101,14 @@ static void calc()
    OnCalculate(v, 0, t, o, h, l, c, tv, vol, sp);
    OnTimer();
 }
-static int start() { int rc = OnInit(); calc(); return rc; }
+static int start()
+{
+   int v = simVisible(PERIOD_M5);   // a live terminal has a quote before the indicator starts
+   if(v > 0 && SIM.bid <= 0.0) SIM.bid = SIM.m5[(size_t)v - 1].close;
+   int rc = OnInit();
+   calc();
+   return rc;
+}
 static std::string W(const std::string &id) { return SIM.objs.count(WPFX + id) ? SIM.objs[WPFX + id].s[OBJPROP_TEXT] : "<missing>"; }
 static int countPrefix(const std::string &p)
 {
@@ -379,6 +392,20 @@ int main()
       CHECK(countSub(j.substr(pRaw, pInd - pRaw), "\"ts\":") == 2 * 18 + 2, "raw: 18 closed + 1 forming per timeframe");
       CHECK(has(j, "\"not_a_signal\":true") && has(j, "\"change_key\":"), "the watch is marked not a signal; a change key is present");
       CHECK(countPrefix(WPFX) >= 4 && has(W("h"), "NOT A SIGNAL"), "the watch rows are drawn and say NOT A SIGNAL");
+      // v1.09 schema
+      CHECK(countSub(j, "\"forming\":false,\"confirmed\":true") == 2 * 18 && countSub(j, "\"forming\":true,\"confirmed\":false") == 2,
+            "every closed candle: forming false / confirmed true; the two forming candles: forming true / confirmed false");
+      CHECK(countSub(j, "FORMING / PREVIEW ONLY / NEVER A SIGNAL") == 2, "both forming candles carry the label");
+      CHECK(has(j, "\"mt5_order_action\":\"NONE\",\"read_only\":true") && has(j, "\"fresh\":true,\"freshness\""), "order action NONE, read only, fresh at the top");
+      CHECK(countSub(j, "\"real_volume\":null") == 2 * 18 + 2, "this broker gives no real volume: null on every candle, never 0");
+      CHECK(has(j, "\"ask\":") && has(j, "\"spread_points\":25,") && has(j, "\"full_data\":\"18 CLOSED + FORMING per timeframe (M5, M15)\""),
+            "ask, spread in points (MT5's), full-data note");
+      CHECK(has(j, "\"market_state\":") && has(j, "\"regime_pullback\":"), "market_state and regime_pullback keys in every file (null where none)");
+#ifdef METALS
+      CHECK(has(j, "\"regime_pullback\":{\"applicable\":true,\"not_a_signal\":true"), "metals: the regime pullback, not a signal");
+#else
+      CHECK(has(j, "\"market_state\":null,\"regime_pullback\":null"), "twins: null, not invented");
+#endif
       bool ascii = true;
       for(unsigned char ch : j) if(ch > 126 || (ch < 32 && ch != '\n')) ascii = false;
       CHECK(ascii, "plain ASCII");
@@ -436,6 +463,87 @@ int main()
    }
    end("B2b");
 
+   begin("B8 the forming candle can never create or change a signal (M5 and M15)");
+   {
+      load(mk);
+      long long now = mk.m5[12 * 288 + 50].t + 137;
+      SIM.now = now;
+      start();
+      std::string a = SIM.files[FILE_JSON];
+      auto part = [](const std::string &j, const std::string &from, const std::string &to) {
+         size_t p = j.find(from), q = j.find(to, p);
+         return (p == std::string::npos || q == std::string::npos) ? std::string("<none>") : j.substr(p, q - p);
+      };
+      std::string keyA = part(a, "\"change_key\":", "}"), sigA = part(a, "\"final\":", "\"ny\":"), pwA = part(a, "\"pullback_watch\":", "\"positions\":");
+      std::string rpA = part(a, "\"regime_pullback\":", "\"pullback_watch\":"), fqA = part(a, "\"five_question\":", "\"pullback_watch\":");
+      OnDeinit(0);
+      // the same moment, but both forming candles explode (a 3% spike each way, a huge body)
+      load(mk);
+      SIM.now = now;
+      for(auto *ser : {&SIM.m5, &SIM.m15})
+         for(auto &b : *ser)
+            if(b.time <= now && b.time + (ser == &SIM.m5 ? 300 : 900) > now) { b.high += PRICE * 0.03; b.low -= PRICE * 0.03; b.close = b.open + PRICE * 0.025; }
+      start();
+      std::string b = SIM.files[FILE_JSON];
+      CHECK(a != b && part(b, "\"forming\":{", "}") != part(a, "\"forming\":{", "}"), "the file shows the new forming candle");
+      CHECK(part(b, "\"change_key\":", "}") == keyA, "change_key unchanged: Telegram stays silent");
+      CHECK(part(b, "\"final\":", "\"ny\":") == sigA, "final, action, reason and signal unchanged");
+      CHECK(part(b, "\"pullback_watch\":", "\"positions\":") == pwA && part(b, "\"regime_pullback\":", "\"pullback_watch\":") == rpA &&
+            part(b, "\"five_question\":", "\"pullback_watch\":") == fqA, "watch, regime pullback and pending plan unchanged");
+      OnDeinit(0);
+   }
+   end("B8");
+
+   begin("B9 what MT5 does not give is null, never invented: real volume, ask, spread");
+   {
+      g_realVol = true;
+      load(mk);
+      g_realVol = false;
+      SIM.now = mk.m5[12 * 288 + 50].t + 137;
+      start();
+      std::string j = SIM.files[FILE_JSON];
+      CHECK(countSub(j, "\"real_volume\":null") == 0 && has(j, "\"real_volume\":50"), "a broker that reports real volume: copied");
+      OnDeinit(0);
+      load(mk);
+      SIM.now = mk.m5[12 * 288 + 50].t + 137;
+      SIM.askMissing = true;
+      start();
+      j = SIM.files[FILE_JSON];
+      CHECK(has(j, "\"ask\":null,\"spread_points\":null,\"spread_price\":null"), "no ask from MT5: ask, spread points and spread price all null");
+      CHECK(!has(j, "\"bid\":null"), "the bid is still there");
+      OnDeinit(0);
+      load(mk);
+      SIM.now = mk.m5[12 * 288 + 50].t + 137;
+      start();
+      SIM.ask = SIM.bid + 30 * TICK;
+      SIM.now += InpBridgeEverySec + 1;
+      OnTimer();
+      j = SIM.files[FILE_JSON];
+      CHECK(has(j, "\"ask\":" + px(SIM.ask)) && has(j, "\"spread_price\":" + px(30 * TICK)), "with an ask: ask and ask - bid");
+      OnDeinit(0);
+   }
+   end("B9");
+
+   begin("B10 the write is atomic: a failed rename leaves the previous file whole, and says so");
+   {
+      load(mk);
+      SIM.now = mk.m5[12 * 288 + 50].t + 137;
+      start();
+      std::string before = SIM.files[FILE_JSON];
+      SIM.moveFail = true;
+      SIM.now = mk.m5[12 * 288 + 51].t + 5;   // a new closed bar: a rewrite is attempted
+      OnTimer();
+      CHECK(SIM.files[FILE_JSON] == before, "the reader still sees the previous, complete file (never half a file)");
+      CHECK(has(W("br"), "WRITE FAILED"), "the strip says WRITE FAILED");
+      SIM.moveFail = false;
+      SIM.now += InpBridgeEverySec + 1;
+      OnTimer();
+      CHECK(SIM.files[FILE_JSON] != before && SIM.files[FILE_JSON].substr(SIM.files[FILE_JSON].size() - 2) == "}\n" && has(W("br"), ".json"),
+            "next write succeeds, whole file, status back");
+      OnDeinit(0);
+   }
+   end("B10");
+
    begin("B3 stale data is written as stale: no action, no signal, no watch");
    {
       load(mk);
@@ -447,6 +555,10 @@ int main()
       CHECK(has(j, "\"signal\":null") && has(j, "\"final\":\"WAIT\"") && has(j, "\"state\":\"NONE\""), "no signal, final WAIT, no open watch");
       CHECK(has(j, "\"change_key\":\"S|"), "the change key says stale (the sender posts the change once)");
       CHECK(W("st") == "---  (data stale - no watch)", "strip: no watch from stale data");
+      CHECK(has(j, "\"fresh\":false,\"freshness\""), "stale at the top level too");
+#ifdef METALS
+      CHECK(has(j, "\"state\":\"SUPPRESSED - DATA STALE\",\"location\":null,\"candidate\":null"), "metals: the regime pullback is suppressed");
+#endif
       dumpFile(std::string("build/bridge_stale_") + TAG + ".json");
       OnDeinit(0);
    }
