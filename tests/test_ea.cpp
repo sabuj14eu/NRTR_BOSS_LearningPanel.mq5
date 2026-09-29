@@ -268,7 +268,7 @@ int main()
       startAt(START);
       run(START + 1, START + 400);
       CHECK(SIM.sent.empty(), "Algo Trading off: nothing sent");
-      CHECK(lbl("state") == "ALGO TRADING OFF - WATCH ONLY", "banner: ALGO TRADING OFF - WATCH ONLY");
+      CHECK(lbl("state").find("MANUAL:") == 0 && lbl("r1").find("ALGO TRADING OFF") != std::string::npos, "banner verdict is prefixed MANUAL: and the reason line says ALGO TRADING OFF");
       CHECK(lbl("bf1").find("ALGO TRADING OFF") != std::string::npos, "footer gate names it");
 
       // manual (foreign magic) order and position on the symbol: counted, shown, never touched
@@ -481,11 +481,16 @@ int main()
       std::printf("    %d arrows drawn (%d expected)\n", arrows, want);
       CHECK(arrows == want, "one arrow per forecast candle in the window + the live one");
       CHECK(SIM.objs.count("NQEA_A_LIVE") == (g_s1.fc[n - 1] != 0 ? 1u : 0u), "live arrow present exactly when there is a forecast");
-      CHECK(g_s1.fc[n - 1] != 0 && SIM.objs["NQEA_A_LIVE"].i[OBJPROP_WIDTH] == 3 && obj("NQEA_A_LIVE_T").find("NEXT") == 0,
-            "the live arrow is wide and carries a NEXT label");
-      int noArrow = 0;
-      for(int i = std::max(1, n - InpArrowBars); i < n; i++) if(g_s1.fc[i - 1] == 0) noArrow++;
-      CHECK(noArrow == 0, "every candle in the window has an arrow");
+      CHECK(g_s1.fc[n - 1] == 0 || (SIM.objs["NQEA_A_LIVE"].i[OBJPROP_WIDTH] == 3 && obj("NQEA_A_LIVE_T").find("NEXT") == 0),
+            "when there is a live arrow it is wide and carries a NEXT label");
+      int weakWithArrow = 0, strongNoArrow = 0;
+      for(int i = std::max(1, n - InpArrowBars); i < n; i++)
+      {
+         bool strong = std::abs(g_s1.fcScore[i - 1]) >= InpForecastMinScore;
+         if(!strong && g_s1.fc[i - 1] != 0) weakWithArrow++;
+         if(strong && g_s1.fc[i - 1] == 0) strongNoArrow++;
+      }
+      CHECK(weakWithArrow == 0 && strongNoArrow == 0, "arrows exactly on the candles with a strong one-sided vote");
       run(START + 401, START + 450);
       int changed = 0, kept = 0;
       for(auto &kv : before)
@@ -602,6 +607,156 @@ int main()
       CHECK(fits, "no panel line longer than 105 characters");
    }
    end("A9");
+
+   begin("A11 the verdict: HOLD / EXIT on a running position, PRICE NEAR with a chart marker, WAIT otherwise");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      size_t i = START + 1;
+      int reg = 0;
+      for(; i <= END; i++) { stepTo(i); reg = g_s5.regime[g_s5.n - 1]; if(reg != NQ_REG_CHOP) break; }
+      CHECK(reg != NQ_REG_CHOP, "found a directional regime");
+      CHECK(lbl("state").find("WAIT") == 0 || lbl("state").find("PRICE NEAR") != std::string::npos || lbl("state").find("SCALP") == 0,
+            "no position: the verdict is WAIT / PRICE NEAR / SCALP");
+      // a position WITH the regime -> HOLD; against it -> EXIT (bot does not close plan positions by default)
+      SIM.ord.clear();
+      SIM.pos.clear();
+      SimPos p;
+      p.ticket = 4242; p.sym = "XAUUSD"; p.type = (reg > 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL; p.vol = 0.05; p.open = SIM.bid;
+      p.sl = 0; p.tp = 0; p.time = SIM.now; p.magic = InpMagic; p.comment = "NQ-Q4242";
+      SIM.pos.push_back(p);
+      OnTimer();
+      CHECK(lbl("state").find("HOLD") == 0 && lbl("state").find("#4242") != std::string::npos, "with the regime: HOLD #ticket");
+      SIM.pos[0].type = (reg > 0) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      OnTimer();
+      CHECK(lbl("state").find("EXIT") == 0 && lbl("state").find("REGIME FLIPPED") != std::string::npos && lbl("state").find("you decide") != std::string::npos,
+            "against the regime: EXIT #ticket - regime flipped (you decide)");
+      size_t before = SIM.sent.size();
+      stepTo(i + 1);
+      bool closed = false;
+      for(size_t k = before; k < SIM.sent.size(); k++) if(SIM.sent[k].action == TRADE_ACTION_DEAL && SIM.sent[k].position == 4242) closed = true;
+      CHECK(!closed, "InpPlanCloseOnFlip=false: the bot leaves the plan position to the human");
+      // a waiting plan order near the price -> PRICE NEAR verdict + NEAR marker on the chart
+      SIM.pos.clear();
+      bool nearShown = false;
+      for(size_t j = i + 2; j <= END; j++)
+      {
+         stepTo(j);
+         NqPlan pl;
+         double atr5 = g_s5.atr[g_s5.n - 1];
+         for(int q = 0; q < NQ_PLAN_SLOTS; q++)
+         {
+            if(!NqSlotPlan(q, pl) || pl.status != NQ_PL_ACTIVE) continue;
+            double ask = SIM.bid + SIM.spreadPts * SIM.point;
+            double d = NqPlanIsStop(pl) ? NqDistAtrStop(pl.dir, pl.entry, SIM.bid, ask, atr5) : NqDistAtr(pl.dir, pl.entry, SIM.bid, ask, atr5);
+            if(d >= 0 && d <= InpNearAtr && SIM.pos.empty())
+            {
+               nearShown = (lbl("state").find("PRICE NEAR") != std::string::npos) && SIM.objs.count("NQEA_A_NEAR") > 0;
+               break;
+            }
+         }
+         if(nearShown) break;
+      }
+      CHECK(nearShown, "a level within 0.5 ATR: verdict PRICE NEAR and a NEAR marker object on the chart");
+   }
+   end("A11");
+
+   begin("A12 journal: every plan event as one JSON line in the file and one POST to SignalMesh, secret never logged, queue on failure");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      g_webUrl = "https://status.example/webhooks/brain/signal";
+      g_webSecret = "s3cr3t-token";
+      run(START + 1, END);
+      std::string fname = "NQ_events_XAUUSD.jsonl";
+      CHECK(SIM.files.count(fname) == 1, "journal file NQ_events_<symbol>.jsonl exists");
+      std::vector<std::string> lines;
+      {
+         std::string body = SIM.files[fname];
+         size_t pos = 0;
+         while(pos < body.size())
+         {
+            size_t e = body.find('\n', pos);
+            if(e == std::string::npos) e = body.size();
+            if(e > pos) lines.push_back(body.substr(pos, e - pos));
+            pos = e + 1;
+         }
+      }
+      std::printf("    %zu journal lines, %zu POSTs\n", lines.size(), SIM.web.size());
+      CHECK(lines.size() > 20, "events were written");
+      int badJson = 0;
+      std::set<std::string> events, ids;
+      int armedFirst = 0, ordered = 0;
+      std::map<std::string, std::vector<std::string>> perId;
+      for(const std::string &l : lines)
+      {
+         if(l.front() != '{' || l.back() != '}') badJson++;
+         for(const char *k : {"\"signal_id\":", "\"system\":\"NQ-EA\"", "\"symbol\":\"XAUUSD\"", "\"event\":", "\"status\":", "\"plan_kind\":",
+                              "\"entry\":", "\"sl\":", "\"tp1\":", "\"fired_at\":", "\"ts\":", "\"account_mode\":\"demo\""})
+            if(l.find(k) == std::string::npos) badJson++;
+         size_t a = l.find("\"event\":\"") + 9, b = l.find('"', a);
+         std::string ev = l.substr(a, b - a);
+         events.insert(ev);
+         size_t c = l.find("\"signal_id\":\"") + 13, d = l.find('"', c);
+         std::string id = l.substr(c, d - c);
+         ids.insert(id);
+         perId[id].push_back(ev);
+         if(l.find("s3cr3t") != std::string::npos) badJson++;   // the secret is a header, never a field
+      }
+      CHECK(badJson == 0, "every line is a JSON object with the platform fields; the secret is never in a payload");
+      for(auto &kv : perId)
+      {
+         if(kv.second.front() == "armed") armedFirst++;
+         // a plan's life: armed, then placed/rejected/near..., then at most one terminal event
+         int terminal = 0;
+         for(const std::string &e : kv.second)
+            if(e == "tp1" || e == "sl" || e == "false_break" || e == "expired" || e == "cancelled" || e == "replaced") terminal++;
+         if(terminal <= 1) ordered++;
+      }
+      CHECK(armedFirst == (int)perId.size(), "the first event of every plan is 'armed'");
+      CHECK(ordered == (int)perId.size(), "at most one terminal event per plan");
+      CHECK(events.count("placed") && (events.count("filled") || events.count("tp1") || events.count("sl")) &&
+            (events.count("expired") || events.count("replaced") || events.count("cancelled")),
+            "placed, filled/closed and cancelled events all occur");
+      // status mapping onto the platform vocabulary, never 'approved' (that word fans out Telegram alerts)
+      int approved = 0, badMap = 0;
+      for(const std::string &l : lines)
+      {
+         if(l.find("\"status\":\"approved\"") != std::string::npos) approved++;
+         bool tp = l.find("\"event\":\"tp1\"") != std::string::npos;
+         bool sl = l.find("\"event\":\"sl\"") != std::string::npos;
+         if(tp && (l.find("\"status\":\"closed\"") == std::string::npos || l.find("\"outcome\":\"win\"") == std::string::npos)) badMap++;
+         if(sl && (l.find("\"status\":\"closed\"") == std::string::npos || l.find("\"outcome\":\"loss\"") == std::string::npos)) badMap++;
+         if(l.find("\"event\":\"armed\"") != std::string::npos && l.find("\"status\":\"pending\"") == std::string::npos) badMap++;
+      }
+      CHECK(approved == 0 && badMap == 0, "armed=pending, tp1=closed/win, sl=closed/loss, never approved");
+      // POSTs: one per line, right URL, secret in the header, never in the Experts log
+      CHECK(SIM.web.size() == lines.size(), "one POST per journal line");
+      bool hdr = !SIM.web.empty();
+      for(auto &w : SIM.web)
+         if(w.url != "https://status.example/webhooks/brain/signal" || w.method != "POST" ||
+            w.headers.find("X-Brain-Secret: s3cr3t-token") == std::string::npos ||
+            w.headers.find("Content-Type: application/json") == std::string::npos || w.body != w.body) hdr = false;
+      CHECK(hdr, "POST to the configured URL with X-Brain-Secret and JSON content type");
+      bool leaked = false;
+      for(const std::string &l : SIM.log) if(l.find("s3cr3t") != std::string::npos) leaked = true;
+      CHECK(!leaked, "the secret never appears in the log");
+      // the platform down: events are queued in order and drained once it answers
+      size_t webBefore = SIM.web.size(), linesBefore = lines.size();
+      SIM.webCode = -1;
+      run(END - 1439, END - 1300);   // re-run a slice of bars: new events appear (statuses differ from the recorded ones)
+      size_t fileLines = 0;
+      for(char ch : SIM.files[fname]) if(ch == '\n') fileLines++;
+      int queued = g_webN;
+      std::printf("    queued while down: %d (file grew by %zu)\n", queued, fileLines - linesBefore);
+      CHECK(fileLines > linesBefore, "the file keeps every event while the platform is down");
+      CHECK(queued > 0 && queued == (int)(fileLines - linesBefore), "every undelivered event is queued");
+      SIM.webCode = 200;
+      for(int k = 0; k < 400 && g_webN > 0; k++) { SIM.now += 5; OnTimer(); }
+      CHECK(g_webN == 0 && SIM.web.size() >= webBefore + (fileLines - linesBefore), "the queue drains in order once the platform answers");
+      (void)webBefore;
+   }
+   end("A12");
 
    begin("A10 silver spec (3 digits, tick value 5): SL/TP on the grid, lots from the real tick value; rejected order is logged, not retried");
    {

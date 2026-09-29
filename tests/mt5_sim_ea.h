@@ -186,6 +186,14 @@ struct SimState
    std::vector<std::string> log;
    std::vector<MqlTradeRequest> sent;   // every request OrderSend received
    bool rejectAll = false;
+   // files (MQL5/Files) and web requests, in memory
+   std::map<std::string, std::string> files;
+   std::map<int, std::string> openFiles;
+   int nextFile = 1;
+   bool fileFail = false;
+   struct WebCall { std::string method, url, headers, body; };
+   std::vector<WebCall> web;
+   int webCode = 200;
 };
 static SimState SIM;
 static std::string _Symbol = "XAUUSD";
@@ -682,6 +690,45 @@ inline void simBarPath(const MqlRates &b)
       }
       i++;
    }
+}
+
+// ---- files: FILE_TXT append only, enough for a JSONL journal ----
+enum { FILE_READ = 1, FILE_WRITE = 2, FILE_TXT = 8, FILE_ANSI = 32, FILE_SHARE_READ = 128, FILE_SHARE_WRITE = 256 };
+const int INVALID_HANDLE = -1;
+inline int FileOpen(const string &name, int flags)
+{
+   (void)flags;
+   if(SIM.fileFail) return INVALID_HANDLE;
+   int h = SIM.nextFile++;
+   SIM.openFiles[h] = name;
+   if(!SIM.files.count(name)) SIM.files[name] = "";
+   return h;
+}
+inline bool FileSeek(int, long, int) { return true; }
+inline unsigned int FileWriteString(int h, const string &text)
+{
+   auto it = SIM.openFiles.find(h);
+   if(it == SIM.openFiles.end()) return 0;
+   SIM.files[it->second] += text;
+   return (unsigned int)text.size();
+}
+inline void FileClose(int h) { SIM.openFiles.erase(h); }
+// ---- web ----
+const unsigned int CP_UTF8 = 65001;
+inline int StringToCharArray(const string &text, std::vector<char> &out, int start = 0, int count = -1, unsigned int = 0)
+{
+   if(count < 0) count = (int)text.size() - start + 1;
+   out.assign(text.begin() + start, text.begin() + std::min((size_t)(start + count), text.size()));
+   if(count > (int)text.size() - start) out.push_back(0);
+   return (int)out.size();
+}
+inline int WebRequest(const string &method, const string &url, const string &headers, int, const std::vector<char> &data,
+                      std::vector<char> &result, string &resultHeaders)
+{
+   SIM.web.push_back({method, url, headers, std::string(data.begin(), data.end())});
+   result.clear();
+   resultHeaders = "";
+   return SIM.webCode;
 }
 
 // ---- chart objects ----

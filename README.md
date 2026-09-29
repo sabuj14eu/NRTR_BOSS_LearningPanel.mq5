@@ -213,36 +213,50 @@ server day:
 | VWAP | from 00:00, typical price x tick volume | yellow polyline + label |
 
 A level is **dotted while its session is still building** and **solid once the session has
-ended** (only then can it be broken). A **BREAKOUT** mark is printed at the first M5 **close**
-above an active high; a **BREAKDOWN** at the first close below an active low; once per level
-per day. The `BREAK` line names the latest one with its time, the `LEVELS` line lists the
-prices (`*` = still building) and whether the price is above or below VWAP. These are for
-reading the day; they do not open trades by themselves.
+ended** (only then can it be broken). Every level label is drawn at the **newest candle**, so
+it stays on screen however far back the line started. **Structure S/R** is drawn too: the two
+nearest confirmed M5 swing highs above the price (`R`, red) and swing lows below it (`S`,
+green), as rays from the swing. A **BREAKOUT CONFIRMED ▲** mark is printed at the first M5
+**close** above an active session level or a confirmed swing high; **BREAKDOWN CONFIRMED ▼**
+at the first close below an active low or a confirmed swing low; once per level. The `BREAK`
+line names the latest session-level break with its time, the `LEVELS` line lists the prices
+(`*` = still building) and whether the price is above or below VWAP. These are for reading the
+day; they do not open trades by themselves. The radar (above) is what forecasts a break
+*before* it happens; the marks confirm it *after* the close.
 
-## 5. Forecast arrow on every candle
+## 5. Bias arrow (strong votes only, judged on a real move)
 
-Every candle carries an arrow with the forecast for the **next** candle, made at this
-candle's close:
+At each candle close the votes are summed: higher-timeframe vote × 2, own NRTR, close vs
+EMA20, the candle's body. An arrow is drawn **only when the vote is strong and one-sided**
+(`|score| ≥ InpForecastMinScore`, default 3); a split vote draws nothing. An arrow claims a
+**move**, not a candle colour: it is a **hit** when the price reaches +0.5 ATR in its direction
+before −0.5 ATR against it within the next 5 candles, a **miss** when the opposite side comes
+first (both in one candle = miss), and **unresolved** (not counted) if neither side is reached.
+On the chart: small green/red arrows on past candles, a big white `NEXT` arrow on the forming
+candle when the vote is strong. On the panel: `NEXT M1 BIAS` and `BIAS HIT RATE` over the
+resolved arrows with the evidence label; 50 % is a coin. The arrow never opens a trade.
 
-```
-score = 2 × higher-TF vote  +  own NRTR direction  +  close vs EMA20  +  this candle's body
-arrow UP if score >= 2, DOWN if <= -2, none if the votes split
-```
+## The verdict (the banner) and the NEAR alert
 
-* On an M1 chart the higher vote is the M5 regime; on M5 it is the M15 context; on M15
-  there is none.
-* When the votes split, the tie is broken by the candle's own NRTR, then its body, then the
-  previous arrow, so **every candle carries an arrow**. The panel says `tie-break` when that
-  happened; a tie-break arrow is weaker than a full-score one and is counted in the same
-  hit rate.
-* **The big white arrow with the `NEXT` label on the forming candle = the live forecast.**
-  It is made at the previous close and does not move until the candle closes.
-* When the candle closes, its arrow turns **green (hit)** or **red (miss)**: hit = the close
-  went the forecast way; an unchanged close counts as a miss.
-* `NEXT M1 FORECAST` and `FORECAST HIT RATE` on the panel show the live arrow and the
-  measured accuracy over the loaded history with its evidence label. **It is a forecast:
-  judge it by the hit rate, never by one arrow.** Its expected accuracy is modest; it does
-  not open trades on its own and it does not override the trigger.
+The banner is one line that says **what to do now**, recomputed every second, in this order:
+
+| Situation | Banner |
+|---|---|
+| a position of this EA is open and the M5 regime is with it (or CHOP) | `HOLD BUY #ticket (QML) - M5 regime intact  P/L ...  SL ...  TP ...` |
+| a position is open and the M5 regime has flipped against it | `EXIT BUY #ticket - M5 REGIME FLIPPED BEARISH  (you decide)` (or `bot closes at the next M1 close` when `InpScalpCloseOnFlip` / `InpPlanCloseOnFlip` applies) |
+| a waiting order or armed plan is within `InpNearAtr` (0.5 ATR) of the price | `● PRICE NEAR  QML BUY LIMIT 60.709  SL ...  TP ...  (0.30 ATR)  order waiting` |
+| the M1 trigger fired on the candle that just closed | `SCALP BUY NOW  entry ... SL ... TP ...` |
+| orders are waiting but far | `WAIT - 2 order(s) waiting, nearest PULLBACK BUY LIMIT ... 4.5 ATR away` |
+| nothing armed | `WAIT - no setup armed (M5 CHOP, ...)` |
+
+With **Algo Trading off** the same verdict is prefixed `MANUAL:` and the reason line says the
+verdict is for your hands (`PLACE IT NOW` when a level is near and no order waits). On the
+board the row's DIST cell turns bright with a `●` when its level is near, a running row reads
+`RUNNING - HOLD` or `RUNNING - EXIT? regime flipped`, and a plan that filled in the record
+while no position exists reads `FILLED (paper - no position)`. On the chart a big white
+`● NEAR ...` label sits at the level the price is approaching. Scalps close on a regime flip by
+default; structure plans do not (`InpPlanCloseOnFlip = false`) because their SL/TP is the
+plan, so the board says EXIT and you decide.
 
 ## The panel: engine table + NY TRAP / PENDING ORDER BOARD
 
@@ -341,10 +355,12 @@ Every order is printed to the **Experts** log, e.g.
 | Macro symbol / macro blocks | empty / on | e.g. USDX; empty = no macro filter |
 | NEAR distance | 0.5 ATR5 | |
 | Asia start / end, London start | 01 / 10 / 10 server hours | London ends at the NY open |
-| Draw levels | on | session highs/lows, previous day, VWAP, break marks |
+| Draw levels | on | session highs/lows, previous day, S/R swings, VWAP, confirmed break marks |
+| Plan close on regime flip | off | scalps always close on a flip; plans say EXIT and wait for you |
+| Journal to file / SignalMesh URL / secret | on / empty / empty | see the journal section |
 | Pullback retrace / min impulse / SL buffer | 50 % / 2 × ATR5 / 0.2 × ATR5 | |
 | Plan TP1 / TP2 | 1R / 2R | |
-| Forecast votes before tie-break / arrows drawn | 1 / last 300 candles | |
+| Bias arrow: votes needed / arrows drawn | 3 / last 300 candles | strong, one-sided votes only |
 | History used | 8 days | |
 | Panel size / corner / X / Y | 1.0 / top-left / 12 / 24 | bottom-left is the other option |
 
@@ -358,6 +374,27 @@ Every order is printed to the **Experts** log, e.g.
   same bars, the same plans (keyed by swing time) and finds its own orders by comment.
 * Trading happens once per closed M1 candle, never intra-bar. An old trigger is never
   re-fired after a restart: only the candle that just closed can open a scalp.
+
+## SignalMesh journal (the performance matrix's raw material)
+
+Every plan event is one JSON line, **appended** to `MQL5/Files/NQ_events_<symbol>.jsonl`
+(`InpJournalToFile`) and, when `InpSignalMeshUrl` is set, POSTed to the platform's
+`/webhooks/brain/signal` with `X-Brain-Secret: <InpSignalMeshSecret>` (allow the URL in
+Tools → Options → Expert Advisors → WebRequest). The secret travels in a header and is never
+printed. A POST the platform does not accept is queued (up to 300) and retried one every five
+seconds, in order; the file is the durable record either way. The journal can never block or
+change trading.
+
+Events: `armed`, `placed` (with ticket and lot), `rejected` (with retcode), `filled`, `tp1`,
+`sl`, `false_break`, `expired`, `cancelled`, `replaced`, `closed_by_ea` (with reason and P/L),
+`scalp_open`; scalp records use the same fields with `plan_kind: SCALP`. Every event carries the
+plan's stable `signal_id` (`NQ:<symbol>:<comment>`), `system: NQ-EA`, symbol, tf, direction,
+entry / SL / TP1 / TP2 / rr, `grade` = plan kind, the platform status (`pending`, `executed`,
+`closed`, `cancelled`, never `approved`), the outcome (`win` / `loss` / `open`), `fired_at` (plan
+creation) and `ts` (event time), plus `plan_status`, `level`, `level2`, `risk`, `account_mode`,
+`magic`, `regime5`, `ctx15`, `risk_pct`, and `radar_score` for radar plans. The contract is
+APPEND-ONLY: fields are added, never renamed or removed. The platform side (`docs/EA_EVENTS.md`
+in the SignalMesh repo) reads these into a per-kind performance matrix.
 
 ## Live account and the on/off switch
 

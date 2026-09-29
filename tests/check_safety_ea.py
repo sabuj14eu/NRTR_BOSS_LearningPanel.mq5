@@ -8,11 +8,11 @@ import sys
 SRC = sys.argv[1] if len(sys.argv) > 1 else "NRTR_QML_MetalScalper.mq5"
 
 FORBIDDEN = [
-    # network / messaging / external control
-    "WebRequest", "SocketCreate", "SocketConnect", "SocketSend", "SocketRead", "SendNotification", "SendMail",
+    # network / messaging / external control (the one WebRequest lives in NqPost, checked below)
+    "SocketCreate", "SocketConnect", "SocketSend", "SocketRead", "SendNotification", "SendMail",
     "SendFTP", "TerminalClose", "ChartSetSymbolPeriod", "ShellExecute", "#import", "#include", "#resource",
-    # files / global state / other charts
-    "FileOpen", "FileWrite", "FileCopy", "FileDelete", "GlobalVariableSet", "ChartOpen", "ChartClose",
+    # files / global state / other charts (the one journal writer lives in NqJournalWrite, checked below)
+    "FileCopy", "FileDelete", "FileMove", "FileWriteArray", "FileWriteStruct", "GlobalVariableSet", "ChartOpen", "ChartClose",
     # the only order path is OrderSend (synchronous, result checked); no async, no CTrade
     "OrderSendAsync", "CTrade", "CPositionInfo", "COrderInfo", "OrderCloseBy", "PositionCloseBy",
     # close-by is never used (one slot per asset, positions close by their own deal)
@@ -59,6 +59,23 @@ def main() -> int:
         rhs = m.group(1).strip()
         if re.fullmatch(r"[0-9.]+", rhs):
             fails.append(f"literal lot size: req.volume = {rhs}")
+    # the network and the file system each have exactly one door
+    for tok, fn in (("WebRequest", "NqPost"), ("FileOpen", "NqJournalWrite"), ("FileWriteString", "NqJournalWrite")):
+        sites = [m.start() for m in re.finditer(r"\b" + tok + r"\s*\(", code)]
+        if len(sites) != 1:
+            fails.append(f"{tok} must appear exactly once (found {len(sites)})")
+        else:
+            fn_start = code.rfind("\n" + ("bool " if fn == "NqPost" else "void ") + fn + "(", 0, sites[0])
+            if fn_start < 0:
+                fails.append(f"{tok} must be called inside {fn}")
+    # the URL and the secret are inputs, and the secret never reaches a Print
+    if not re.search(r"input\s+string\s+InpSignalMeshUrl\b", code):
+        fails.append("InpSignalMeshUrl must be a string input")
+    if not re.search(r"input\s+string\s+InpSignalMeshSecret\b", code):
+        fails.append("InpSignalMeshSecret must be a string input")
+    for m in re.finditer(r"Print\s*\((?:[^;]|\n)*?\);", code):
+        if "InpSignalMeshSecret" in m.group(0) or "g_webSecret" in m.group(0):
+            fails.append("the SignalMesh secret is printed")
     # the real-account switch must be an input, never a hard-coded constant
     if not re.search(r"input\s+bool\s+InpAllowRealAccount\s*=\s*(true|false)", code):
         fails.append("InpAllowRealAccount must be a bool input")
@@ -70,7 +87,7 @@ def main() -> int:
             print("  FAIL", f)
         print(f"EA SAFETY SCAN: FAIL ({len(fails)} problems)")
         return 1
-    print(f"  checked {len(FORBIDDEN)} forbidden identifiers, {len(REQUIRED)} required guards, one OrderSend site")
+    print(f"  checked {len(FORBIDDEN)} forbidden identifiers, {len(REQUIRED)} required guards, one OrderSend / one WebRequest / one file writer, secret never printed")
     print("EA SAFETY SCAN: PASS - no network/file/DLL calls; single audited order path; Algo Trading switch honoured")
     return 0
 

@@ -143,12 +143,12 @@ int main()
    }
    end("E01");
 
-   begin("E02 forecast: votes, threshold, hit judged only at the next close");
+   begin("E02 bias arrow: strong votes only, judged on a +0.5 / -0.5 ATR move within 5 candles");
    {
       NqSeries s;
       std::vector<SBar> v;
       double c = 100.0;
-      for(int i = 0; i < 40; i++)
+      for(int i = 0; i < 60; i++)
       {
          double nc = c + ((i % 7 == 3) ? -0.3 : 0.2);
          v.push_back({T0 + i * 60, c, std::max(c, nc) + 0.05, std::min(c, nc) - 0.05, nc});
@@ -160,32 +160,40 @@ int main()
       NqCalcNRTR(s.c, s.atr, s.n, P.nrtrMult, s.dir, s.stop, s.ext, s.flip);
       ArrayResize(s.hi, s.n);
       for(int i = 0; i < s.n; i++) s.hi[i] = 1;
-      NqForecastSeries(s, 2);
-      bool okScore = true, okHit = true, lastUnresolved = (s.fcHit[s.n - 1] == 0);
+      NqForecastSeries(s, 3);
+      bool okScore = true, okHit = true, anyArrow = false, anyNone = false;
       for(int i = 0; i < s.n; i++)
       {
          int exp = 2 * s.hi[i] + s.dir[i] + NqSign(s.c[i], s.o[i]) + (s.emaF[i] > 0 ? NqSign(s.c[i], s.emaF[i]) : 0);
          if(s.fcScore[i] != exp) okScore = false;
-         int want = (exp >= 2) ? 1 : ((exp <= -2) ? -1 : 0);
-         if(want == 0) want = (s.dir[i] != 0) ? s.dir[i] : NqSign(s.c[i], s.o[i]);
-         if(want == 0 && i > 0) want = s.fc[i - 1];
+         int want = (exp >= 3) ? 1 : ((exp <= -3) ? -1 : 0);
          if(s.fc[i] != want) okScore = false;
-         if(i + 1 < s.n && s.fc[i] != 0)
+         if(s.fc[i] != 0) anyArrow = true; else anyNone = true;
+         // re-judge: first side reached within 5 candles decides; both in one candle = miss
+         int wantHit = 0;
+         if(s.fc[i] != 0 && s.atr[i] > 0)
          {
-            int want = (NqSign(s.c[i + 1], s.c[i]) == s.fc[i]) ? 1 : -1;
-            if(s.fcHit[i] != want) okHit = false;
+            double up = s.c[i] + 0.5 * s.atr[i], dn = s.c[i] - 0.5 * s.atr[i];
+            for(int j = i + 1; j < s.n && j <= i + 5; j++)
+            {
+               bool hu = s.h[j] >= up, hd = s.l[j] <= dn;
+               if(!hu && !hd) continue;
+               if(hu && hd) wantHit = -1;
+               else wantHit = (s.fc[i] > 0) ? (hu ? 1 : -1) : (hd ? 1 : -1);
+               break;
+            }
          }
-         if(i + 1 < s.n && s.fc[i] == 0 && s.fcHit[i] != 0) okHit = false;
+         if(s.fcHit[i] != wantHit) okHit = false;
       }
-      CHECK(okScore, "score = 2*higher + nrtr + body + ema side; below the threshold the tie-break gives every candle an arrow");
-      bool everyCandle = true;
-      for(int i = 15; i < s.n; i++) if(s.fc[i] == 0) everyCandle = false;
-      CHECK(everyCandle, "an arrow on every candle once the NRTR is ready");
-      CHECK(okHit, "hit = next close vs this close, equal = miss");
-      CHECK(lastUnresolved, "the newest forecast is unresolved until the next candle closes");
+      CHECK(okScore, "score = 2*higher + nrtr + body + ema side; arrow only when |score| >= 3, no tie-break");
+      CHECK(anyArrow && anyNone, "some candles carry an arrow, split votes carry none");
+      CHECK(okHit, "hit = +0.5 ATR reached before -0.5 ATR within 5 candles; unresolved = 0");
+      CHECK(s.fcHit[s.n - 1] == 0, "the newest arrow is unresolved");
       int n = 0, h = 0;
       NqForecastStats(s, 0, n, h);
-      CHECK(n > 0 && h <= n, "stats count resolved arrows only");
+      int resolved = 0;
+      for(int i = 0; i < s.n; i++) if(s.fc[i] != 0 && s.fcHit[i] != 0) resolved++;
+      CHECK(n == resolved && h <= n, "stats count resolved arrows only");
       CHECK(NqEvidenceText(5) == "n<20 = luck" && NqEvidenceText(50) == "n<100 = early" && NqEvidenceText(150) == "n>=100", "evidence label");
    }
    end("E02");
@@ -443,7 +451,10 @@ int main()
             if(r.s1.state[i] != full.s1.state[i] || r.s1.reasons[i] != full.s1.reasons[i] || r.s1.fc[i] != full.s1.fc[i] ||
                r.s1.hi[i] != full.s1.hi[i])
             { ok = false; break; }
-            if(i + 1 < n1 && r.s1.fcHit[i] != full.s1.fcHit[i]) { ok = false; break; }
+            // an arrow's verdict may RESOLVE (0 -> hit/miss) as candles arrive within its
+            // 5-candle horizon, never change once resolved; beyond the horizon it is final
+            if(r.s1.fcHit[i] != 0 && r.s1.fcHit[i] != full.s1.fcHit[i]) { ok = false; break; }
+            if(i + NQ_FC_HORIZON < n1 && r.s1.fcHit[i] != full.s1.fcHit[i]) { ok = false; break; }
          }
          for(int i = 0; i < r.s5.n; i++)
             if(r.s5.regime[i] != full.s5.regime[i] || r.s5.st[i] != full.s5.st[i] || r.s5.fc[i] != full.s5.fc[i]) { ok = false; break; }

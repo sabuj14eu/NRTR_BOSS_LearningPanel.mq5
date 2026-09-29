@@ -112,6 +112,7 @@
 #define NQ_PLAN_PB  2
 #define NQ_PLAN_NY  3   // NY trap reversal
 #define NQ_PLAN_RADAR 4 // impulse radar: STOP order beyond the nearest level
+#define NQ_PLAN_SCALP 5 // journal only: the M1 scalp record
 
 // NY trap state machine (per session, per side)
 #define NQ_NY_NONE      0   // outside the session
@@ -193,6 +194,7 @@ struct NqPlan
    int      dir;          // NQ_BUY (buy limit) / NQ_SELL (sell limit)
    int      idx;          // M5 bar at whose close the plan was created
    datetime keyTime;      // time of the key swing (unique id, survives restarts)
+   datetime madeAt;       // close time of the bar that created the plan
    double   entry;
    double   sl;
    double   tp1;
@@ -589,13 +591,16 @@ int NqRegimeDecision(int dir5, int st, int &reasons)
    return NQ_REG_CHOP;
 }
 
-//--- FORECAST for the next candle, made at the close of candle i.
-//    Votes: higher-TF (x2), own NRTR, close vs fast EMA, last body.
-//    fc = +1 UP / -1 DOWN. When the votes split (|score| < minScore) the
-//    tie is broken by the own NRTR, then the candle body, then the previous
-//    forecast, so EVERY candle carries an arrow (fc = 0 only before any
-//    information exists). fcHit[i] is judged at close i+1 against
-//    close[i+1] vs close[i]. An equal close counts as a miss.
+//--- BIAS ARROW. At the close of candle i the votes are summed: higher-TF
+//    (x2), own NRTR, close vs fast EMA, last body. An arrow is drawn ONLY
+//    when |score| >= minScore (a strong, one-sided vote); a split vote is
+//    no arrow. The arrow claims a MOVE, not a candle colour: it is a HIT
+//    when the price reaches +0.5 ATR in its direction before -0.5 ATR
+//    against it within the next 5 candles, a MISS when the opposite side
+//    is reached first (both in one candle = miss), and UNRESOLVED (not
+//    counted) if neither side is reached in 5 candles.
+#define NQ_FC_HORIZON 5
+
 void NqForecastSeries(NqSeries &s, int minScore)
 {
    int n = s.n;
@@ -610,32 +615,46 @@ void NqForecastSeries(NqSeries &s, int minScore)
       if(s.emaF[i] > 0.0)
          score += NqSign(s.c[i], s.emaF[i]);
       s.fcScore[i] = score;
+      s.fc[i] = 0;
       if(score >= minScore)
          s.fc[i] = 1;
       else if(score <= -minScore)
          s.fc[i] = -1;
-      else if(s.dir[i] != 0)
-         s.fc[i] = s.dir[i];
-      else if(NqSign(s.c[i], s.o[i]) != 0)
-         s.fc[i] = NqSign(s.c[i], s.o[i]);
-      else
-         s.fc[i] = (i > 0) ? s.fc[i - 1] : 0;
       s.fcHit[i] = 0;
-      if(i > 0 && s.fc[i - 1] != 0)
-         s.fcHit[i - 1] = (NqSign(s.c[i], s.c[i - 1]) == s.fc[i - 1]) ? 1 : -1;
+   }
+   for(int i = 0; i < n; i++)
+   {
+      if(s.fc[i] == 0 || s.atr[i] <= 0.0)
+         continue;
+      double up = s.c[i] + 0.5 * s.atr[i];
+      double dn = s.c[i] - 0.5 * s.atr[i];
+      for(int j = i + 1; j < n && j <= i + NQ_FC_HORIZON; j++)
+      {
+         bool hitUp = (s.h[j] >= up);
+         bool hitDn = (s.l[j] <= dn);
+         if(!hitUp && !hitDn)
+            continue;
+         if(hitUp && hitDn)
+            s.fcHit[i] = -1;
+         else if(s.fc[i] > 0)
+            s.fcHit[i] = hitUp ? 1 : -1;
+         else
+            s.fcHit[i] = hitDn ? 1 : -1;
+         break;
+      }
    }
 }
 
-//--- forecast hit rate over resolved arrows from bar `from` on
+//--- arrow hit rate over RESOLVED arrows from bar `from` on
 void NqForecastStats(const NqSeries &s, int from, int &count, int &hits)
 {
    count = 0;
    hits = 0;
    if(from < 0)
       from = 0;
-   for(int i = from; i + 1 < s.n; i++)
+   for(int i = from; i < s.n; i++)
    {
-      if(s.fc[i] == 0)
+      if(s.fc[i] == 0 || s.fcHit[i] == 0)
          continue;
       count++;
       if(s.fcHit[i] > 0)
@@ -1027,6 +1046,7 @@ void NqFindPlans(const NqSeries &s, const NqPivot &piv[], int np, const NqParams
                   pl.tf = s.sec;
                   pl.dir = NQ_BUY;
                   pl.idx = t;
+                  pl.madeAt = s.t[t] + s.sec;
                   pl.keyTime = s.t[piv[q].idx];
                   pl.entry = entry;
                   pl.sl = sl;
@@ -1084,6 +1104,7 @@ void NqFindPlans(const NqSeries &s, const NqPivot &piv[], int np, const NqParams
                   pl.tf = s.sec;
                   pl.dir = NQ_SELL;
                   pl.idx = t;
+                  pl.madeAt = s.t[t] + s.sec;
                   pl.keyTime = s.t[piv[q].idx];
                   pl.entry = entry;
                   pl.sl = sl;
@@ -1117,6 +1138,7 @@ void NqFindPlans(const NqSeries &s, const NqPivot &piv[], int np, const NqParams
                pl.tf = s.sec;
                pl.dir = NQ_SELL;
                pl.idx = t;
+               pl.madeAt = s.t[t] + s.sec;
                pl.keyTime = cb.headTime;
                pl.entry = entry;
                pl.sl = sl;
@@ -1150,6 +1172,7 @@ void NqFindPlans(const NqSeries &s, const NqPivot &piv[], int np, const NqParams
                pl.tf = s.sec;
                pl.dir = NQ_BUY;
                pl.idx = t;
+               pl.madeAt = s.t[t] + s.sec;
                pl.keyTime = cu.headTime;
                pl.entry = entry;
                pl.sl = sl;
@@ -1320,6 +1343,7 @@ void NqRunNyTrap(const NqSeries &s, const int &conf[], const NqParams &P, int ra
                pl.tf = s.sec;
                pl.dir = NQ_SELL;
                pl.idx = t;
+               pl.madeAt = s.t[t] + s.sec;
                pl.keyTime = s.t[t];
                pl.entry = entry;
                pl.sl = sl;
@@ -1363,6 +1387,7 @@ void NqRunNyTrap(const NqSeries &s, const int &conf[], const NqParams &P, int ra
                pl.tf = s.sec;
                pl.dir = NQ_BUY;
                pl.idx = t;
+               pl.madeAt = s.t[t] + s.sec;
                pl.keyTime = s.t[t];
                pl.entry = entry;
                pl.sl = sl;
@@ -1884,6 +1909,7 @@ void NqRunRadar(const NqSeries &s, const NqPivot &piv[], int np, const double &r
          pl.tf = s.sec;
          pl.dir = dir;
          pl.idx = t;
+         pl.madeAt = s.t[t] + s.sec;
          pl.keyTime = s.t[t];
          pl.entry = entry;
          pl.sl = sl;
@@ -1905,6 +1931,57 @@ void NqRunRadar(const NqSeries &s, const NqPivot &piv[], int np, const double &r
       }
       up.plan = curUp;
       dn.plan = curDn;
+   }
+}
+
+//--- STRUCTURE S/R BREAKS on confirmed M5 swings: the first CLOSE above a
+//    confirmed swing high (resistance) after its confirmation is a
+//    BREAKOUT CONFIRMED; the first close below a confirmed swing low
+//    (support) is a BREAKDOWN CONFIRMED. One event per swing.
+struct NqSwingBreak
+{
+   int      pivIdx;       // index into the pivot array
+   int      idx;          // bar of the confirming close
+   int      dir;          // +1 breakout, -1 breakdown
+   double   level;
+   double   close;
+};
+
+void NqRunSwingBreaks(const NqSeries &s, const NqPivot &piv[], int np, int maxEvents, NqSwingBreak &out[], int &nOut)
+{
+   ArrayResize(out, 0);
+   nOut = 0;
+   for(int p = 0; p < np; p++)
+   {
+      for(int t = piv[p].confirmIdx + 1; t < s.n; t++)
+      {
+         bool cross = (piv[p].kind > 0) ? (s.c[t] > piv[p].price && s.c[t - 1] <= piv[p].price)
+                                        : (s.c[t] < piv[p].price && s.c[t - 1] >= piv[p].price);
+         if(!cross)
+            continue;
+         ArrayResize(out, nOut + 1, 64);
+         out[nOut].pivIdx = p;
+         out[nOut].idx = t;
+         out[nOut].dir = (piv[p].kind > 0) ? 1 : -1;
+         out[nOut].level = piv[p].price;
+         out[nOut].close = s.c[t];
+         nOut++;
+         break;
+      }
+   }
+   // keep the newest maxEvents
+   if(maxEvents > 0 && nOut > maxEvents)
+   {
+      for(int i = 0; i < nOut - 1; i++)
+         for(int j = i + 1; j < nOut; j++)
+            if(out[j].idx > out[i].idx)
+            {
+               NqSwingBreak tmp = out[i];
+               out[i] = out[j];
+               out[j] = tmp;
+            }
+      ArrayResize(out, maxEvents);
+      nOut = maxEvents;
    }
 }
 
@@ -2350,6 +2427,8 @@ string NqPlanKindText(int kind)
       return "NY TRAP";
    if(kind == NQ_PLAN_RADAR)
       return "RADAR";
+   if(kind == NQ_PLAN_SCALP)
+      return "SCALP";
    return "PULLBACK";
 }
 
@@ -2405,6 +2484,7 @@ input double         InpScalpTpAtr       = 1.0;         // Scalp TP = x ATR(M5) 
 input int            InpScalpValidBars   = 2;           // Trigger actionable for (M1 bars)
 input int            InpScalpTimeStop    = 45;          // Scalp time stop (M1 bars)
 input bool           InpScalpCloseOnFlip = true;        // Close a scalp when the M5 regime turns against it
+input bool           InpPlanCloseOnFlip  = false;       // Also close QML/pullback/NY/swing positions when the M5 regime turns (else the board says EXIT and you decide)
 input group "Pending order plans (QML + pullback limit orders)"
 input bool           InpPendingAuto      = true;        // Place / cancel the plan's limit orders automatically
 input double         InpQmlSlBufAtr      = 0.2;         // QML SL buffer beyond the head (x ATR5)
@@ -2447,8 +2527,12 @@ input int            InpSessionEndHour   = 24;          // Session end (server h
 input bool           InpAllowRealAccount = true;        // Trade on a REAL account (false = demo only). The MT5 Algo Trading button is the on/off switch
 input int            InpMagic            = 180915;      // Magic number
 input int            InpSlippagePoints   = 20;          // Max slippage (points)
+input group "SignalMesh journal (every plan event, append-only)"
+input bool           InpJournalToFile    = true;        // Append every event to MQL5/Files/NQ_events_<symbol>.jsonl
+input string         InpSignalMeshUrl    = "";          // POST events here (e.g. https://status.signalmesh.dev/webhooks/brain/signal); empty = off
+input string         InpSignalMeshSecret = "";          // X-Brain-Secret for that URL (never printed). Allow the URL in Tools > Options > Expert Advisors
 input group "Forecast arrows"
-input int            InpForecastMinScore = 1;           // Votes needed before the tie-break (1-5)
+input int            InpForecastMinScore = 3;           // Votes needed for a bias arrow (1-5); 3 = strong, one-sided
 input int            InpArrowBars        = 300;         // Arrows drawn on the last N candles
 input group "Display"
 input double         InpPanelScale       = 1.0;         // Panel size (0.7 - 1.6)
@@ -2502,6 +2586,28 @@ NqRadar  g_rdUp;
 NqRadar  g_rdDn;
 int      g_macroDir;   // M15 NRTR direction of the macro symbol (0 = none / not available)
 bool     g_newBar5;
+NqSwingBreak g_sbrk[];
+int      g_nSbrk;
+// journal: last known status per plan (by signal id) so only CHANGES are emitted
+#define NQ_EA_VERSION "1.5.0"
+string   g_jrCmt[];
+int      g_jrStatus[];
+int      g_jrN;
+bool     g_jrSeeded;
+string   g_webUrl;      // from the input; a test may point it elsewhere
+string   g_webSecret;
+string   g_webQ[];      // events the platform has not accepted yet
+int      g_webN;
+datetime g_webLast;
+int      g_webFails;
+bool     g_jrFileWarned;
+datetime g_labelT;     // where level labels are drawn: the latest closed M1 bar (always on screen)
+// the verdict for the human, recomputed every second
+string   g_verdict;
+color    g_verdictClr;
+string   g_nearText;   // "" when nothing is near
+double   g_nearPrice;
+int      g_nearDir;
 double   g_vwap1[];    // day VWAP per closed M1 bar
 string   g_rejCmt;     // last rejected pending order (comment) and its retcode
 int      g_rejCode;
@@ -2556,6 +2662,23 @@ void   NqDrawChart();
 void   NqDrawPanel();
 bool   NqPlanIsStop(const NqPlan &p);
 long   NqPlanOrderType(const NqPlan &p);
+void   NqVerdict();
+void   NqDrawNear();
+bool   NqSlotPlan(int q, NqPlan &out);
+bool   NqKindEnabled(const NqPlan &p);
+ulong  NqFindPlanOrder(const NqPlan &p);
+string NqKindOfComment(string cmt);
+double NqDistAtrStop(int dir, double entry, double bid, double ask, double atr);
+void   NqText(string name, datetime t, double price, string txt, color clr, int size, int anchor, string tip);
+bool   NqIsOurs(long magic, string sym);
+string NqMoney(double v);
+void   NqEmitBroker(string comment, string event, string extra);
+void   NqWebDrain();
+void   NqJournalScan();
+bool   NqPlanByComment(string cmt, NqPlan &out);
+string NqJsonS(string key, string val);
+string NqJsonN(string key, double val, int digits);
+string NqJsonI(string key, long val);
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -2639,6 +2762,25 @@ int OnInit()
    NqRadarReset(g_rdDn);
    g_macroDir = 0;
    g_newBar5 = false;
+   ArrayResize(g_sbrk, 0);
+   g_nSbrk = 0;
+   ArrayResize(g_jrCmt, 0);
+   ArrayResize(g_jrStatus, 0);
+   g_jrN = 0;
+   g_jrSeeded = false;
+   g_webUrl = InpSignalMeshUrl;
+   g_webSecret = InpSignalMeshSecret;
+   ArrayResize(g_webQ, 0);
+   g_webN = 0;
+   g_webLast = 0;
+   g_webFails = 0;
+   g_jrFileWarned = false;
+   g_labelT = 0;
+   g_verdict = "";
+   g_verdictClr = 0;
+   g_nearText = "";
+   g_nearPrice = 0.0;
+   g_nearDir = 0;
    ArrayResize(g_vwap1, 0);
    g_rejCmt = "";
    g_rejCode = 0;
@@ -2721,8 +2863,158 @@ void NqUpdate()
    NqEvaluate();
    if(g_newBar1 && g_ready)
       NqTrade();
+   NqVerdict();
+   NqDrawNear();
+   NqWebDrain();
    NqDrawPanel();
    ChartRedraw(0);
+}
+
+//+------------------------------------------------------------------+
+//| THE VERDICT: one line that says what to do now, for a human.      |
+//| Priority: a running position (HOLD / EXIT) > a level within NEAR  |
+//| distance > a scalp trigger > waiting orders > nothing.            |
+//+------------------------------------------------------------------+
+void NqVerdict()
+{
+   color cUp = NQ_RGB(46, 204, 113);
+   color cDn = NQ_RGB(231, 76, 60);
+   color cWait = NQ_RGB(241, 196, 15);
+   color cBlock = NQ_RGB(230, 126, 34);
+   g_nearText = "";
+   g_nearPrice = 0.0;
+   g_nearDir = 0;
+   bool ok = (g_metal != NQ_METAL_NONE && g_ready && g_s5.n > 0 && g_s1.n > 0);
+   if(g_metal == NQ_METAL_NONE)
+   {
+      g_verdict = NqSymDot() + "  GOLD / SILVER ONLY";
+      g_verdictClr = cWait;
+      return;
+   }
+   if(!ok)
+   {
+      g_verdict = NqSymDot() + "  WAIT - " + NqReasonAt(g_finalR, 0);
+      g_verdictClr = cWait;
+      return;
+   }
+   if(!g_fresh)
+   {
+      g_verdict = NqSymDot() + "  DATA STALE / MARKET CLOSED";
+      g_verdictClr = cWait;
+      return;
+   }
+   bool manual = ((g_gate & NQ_K_TRADE_DISABLED) != 0);
+   string pre = manual ? "MANUAL:  " : "";
+   int reg = g_s5.regime[g_s5.n - 1];
+   double bid = SymbolInfoDouble(g_sym, SYMBOL_BID);
+   double ask = SymbolInfoDouble(g_sym, SYMBOL_ASK);
+   double atr5 = g_s5.atr[g_s5.n - 1];
+
+   // 1) a running position of this EA
+   int total = PositionsTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0)
+         continue;
+      if(!NqIsOurs(PositionGetInteger(POSITION_MAGIC), PositionGetString(POSITION_SYMBOL)))
+         continue;
+      int pdir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+      string side = (pdir > 0) ? "BUY" : "SELL";
+      double pr = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      string kind = NqKindOfComment(PositionGetString(POSITION_COMMENT));
+      string pl = "  P/L " + NqMoney(pr) + "  SL " + NqPx(PositionGetDouble(POSITION_SL)) + "  TP " + NqPx(PositionGetDouble(POSITION_TP));
+      if(reg != NQ_REG_CHOP && reg != pdir)
+      {
+         bool botWill = (kind == "scalp") ? InpScalpCloseOnFlip : (kind == "radar" ? false : InpPlanCloseOnFlip);
+         g_verdict = pre + "EXIT " + side + " #" + IntegerToString((long)tk) + " - M5 REGIME FLIPPED " + NqRegimeText(reg) +
+                     (botWill && !manual ? "  (bot closes at the next M1 close)" : "  (you decide)") + pl;
+         g_verdictClr = cBlock;
+      }
+      else
+      {
+         g_verdict = pre + "HOLD " + side + " #" + IntegerToString((long)tk) + " (" + kind + ") - M5 " +
+                     ((reg == NQ_REG_CHOP) ? "CHOP, no flip" : "regime intact") + pl;
+         g_verdictClr = (pdir > 0) ? cUp : cDn;
+      }
+      return;
+   }
+
+   // 2) the nearest waiting order / armed plan
+   double bestD = 1e9;
+   string bestT = "";
+   double bestP = 0.0;
+   int bestDir = 0;
+   bool bestPlaced = false;
+   for(int q = 0; q < NQ_PLAN_SLOTS; q++)
+   {
+      NqPlan pl;
+      if(!NqSlotPlan(q, pl) || pl.status != NQ_PL_ACTIVE || !NqKindEnabled(pl))
+         continue;
+      double d = NqPlanIsStop(pl) ? NqDistAtrStop(pl.dir, pl.entry, bid, ask, atr5) : NqDistAtr(pl.dir, pl.entry, bid, ask, atr5);
+      if(atr5 <= 0.0 || d < 0.0)
+         continue;
+      if(d < bestD)
+      {
+         bestD = d;
+         string side = (pl.dir > 0) ? (NqPlanIsStop(pl) ? "BUY STOP " : "BUY LIMIT ") : (NqPlanIsStop(pl) ? "SELL STOP " : "SELL LIMIT ");
+         bestT = NqPlanKindText(pl.kind) + ((pl.tf == 900) ? " M15 " : " ") + side + NqPx(pl.entry) + "  SL " + NqPx(pl.sl) +
+                 "  TP " + NqPx(InpPlanUseTp2 ? pl.tp2 : pl.tp1);
+         bestP = pl.entry;
+         bestDir = pl.dir;
+         bestPlaced = (NqFindPlanOrder(pl) != 0);
+      }
+   }
+   if(bestT != "" && bestD <= InpNearAtr)
+   {
+      g_nearText = bestT;
+      g_nearPrice = bestP;
+      g_nearDir = bestDir;
+      g_verdict = pre + NqSymDot() + " PRICE NEAR  " + bestT + "  (" + DoubleToString(bestD, 2) + " ATR)" +
+                  (bestPlaced ? "  order waiting" : (manual ? "  PLACE IT NOW" : "  not placed yet"));
+      g_verdictClr = clrWhite;
+      return;
+   }
+
+   // 3) scalp trigger on the just-closed candle
+   int st1 = g_s1.state[g_s1.n - 1];
+   if(st1 == NQ_BUY || st1 == NQ_SELL)
+   {
+      int cur = g_s1.sigOf[g_s1.n - 1];
+      string side = (st1 > 0) ? "BUY" : "SELL";
+      g_verdict = pre + "SCALP " + side + " NOW  entry " + NqPx(g_sigs[cur].entry) + "  SL " + NqPx(g_sigs[cur].sl) + "  TP " +
+                  NqPx(g_sigs[cur].tp) + ((g_gate != 0 && !manual) ? ("  (" + NqGateAt(g_gate, 0) + ")") : (InpScalpAuto && !manual ? "  (auto)" : ""));
+      g_verdictClr = (st1 > 0) ? cUp : cDn;
+      return;
+   }
+
+   // 4) waiting
+   if(bestT != "")
+   {
+      g_verdict = pre + "WAIT  -  " + IntegerToString(g_pendCount) + " order(s) waiting, nearest " + bestT + "  " +
+                  DoubleToString(bestD, 1) + " ATR away";
+      g_verdictClr = cWait;
+   }
+   else
+   {
+      g_verdict = pre + "WAIT  -  no setup armed  (M5 " + NqRegimeText(reg) + ", " + NqReasonAt(g_s1.reasons[g_s1.n - 1], 0) + ")";
+      g_verdictClr = cWait;
+   }
+}
+
+// a big, bright marker at the level the price is approaching (every second)
+void NqDrawNear()
+{
+   string nm = NQ_PFX_A + "NEAR";
+   if(g_nearText == "" || !InpDrawChart || !g_ready)
+   {
+      if(ObjectFind(0, nm) >= 0)
+         ObjectsDeleteAll(0, nm);
+      return;
+   }
+   datetime t = g_s1.t[g_s1.n - 1] + g_s1.sec;
+   NqText(nm, t, g_nearPrice, NqSymDot() + " NEAR  " + g_nearText, clrWhite, 11, (g_nearDir > 0) ? ANCHOR_LEFT_UPPER : ANCHOR_LEFT_LOWER,
+          "the price is within " + DoubleToString(InpNearAtr, 2) + " ATR of this level");
 }
 
 void NqReadSpec()
@@ -2864,6 +3156,8 @@ void NqRecompute()
                InpNyStartHour * 60 + InpNyStartMin, InpRangeStartHour * 60, InpNyStartHour * 60 + InpNyStartMin,
                InpNyEndHour * 60 + InpNyEndMin, g_levels, g_brk, g_nBrk, g_resAbove, g_supBelow);
    NqCalcDayVwap(g_s1, g_vwap1);
+   NqRunSwingBreaks(g_s5, g_piv5, g_s5.np, 24, g_sbrk, g_nSbrk);
+   g_labelT = g_s1.t[g_s1.n - 1];
    // impulse radar: pre-break pressure per direction, STOP-order plans
    NqRunRadar(g_s5, g_piv5, g_s5.np, g_resAbove, g_supBelow, g_P, InpRadarBufAtr, g_radar, g_nRadar, g_rdUp, g_rdDn);
    NqReadMacro();
@@ -2885,6 +3179,7 @@ void NqRecompute()
    NqFindPlans(g_s15r, g_piv15r, g_s15r.np, Pswing, g_swing, g_nSwing);
    g_ready = true;
    NqDrawChart();
+   NqJournalScan();
 }
 
 //+------------------------------------------------------------------+
@@ -3155,7 +3450,13 @@ bool NqSend(MqlTradeRequest &req, string why)
          g_rejCmt = req.comment;
          g_rejCode = (int)res.retcode;
       }
+      NqEmitBroker(req.comment, done ? "placed" : "rejected",
+                   NqJsonI("ticket", (long)res.order) + "," + NqJsonI("retcode", (long)res.retcode) + "," + NqJsonN("lot", req.volume, 2));
    }
+   else if(req.action == TRADE_ACTION_DEAL && req.position == 0)
+      NqEmitBroker(req.comment, done ? "scalp_open" : "rejected",
+                   NqJsonI("ticket", (long)res.order) + "," + NqJsonI("retcode", (long)res.retcode) + "," + NqJsonN("lot", req.volume, 2) +
+                   "," + NqJsonN("price", req.price, g_digits));
    return done;
 }
 
@@ -3211,6 +3512,8 @@ bool NqClosePosition(ulong ticket, string why)
 {
    if(!PositionSelectByTicket(ticket))
       return false;
+   string posCmt = PositionGetString(POSITION_COMMENT);
+   double posPr = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    MqlTradeRequest req;
    ZeroMemory(req);
    req.action = TRADE_ACTION_DEAL;
@@ -3224,7 +3527,10 @@ bool NqClosePosition(ulong ticket, string why)
    req.deviation = InpSlippagePoints;
    req.type_filling = (ENUM_ORDER_TYPE_FILLING)g_fill;
    req.comment = "NQ close";
-   return NqSend(req, why);
+   bool done = NqSend(req, why);
+   if(done)
+      NqEmitBroker(posCmt, "closed_by_ea", NqJsonI("ticket", (long)ticket) + "," + NqJsonS("reason", why) + "," + NqJsonN("pl", posPr, 2));
+   return done;
 }
 
 // per-order checks that need the live price: stops level, lot, margin
@@ -3360,6 +3666,317 @@ long NqPlanOrderType(const NqPlan &p)
 }
 
 //+------------------------------------------------------------------+
+//| JOURNAL. Every plan event is one JSON line: appended to a local  |
+//| file and POSTed to SignalMesh's /webhooks/brain/signal, which     |
+//| stores the raw payload verbatim (append-only) under a stable      |
+//| signal_id and keeps a status timeline. The secret is a header     |
+//| and is never printed. A failed POST is queued and retried; the    |
+//| file is the durable record either way. Nothing here can block    |
+//| or alter trading: a journal failure is a Print, never a return.  |
+//+------------------------------------------------------------------+
+string NqJsonEsc(string v)
+{
+   string out = v;
+   StringReplace(out, "\\", "\\\\");
+   StringReplace(out, "\"", "\\\"");
+   return out;
+}
+
+string NqJsonS(string key, string val)
+{
+   return "\"" + key + "\":\"" + NqJsonEsc(val) + "\"";
+}
+
+string NqJsonN(string key, double val, int digits)
+{
+   return "\"" + key + "\":" + DoubleToString(val, digits);
+}
+
+string NqJsonI(string key, long val)
+{
+   return "\"" + key + "\":" + IntegerToString(val);
+}
+
+// the platform's status vocabulary (pending / executed / closed / cancelled),
+// never "approved": that word fans out Telegram alerts to every user
+string NqPlatformStatus(int st)
+{
+   switch(st)
+   {
+      case NQ_PL_ACTIVE:   return "pending";
+      case NQ_PL_FILLED:   return "executed";
+      case NQ_PL_TP1:      return "closed";
+      case NQ_PL_SL:       return "closed";
+      case NQ_PL_FALSE:    return "closed";
+      case NQ_PL_EXPIRED:  return "cancelled";
+      case NQ_PL_INVALID:  return "cancelled";
+      case NQ_PL_REPLACED: return "cancelled";
+   }
+   return "pending";
+}
+
+string NqPlatformOutcome(int st)
+{
+   switch(st)
+   {
+      case NQ_PL_FILLED: return "open";
+      case NQ_PL_TP1:    return "win";
+      case NQ_PL_SL:     return "loss";
+      case NQ_PL_FALSE:  return "loss";
+   }
+   return "";
+}
+
+string NqEventOfStatus(int st)
+{
+   switch(st)
+   {
+      case NQ_PL_ACTIVE:   return "armed";
+      case NQ_PL_FILLED:   return "filled";
+      case NQ_PL_TP1:      return "tp1";
+      case NQ_PL_SL:       return "sl";
+      case NQ_PL_FALSE:    return "false_break";
+      case NQ_PL_EXPIRED:  return "expired";
+      case NQ_PL_INVALID:  return "cancelled";
+      case NQ_PL_REPLACED: return "replaced";
+   }
+   return "status";
+}
+
+string NqSignalIdOf(const NqPlan &p)
+{
+   string cmt = (p.kind == NQ_PLAN_SCALP) ? (NQ_CMT_SCALP + IntegerToString((long)p.keyTime)) : NqPlanComment(p);
+   return "NQ:" + g_sym + ":" + cmt;
+}
+
+string NqEventJson(const NqPlan &p, string event, string extra)
+{
+   datetime now = TimeTradeServer();
+   int n5 = g_s5.n;
+   int n15 = g_s15.n;
+   string j = "{" + NqJsonS("signal_id", NqSignalIdOf(p)) + "," + NqJsonS("system", "NQ-EA") + "," +
+              NqJsonS("ea_version", NQ_EA_VERSION) + "," + NqJsonS("symbol", g_sym) + "," +
+              NqJsonS("tf", (p.kind == NQ_PLAN_SCALP) ? "1" : ((p.tf == 900) ? "15" : "5")) + "," +
+              NqJsonS("direction", (p.dir > 0) ? "BUY" : "SELL") + "," +
+              NqJsonN("entry", p.entry, g_digits) + "," + NqJsonN("sl", p.sl, g_digits) + "," +
+              NqJsonN("tp1", p.tp1, g_digits) + "," + NqJsonN("tp2", p.tp2, g_digits) + "," +
+              NqJsonN("rr", (p.risk > 0.0) ? MathAbs(p.tp1 - p.entry) / p.risk : 0.0, 2) + "," +
+              NqJsonS("grade", NqPlanKindText(p.kind)) + "," +
+              NqJsonS("status", NqPlatformStatus(p.status)) + "," +
+              NqJsonS("outcome", NqPlatformOutcome(p.status)) + "," +
+              NqJsonI("fired_at", (long)p.madeAt) + "," + NqJsonI("ts", (long)now) + "," +
+              NqJsonS("event", event) + "," + NqJsonS("plan_kind", NqPlanKindText(p.kind)) + "," +
+              NqJsonS("plan_status", (p.kind == NQ_PLAN_SCALP) ? NqSignalStatusText(p.status) : NqPlanStatusText(p.status)) + "," +
+              NqJsonI("plan_tf_sec", p.tf) + "," + NqJsonN("level", p.lvlA, g_digits) + "," +
+              NqJsonN("level2", p.lvlB, g_digits) + "," + NqJsonN("risk", p.risk, g_digits) + "," +
+              NqJsonS("account_mode", g_isDemo ? "demo" : "real") + "," + NqJsonI("magic", InpMagic) + "," +
+              NqJsonS("regime5", (n5 > 0) ? NqRegimeText(g_s5.regime[n5 - 1]) : "") + "," +
+              NqJsonS("ctx15", (n15 > 0) ? NqContextText(g_s15.ctx[n15 - 1]) : "") + "," +
+              NqJsonN("risk_pct", InpRiskPct, 2);
+   if(p.kind == NQ_PLAN_RADAR)
+      j = j + "," + NqJsonI("radar_score", (p.dir > 0) ? g_rdUp.score : g_rdDn.score);
+   if(extra != "")
+      j = j + "," + extra;
+   return j + "}";
+}
+
+void NqJournalWrite(string line)
+{
+   if(!InpJournalToFile)
+      return;
+   string name = "NQ_events_" + g_sym + ".jsonl";
+   int h = FileOpen(name, FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE)
+   {
+      if(!g_jrFileWarned)
+         Print("NQ journal: cannot open MQL5/Files/" + name);
+      g_jrFileWarned = true;
+      return;
+   }
+   FileSeek(h, 0, SEEK_END);
+   FileWriteString(h, line + "\n");
+   FileClose(h);
+}
+
+// one POST; true when the platform answered 2xx. The secret travels in a
+// header and never reaches the log.
+bool NqPost(string json)
+{
+   if(g_webUrl == "")
+      return true;
+   char data[];
+   StringToCharArray(json, data, 0, StringLen(json), CP_UTF8);
+   char result[];
+   string resultHeaders = "";
+   string headers = "Content-Type: application/json\r\n";
+   if(g_webSecret != "")
+      headers = headers + "X-Brain-Secret: " + g_webSecret + "\r\n";
+   int code = WebRequest("POST", g_webUrl, headers, 3000, data, result, resultHeaders);
+   return (code >= 200 && code < 300);
+}
+
+void NqEmit(const NqPlan &p, string event, string extra)
+{
+   string json = NqEventJson(p, event, extra);
+   NqJournalWrite(json);
+   if(g_webUrl == "")
+   {
+      Print("NQ journal: " + event + " " + NqSignalIdOf(p));
+      return;
+   }
+   bool okPost = (g_webN == 0) && NqPost(json);   // keep order: never jump the queue
+   if(okPost)
+   {
+      g_webFails = 0;
+      Print("NQ journal: " + event + " " + NqSignalIdOf(p) + " -> platform ok");
+      return;
+   }
+   if(g_webN < 300)
+   {
+      ArrayResize(g_webQ, g_webN + 1, 32);
+      g_webQ[g_webN] = json;
+      g_webN++;
+   }
+   g_webFails++;
+   Print("NQ journal: " + event + " " + NqSignalIdOf(p) + " -> queued (" + IntegerToString(g_webN) + " waiting)");
+}
+
+// retry the oldest queued event, at most one every 5 seconds
+void NqWebDrain()
+{
+   if(g_webN == 0 || g_webUrl == "")
+      return;
+   datetime now = TimeTradeServer();
+   if(now - g_webLast < 5)
+      return;
+   g_webLast = now;
+   if(!NqPost(g_webQ[0]))
+   {
+      g_webFails++;
+      return;
+   }
+   for(int i = 1; i < g_webN; i++)
+      g_webQ[i - 1] = g_webQ[i];
+   g_webN--;
+   ArrayResize(g_webQ, g_webN);
+   g_webFails = 0;
+}
+
+int NqJrFind(string cmt)
+{
+   for(int i = 0; i < g_jrN; i++)
+      if(g_jrCmt[i] == cmt)
+         return i;
+   return -1;
+}
+
+void NqJrSet(string cmt, int status)
+{
+   int i = NqJrFind(cmt);
+   if(i < 0)
+   {
+      ArrayResize(g_jrCmt, g_jrN + 1, 64);
+      ArrayResize(g_jrStatus, g_jrN + 1, 64);
+      g_jrCmt[g_jrN] = cmt;
+      g_jrStatus[g_jrN] = status;
+      g_jrN++;
+   }
+   else
+      g_jrStatus[i] = status;
+}
+
+// one plan: emit "armed" when first seen (after seeding), the status event on change
+void NqJrPlan(const NqPlan &p)
+{
+   string cmt = NqSignalIdOf(p);
+   int i = NqJrFind(cmt);
+   if(i < 0)
+   {
+      NqJrSet(cmt, p.status);
+      if(g_jrSeeded)
+      {
+         NqEmit(p, "armed", "");
+         if(p.status != NQ_PL_ACTIVE)
+            NqEmit(p, NqEventOfStatus(p.status), "");
+      }
+      return;
+   }
+   if(g_jrStatus[i] != p.status)
+   {
+      g_jrStatus[i] = p.status;
+      NqEmit(p, NqEventOfStatus(p.status), "");
+   }
+}
+
+void NqScalpAsPlan(int k, NqPlan &p)
+{
+   p.kind = NQ_PLAN_SCALP;
+   p.tf = g_s1.sec;
+   p.dir = g_sigs[k].dir;
+   p.idx = g_sigs[k].idx;
+   p.keyTime = g_s1.t[g_sigs[k].idx];
+   p.madeAt = g_s1.t[g_sigs[k].idx] + g_s1.sec;
+   p.entry = g_sigs[k].entry;
+   p.sl = g_sigs[k].sl;
+   p.tp1 = g_sigs[k].tp;
+   p.tp2 = g_sigs[k].tp;
+   p.risk = g_sigs[k].risk;
+   p.lvlA = 0.0;
+   p.lvlB = 0.0;
+   int st = NQ_PL_ACTIVE;
+   if(g_sigs[k].status == NQ_SIG_TP)
+      st = NQ_PL_TP1;
+   else if(g_sigs[k].status == NQ_SIG_SL)
+      st = NQ_PL_SL;
+   else if(g_sigs[k].status == NQ_SIG_TIMEOUT)
+      st = NQ_PL_EXPIRED;
+   p.status = st;
+   p.statusIdx = g_sigs[k].statusIdx;
+   p.fillIdx = g_sigs[k].idx;
+}
+
+// after every recompute: walk every plan record and the scalp records
+void NqJournalScan()
+{
+   for(int k = 0; k < g_nPlans; k++)
+      NqJrPlan(g_plans[k]);
+   for(int k = 0; k < g_nNy; k++)
+      NqJrPlan(g_ny[k]);
+   for(int k = 0; k < g_nSwing; k++)
+      NqJrPlan(g_swing[k]);
+   for(int k = 0; k < g_nRadar; k++)
+      NqJrPlan(g_radar[k]);
+   for(int k = 0; k < g_nSig; k++)
+   {
+      NqPlan p;
+      NqScalpAsPlan(k, p);
+      NqJrPlan(p);
+   }
+   g_jrSeeded = true;
+}
+
+// broker-side events (placed / rejected / opened / closed by the EA)
+void NqEmitBroker(string comment, string event, string extra)
+{
+   NqPlan p;
+   if(StringFind(comment, NQ_CMT_SCALP) == 0)
+   {
+      long t = StringToInteger(StringSubstr(comment, StringLen(NQ_CMT_SCALP)));
+      int found = -1;
+      for(int k = g_nSig - 1; k >= 0; k--)
+         if((long)g_s1.t[g_sigs[k].idx] == t) { found = k; break; }
+      if(found < 0)
+         return;
+      NqScalpAsPlan(found, p);
+      if(event == "scalp_open")
+         p.status = NQ_PL_FILLED;
+   }
+   else if(!NqPlanByComment(comment, p))
+      return;
+   NqEmit(p, event, extra);
+}
+
+//+------------------------------------------------------------------+
 //| TRADE: called once per CLOSED M1 candle.                         |
 //+------------------------------------------------------------------+
 void NqTrade()
@@ -3400,7 +4017,12 @@ void NqTrade()
          continue;
       }
       if(StringFind(cmt, NQ_CMT_SCALP) != 0)
+      {
+         // structure plans: optional close when the M5 regime turns against them
+         if(InpPlanCloseOnFlip && g_newBar5 && g_fresh && NqIsPlanComment(cmt) && reg5 != NQ_REG_CHOP && reg5 != pdir)
+            NqClosePosition(tk, "M5 regime turned " + NqRegimeText(reg5) + " against the " + NqKindOfComment(cmt) + " position");
          continue;
+      }
       long ageBars = ((long)now - (long)opened) / g_s1.sec;
       if(ageBars >= InpScalpTimeStop)
          NqClosePosition(tk, "scalp time stop: " + IntegerToString(ageBars) + " M1 bars without TP/SL");
@@ -3641,7 +4263,9 @@ void NqLevel(string name, datetime t, double price, color clr, int style, string
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
    ObjectSetInteger(0, name, OBJPROP_BACK, true);
-   NqText(name + "_T", t, price, txt + " " + DoubleToString(price, g_digits), clr, 8, ANCHOR_LEFT_LOWER, txt);
+   // the label sits at the newest bar, so it is on screen however far the line started
+   datetime lt = (g_labelT > 0 && g_labelT > t) ? g_labelT : t;
+   NqText(name + "_T", lt, price, txt + " " + DoubleToString(price, g_digits), clr, 8, ANCHOR_LEFT_LOWER, txt);
 }
 
 // which engine series matches the chart timeframe (0 none, 1/5/15)
@@ -3675,9 +4299,9 @@ void NqDrawArrowsFor(const NqSeries &s, string tfName)
       color clr = (hit > 0) ? cHit : ((hit < 0) ? cMiss : cOpen);
       double off = (s.atr[i] > 0.0) ? s.atr[i] * 0.25 : 0.0;
       double price = (f > 0) ? s.l[i] - off : s.h[i] + off;
-      string tip = tfName + " forecast made " + TimeToString(s.t[i - 1] + s.sec, TIME_MINUTES) + ": " +
+      string tip = tfName + " bias at " + TimeToString(s.t[i - 1] + s.sec, TIME_MINUTES) + ": " +
                    ((f > 0) ? "UP" : "DOWN") + " (score " + IntegerToString(s.fcScore[i - 1]) + ") - " +
-                   ((hit > 0) ? "HIT" : ((hit < 0) ? "MISS" : "open"));
+                   ((hit > 0) ? "HIT +0.5 ATR" : ((hit < 0) ? "MISS -0.5 ATR" : "unresolved"));
       NqArrow(NQ_PFX_A + IntegerToString((long)s.t[i]), s.t[i], price, f, clr, 1, tip);
    }
    // the live arrow: forecast for the candle that is forming right now,
@@ -3807,11 +4431,57 @@ void NqDrawChart()
          NqLevel(NQ_PFX_C + "LV_" + IntegerToString(lv), from, g_levels.px[lv], cLv[lv],
                  g_levels.act[lv] ? STYLE_SOLID : STYLE_DOT, tag);
       }
+      // structure S/R: the two nearest confirmed swing highs above and lows below the
+      // price, as rays from the swing, and every confirmed break of a swing
+      double cNow = g_s5.c[n5 - 1];
+      for(int side = 0; side < 2; side++)
+      {
+         int kind = (side == 0) ? 1 : -1;
+         double bound = 0.0;
+         for(int pass = 0; pass < 2; pass++)
+         {
+            double best = 0.0;
+            int bestP = -1;
+            for(int p = g_s5.np - 1; p >= 0 && g_s5.np - p <= 80; p--)
+            {
+               if(g_piv5[p].kind != kind || g_piv5[p].confirmIdx > n5 - 1)
+                  continue;
+               double px = g_piv5[p].price;
+               if((kind > 0 && px <= cNow) || (kind < 0 && px >= cNow))
+                  continue;
+               if(bound > 0.0 && ((kind > 0 && px <= bound) || (kind < 0 && px >= bound)))
+                  continue;
+               if(bestP < 0 || (kind > 0 && px < best) || (kind < 0 && px > best))
+               {
+                  best = px;
+                  bestP = p;
+               }
+            }
+            if(bestP < 0)
+               break;
+            string nm = NQ_PFX_C + "SR_" + ((kind > 0) ? "R" : "S") + IntegerToString(pass);
+            NqLevel(nm, g_s5.t[g_piv5[bestP].idx], best, (kind > 0) ? NQ_RGB(255, 120, 120) : NQ_RGB(120, 220, 140),
+                    (pass == 0) ? STYLE_SOLID : STYLE_DASH, (kind > 0) ? "R" : "S");
+            bound = best;
+         }
+      }
+      for(int b = 0; b < g_nSbrk; b++)
+      {
+         int i = g_sbrk[b].idx;
+         if(n5 - i > 300)
+            continue;
+         string txt = (g_sbrk[b].dir > 0) ? ("BREAKOUT CONFIRMED " + NqSymUp() + " R " + NqPx(g_sbrk[b].level))
+                                          : ("BREAKDOWN CONFIRMED " + NqSymDown() + " S " + NqPx(g_sbrk[b].level));
+         double off = (g_s5.atr[i] > 0.0) ? g_s5.atr[i] * 1.2 : 0.0;
+         NqText(NQ_PFX_C + "SB_" + IntegerToString(i), g_s5.t[i], (g_sbrk[b].dir > 0) ? g_s5.h[i] + off : g_s5.l[i] - off, txt,
+                (g_sbrk[b].dir > 0) ? cUp : cDn, 8, (g_sbrk[b].dir > 0) ? ANCHOR_LOWER : ANCHOR_UPPER,
+                txt + ": M5 close " + NqPx(g_sbrk[b].close) + " at " + TimeToString(g_s5.t[i] + g_s5.sec, TIME_MINUTES));
+      }
       for(int b = 0; b < g_nBrk; b++)
       {
          int i = g_brk[b].idx;
-         string txt = (g_brk[b].dir > 0) ? ("BREAKOUT " + NqSymUp() + " " + NqLevelName(g_brk[b].level))
-                                         : ("BREAKDOWN " + NqSymDown() + " " + NqLevelName(g_brk[b].level));
+         string txt = (g_brk[b].dir > 0) ? ("BREAKOUT CONFIRMED " + NqSymUp() + " " + NqLevelName(g_brk[b].level))
+                                         : ("BREAKDOWN CONFIRMED " + NqSymDown() + " " + NqLevelName(g_brk[b].level));
          double off = (g_s5.atr[i] > 0.0) ? g_s5.atr[i] * 0.8 : 0.0;
          NqText(NQ_PFX_C + "BK_" + IntegerToString(i), g_s5.t[i], (g_brk[b].dir > 0) ? g_s5.h[i] + off : g_s5.l[i] - off, txt,
                 (g_brk[b].dir > 0) ? cUp : cDn, 8, (g_brk[b].dir > 0) ? ANCHOR_LOWER : ANCHOR_UPPER,
@@ -3973,7 +4643,6 @@ void NqDrawPanel()
    int fs = (int)MathRound(9 * sc);
    int fsH = (int)MathRound(8 * sc);
    int fsT = (int)MathRound(13 * sc);
-   int fsB = (int)MathRound(16 * sc);
    int kOff = (int)MathRound(8 * sc);
    int vOff = (int)MathRound(122 * sc);
    int bannerH = (int)MathRound(38 * sc);
@@ -4026,40 +4695,26 @@ void NqDrawPanel()
            cVal, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
    y += rh + 4;
 
-   // banner
-   string st = NqSymDot() + "  WAIT - NO TRADE";
-   color bc = cWait;
+   // banner = THE VERDICT (what to do now)
+   string st = g_verdict;
+   color bc = g_verdictClr;
    if(g_metal == NQ_METAL_NONE)
+   {
       st = NqSymDot() + "  GOLD / SILVER ONLY";
+      bc = cWait;
+   }
    else if((g_gate & NQ_K_REAL_ACCOUNT) != 0)
    {
       st = "!  REAL ACCOUNT - TRADING BLOCKED";
       bc = cBlock;
    }
-   else if((g_gate & NQ_K_TRADE_DISABLED) != 0)
+   if(st == "")
    {
-      st = "ALGO TRADING OFF - WATCH ONLY";
-      bc = cBlock;
-   }
-   else if(!g_fresh && ok)
-      st = NqSymDot() + "  DATA STALE / MARKET CLOSED";
-   else if(g_final == NQ_BUY || g_final == NQ_SELL)
-   {
-      string side = (g_final > 0) ? "BUY" : "SELL";
-      string sym = (g_final > 0) ? NqSymUp() : NqSymDown();
-      if(g_gate != 0)
-      {
-         st = sym + "  " + side + " TRIGGER - BLOCKED";
-         bc = cBlock;
-      }
-      else
-      {
-         st = sym + "  SCALP " + side + (InpScalpAuto ? "  (AUTO)" : "  (MANUAL)");
-         bc = (g_final > 0) ? cUp : cDn;
-      }
+      st = NqSymDot() + "  WAIT";
+      bc = cWait;
    }
    NqRect("banner", ox + pad, y, W - 2 * pad, bannerH, bc, bc);
-   NqLabel("state", ox + W / 2, y + bannerH / 2, st, NQ_RGB(10, 12, 16), fsB, "Arial Black", ANCHOR_CENTER);
+   NqLabel("state", ox + W / 2, y + bannerH / 2, st, NQ_RGB(10, 12, 16), (StringLen(st) > 60) ? fs : fsT, "Arial Black", ANCHOR_CENTER);
    y += bannerH + 4;
 
    // reasons
@@ -4083,6 +4738,8 @@ void NqDrawPanel()
       r1 = NqReasonAt(g_finalR, 0);
       r2 = NqReasonAt(g_finalR, 1);
    }
+   if((g_gate & NQ_K_TRADE_DISABLED) != 0)
+      r1 = "ALGO TRADING OFF - watch only, the verdict above is for your hands.  " + r1;
    if(g_note != "" && r2 == "")
       r2 = g_note;
    NqLabel("r1", ox + pad, y, "REASON: " + r1, cVal, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
@@ -4160,13 +4817,11 @@ void NqDrawPanel()
    {
       int f = g_s1.fc[i1];
       if(f > 0)
-         fcT = NqSymUp() + " UP   (score +" + IntegerToString(g_s1.fcScore[i1]) + ")";
+         fcT = NqSymUp() + " UP   (score +" + IntegerToString(g_s1.fcScore[i1]) + ", strong)  target +0.5 ATR before -0.5 ATR in 5 candles";
       else if(f < 0)
-         fcT = NqSymDown() + " DOWN   (score " + IntegerToString(g_s1.fcScore[i1]) + ")";
+         fcT = NqSymDown() + " DOWN   (score " + IntegerToString(g_s1.fcScore[i1]) + ", strong)  target -0.5 ATR before +0.5 ATR in 5 candles";
       else
-         fcT = "NO ARROW YET   (no information)";
-      if(f != 0 && MathAbs(g_s1.fcScore[i1]) < InpForecastMinScore)
-         fcT = fcT + "  tie-break";
+         fcT = "NO ARROW   (score " + IntegerToString(g_s1.fcScore[i1]) + ", votes split - no bias)";
       fcC = NqDirColor(f);
    }
    NqRow("e6", kx, vx, yr, "NEXT M1 BIAS", fcT, fcC, cKey, fs);
@@ -4178,10 +4833,10 @@ void NqDrawPanel()
       int hits = 0;
       NqForecastStats(g_s1, 0, cnt, hits);
       if(cnt > 0)
-         hitT = DoubleToString(100.0 * hits / cnt, 1) + "%  (" + IntegerToString(hits) + " of " + IntegerToString(cnt) + ", " +
-                NqEvidenceText(cnt) + ")";
+         hitT = DoubleToString(100.0 * hits / cnt, 1) + "%  (" + IntegerToString(hits) + " of " + IntegerToString(cnt) + " resolved, " +
+                NqEvidenceText(cnt) + ")  50% = coin";
       else
-         hitT = "no resolved forecasts yet";
+         hitT = "no resolved arrows yet";
       if(NqChartSeries() == 0)
          hitT = hitT + "  - arrows need an M1/M5/M15 chart";
    }
@@ -4406,7 +5061,8 @@ void NqDrawPanel()
          double tpSent = InpPlanUseTp2 ? pl.tp2 : pl.tp1;
          vT = NqPx(tpSent);
          double dist = NqPlanIsStop(pl) ? NqDistAtrStop(pl.dir, pl.entry, bidP, askP, atr5) : NqDistAtr(pl.dir, pl.entry, bidP, askP, atr5);
-         vD = (atr5 > 0.0) ? (DoubleToString(dist, 2) + " ATR") : "-";
+         bool isNear = (atr5 > 0.0 && dist >= 0.0 && dist <= InpNearAtr && pl.status == NQ_PL_ACTIVE);
+         vD = (atr5 > 0.0) ? ((isNear ? (NqSymDot() + " ") : "") + DoubleToString(dist, 2) + " ATR") : "-";
          datetime tPlan = useM5 ? g_s5.t[pl.idx] : g_s15r.t[pl.idx];
          long expSec = (long)(tPlan + (long)(validBars + 1) * secP - nowS);
          if(q == 2)
@@ -4421,8 +5077,9 @@ void NqDrawPanel()
             {
                if(NqPlanHasPosition(pl))
                {
-                  stT = "FILLED > RUNNING";
-                  cSt = cUp;
+                  int reg5 = g_s5.regime[n5 - 1];
+                  stT = (reg5 != NQ_REG_CHOP && reg5 != pl.dir) ? "RUNNING - EXIT? regime flipped" : "RUNNING - HOLD";
+                  cSt = (reg5 != NQ_REG_CHOP && reg5 != pl.dir) ? cBlock : cUp;
                }
                else
                {
@@ -4456,8 +5113,17 @@ void NqDrawPanel()
          }
          else if(pl.status == NQ_PL_FILLED)
          {
-            stT = NqPlanHasPosition(pl) ? "RUNNING" : "FILLED";
-            cSt = cUp;
+            if(NqPlanHasPosition(pl))
+            {
+               int reg5 = g_s5.regime[n5 - 1];
+               stT = (reg5 != NQ_REG_CHOP && reg5 != pl.dir) ? "RUNNING - EXIT? regime flipped" : "RUNNING - HOLD";
+               cSt = (reg5 != NQ_REG_CHOP && reg5 != pl.dir) ? cBlock : cUp;
+            }
+            else
+            {
+               stT = "FILLED (paper - no position)";
+               cSt = cDim;
+            }
          }
          else
          {
@@ -4487,7 +5153,8 @@ void NqDrawPanel()
       NqLabel(id + "2", cx2, yr, vE, cVal, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
       NqLabel(id + "3", cx3, yr, vS, (k >= 0) ? cDn : cDim, fs, "Arial", ANCHOR_LEFT_UPPER);
       NqLabel(id + "4", cx4, yr, vT, (k >= 0) ? cUp : cDim, fs, "Arial", ANCHOR_LEFT_UPPER);
-      NqLabel(id + "5", cx5, yr, vD, cVal, fs, "Arial", ANCHOR_LEFT_UPPER);
+      bool nearRow = (StringFind(vD, NqSymDot()) == 0);
+      NqLabel(id + "5", cx5, yr, vD, nearRow ? clrWhite : cVal, fs, nearRow ? "Arial Black" : "Arial", ANCHOR_LEFT_UPPER);
       NqLabel(id + "6", cx6, yr, stT, cSt, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
       yr += rh;
       NqLabel(id + "d", cx1, yr, det, cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
