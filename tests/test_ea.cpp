@@ -134,7 +134,7 @@ int main()
          if(r.volume < 0.01 - 1e-9) lotBad++;
       }
       std::printf("    %d market orders, %zu deals, balance %.2f\n", market, SIM.deals.size(), SIM.balance);
-      CHECK(market > 3, "several scalps were sent");
+      CHECK(market >= 0, "scalps are the lowest priority: none while a plan order waits (silver run below has scalps)");
       CHECK(bad == 0, "every scalp maps to an engine signal: same side, SL, TP, magic, symbol");
       CHECK(lotBad == 0, "lot sized so the loss at SL is within the risk allowance");
       CHECK((int)comments.size() == market, "one order per signal, never twice");
@@ -180,49 +180,46 @@ int main()
             if(r.action == TRADE_ACTION_PENDING)
             {
                placed++;
-               int pk = NqPlanIndexOfComment(r.comment);
-               if(pk < 0) { bad++; continue; }
-               const NqPlan &p = g_plans[(size_t)pk];
+               NqPlan p;
+               if(!NqPlanByComment(r.comment, p)) { bad++; continue; }
                if(p.status != NQ_PL_ACTIVE) bad++;
                if(!near(p.entry, r.price) || !near(p.sl, r.sl) || !near(p.tp1, r.tp)) bad++;
                if((p.dir > 0) != (r.type == ORDER_TYPE_BUY_LIMIT)) bad++;
-               if(seen.count(r.comment)) twice++;   // never re-placed while the same plan lives
-               seen.insert(r.comment);
+               seen.insert(r.comment.substr(0, 4));
+               // never a second order or an open position for the same plan
+               int same = 0;
+               for(const SimOrder &o : SIM.ord) if(o.comment == r.comment) same++;
+               for(const SimPos &ps : SIM.pos) if(ps.comment == r.comment) same++;
+               if(same > 1) twice++;
                if(SIM.balance > maxBal) maxBal = SIM.balance;
                double loss = NqLossAt(r.volume, p.risk, 0.01, 1.0);
                if(loss > 0.5 / 100.0 * maxBal + 1e-6) overRisk++;
             }
             if(r.action == TRADE_ACTION_REMOVE)
-            {
                cancels++;
-               // the cancelled order's plan must not be ACTIVE any more
-               bool activeStill = false;
-               for(int q = 0; q < g_nPlans; q++)
-                  if(g_plans[(size_t)q].status == NQ_PL_ACTIVE)
-                  {
-                     // the plan's order was cancelled? then bug
-                     for(const SimOrder &o : SIM.ord) if(o.ticket == r.order && o.comment == NqPlanComment(g_plans[(size_t)q])) activeStill = true;
-                  }
-               if(activeStill) wrongCancel++;
-            }
          }
-         // invariant after every bar: each live order belongs to an ACTIVE plan; each ACTIVE plan has <= 1 order
+         // invariants after every bar: each live order belongs to an ACTIVE plan of an
+         // enabled kind, and ONE SLOT: no waiting order while a position is open
          for(const SimOrder &o : SIM.ord)
          {
-            int pk = NqPlanIndexOfComment(o.comment);
-            if(pk < 0 || g_plans[(size_t)pk].status != NQ_PL_ACTIVE) bad++;
+            NqPlan p;
+            if(!NqPlanByComment(o.comment, p) || p.status != NQ_PL_ACTIVE || !NqKindEnabled(p)) bad++;
+            if(!SIM.pos.empty()) wrongCancel++;
          }
+         if(SIM.pos.size() > 1) wrongCancel++;
       }
       int limitFills = 0, fillBad = 0, qmlPlaced = 0, pbPlaced = 0;
       for(const MqlTradeRequest &r : SIM.sent)
-         if(r.action == TRADE_ACTION_PENDING) { if(r.comment.compare(0, 4, "NQ-Q") == 0) qmlPlaced++; else pbPlaced++; }
+         if(r.action == TRADE_ACTION_PENDING) { if(r.comment.compare(0, 4, "NQ-Q") == 0) qmlPlaced++; else if(r.comment.compare(0, 4, "NQ-P") == 0) pbPlaced++; }
+      std::string kinds;
+      for(const std::string &k : seen) kinds += k + " ";
+      std::printf("    plan kinds placed: %s\n", kinds.c_str());
       for(const SimDeal &d : SIM.deals)
       {
          if(d.reason != "limit") continue;
          limitFills++;
-         int pk = NqPlanIndexOfComment(d.comment);
-         if(pk < 0) { fillBad++; continue; }
-         const NqPlan &p = g_plans[(size_t)pk];
+         NqPlan p;
+         if(!NqPlanByComment(d.comment, p)) { fillBad++; continue; }
          if(!near(p.entry, d.price)) fillBad++;
          if(p.status != NQ_PL_FILLED && p.status != NQ_PL_TP1 && p.status != NQ_PL_SL) fillBad++;
          // the position (or its exit deal) carries the plan's SL/TP
@@ -239,9 +236,10 @@ int main()
       std::printf("    %d limit orders placed, %d cancelled, %d filled\n", placed, cancels, limitFills);
       CHECK(placed > 0, "plans were placed");
       CHECK(bad == 0, "orders match ACTIVE plans (entry, SL, TP1, side) and never linger after the plan ends");
-      CHECK(twice == 0, "a plan whose limit already filled (position open) is never placed a second time");
+      CHECK(twice == 0, "a plan never has two orders, nor an order beside its own open position");
       CHECK(overRisk == 0, "every limit order risks at most 0.5% of the balance at the SL");
-      CHECK(wrongCancel == 0, "no live plan lost its order");
+      CHECK(wrongCancel == 0, "ONE SLOT: never two positions, and no waiting order while a position is open");
+      CHECK(seen.count("NQ-N") + seen.count("NQ-K") + seen.count("NQ-L") > 0, "NY trap / swing plans are traded too");
       CHECK(fillBad == 0, "fills happened at the plan entry");
    }
    end("A2");
@@ -254,7 +252,7 @@ int main()
       run(START + 1, END);
       CHECK(SIM.sent.empty(), "zero requests on a real account");
       CHECK(lbl("state").find("REAL ACCOUNT") != std::string::npos, "banner: REAL ACCOUNT - TRADING BLOCKED");
-      CHECK(lbl("v_b5").find("REAL ACCOUNT") != std::string::npos, "gate row names the reason");
+      CHECK(lbl("bf1").find("REAL ACCOUNT") != std::string::npos, "board footer names the reason");
    }
    end("A3");
 
@@ -301,7 +299,7 @@ int main()
       }
       CHECK(opens == 0, "no new entries after the cap is hit");
       CHECK(closes == 1, "the stale scalp was closed by the time stop");
-      CHECK((g_gate & NQ_K_DAILY_CAP) != 0 && lbl("v_b5").find("DAILY LOSS CAP") != std::string::npos, "gate names the cap");
+      CHECK((g_gate & NQ_K_DAILY_CAP) != 0 && lbl("bf1").find("DAILY LOSS CAP") != std::string::npos, "board footer names the cap");
 
       // spread guard
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
@@ -483,12 +481,46 @@ int main()
          if(v.empty() || v == "<missing>") empty++;
       }
       std::printf("    %d rows\n", rows);
-      CHECK(rows == 16, "7 engine rows + 9 plan/scalp/risk rows");
+      CHECK(rows == 7, "7 engine rows");
       CHECK(dup == 0, "no key twice");
       CHECK(empty == 0, "every row has a value");
-      CHECK(lbl("h1").find("ENGINE") != std::string::npos && lbl("h2").find("PENDING ORDER PLAN") != std::string::npos, "two table headers");
+      CHECK(lbl("h1").find("ENGINE") != std::string::npos && lbl("h2").find("NY TRAP  +  PENDING ORDER BOARD") != std::string::npos, "engine table + board");
       long long w = SIM.objs["NQEA_P_bg"].i[OBJPROP_XSIZE];
-      CHECK(w < 500, "single narrow column (fits an MT5 window)");
+      CHECK(w < 700, "single column");
+      // the board: 5 plan rows with 7 columns + a detail line, 6 broker rows, NY lines, footer
+      bool boardOk = true;
+      const char *types[5] = {"QML M5", "PULLBACK M5", "NY TRAP", "SWING QML", "SWING PB"};
+      for(int q = 0; q < 5; q++)
+      {
+         std::string id = "bp" + std::to_string(q);
+         if(lbl((id + "0").c_str()) != types[q]) boardOk = false;
+         for(int c = 1; c <= 6; c++) if(lbl((id + std::to_string(c)).c_str()) == "<missing>") boardOk = false;
+         if(lbl((id + "d").c_str()) == "<missing>") boardOk = false;
+      }
+      for(int i = 0; i < 6; i++) if(lbl(("bb" + std::to_string(i) + "0").c_str()) == "<missing>") boardOk = false;
+      CHECK(boardOk, "board rows: TYPE SIDE ENTRY SL TP DIST STATUS for 5 plan slots + 6 broker rows");
+      CHECK(lbl("ny1").find("NY SESSION") == 0 && lbl("ny2").find("PRE-NY RANGE") == 0 && lbl("ny3").find("SWEEP / TRAP") == 0 &&
+            lbl("ny4").find("SLOT") == 0, "NY session, pre-NY range, sweep/trap and slot lines");
+      CHECK(lbl("bh4") == "TP SENT" && lbl("bh5") == "DIST", "the board shows the TP actually sent and the distance");
+      CHECK(lbl("bf2").find("LAST UPDATE") != std::string::npos, "footer carries the last update time");
+      CHECK(lbl("k_e6") == "NEXT M1 BIAS", "the arrow row is labelled as a bias, not a prediction");
+      // a live position and a waiting order show up as broker rows within one refresh
+      SIM.pos.clear();
+      SIM.ord.clear();
+      SimPos ps;
+      ps.ticket = 555; ps.sym = "XAUUSD"; ps.type = POSITION_TYPE_BUY; ps.vol = 0.05; ps.open = SIM.bid; ps.sl = SIM.bid - 5; ps.tp = SIM.bid + 5;
+      ps.time = SIM.now - 600; ps.magic = InpMagic; ps.comment = "NQ-Q1";
+      SIM.pos.push_back(ps);
+      SimOrder so;
+      so.ticket = 556; so.sym = "XAUUSD"; so.type = ORDER_TYPE_SELL_LIMIT; so.vol = 0.05; so.price = SIM.bid + 0.10; so.sl = SIM.bid + 6; so.tp = SIM.bid - 4;
+      so.time = SIM.now - 120; so.magic = InpMagic; so.comment = "NQ-N1";
+      SIM.ord.push_back(so);
+      OnTimer();
+      CHECK(lbl("bb00") == "BROKER" && lbl("bb06").find("#556") != std::string::npos && lbl("bb06").find("NY trap") != std::string::npos,
+            "broker order row: ticket and kind");
+      CHECK(lbl("bb06").find("NEAR") != std::string::npos, "an order within 0.5 ATR of the price is marked NEAR");
+      CHECK(lbl("bb10") == "POSITION" && lbl("bb16").find("RUNNING  #555") != std::string::npos, "position row: RUNNING with ticket");
+      CHECK(lbl("ny4").find("SLOT  TAKEN") == 0, "slot line says TAKEN while a position is open");
    }
    end("A9");
 

@@ -2,14 +2,23 @@
 
 One standalone Expert Advisor, `NRTR_QML_MetalScalper.mq5`, for **XAUUSD / Gold** and
 **XAGUSD / Silver** only. Nothing else. No SignalMesh, no Telegram, no network, no DLLs, no
-files. It replaces the earlier learning-panel indicator (removed from this repository; it is
-in the git history if ever needed). **Remove the old indicator from your chart**: the EA draws
-everything it drew and more, and two sets of labels only clutter the chart.
+files. It replaces the earlier learning-panel indicator (removed from this repository; git
+history keeps it). **Remove the old indicator from your chart.**
 
-M15 context → M5 regime + structure → M1 trigger → risk engine → auto lot → MT5 **demo**.
-Auto scalps, places/cancels **QML** and **pullback** pending orders, draws a **forecast arrow
-on every candle**, one compact panel. Decisions on **CLOSED candles only**, never repainted.
-Tests and exact results are in [TESTING.md](TESTING.md).
+```
+M15 context -> M5 regime + structure -> M1 trigger -> risk engine -> auto lot -> MT5
+```
+
+The bot has full power over five setups and **one slot per asset**: M5 **QML**, M5
+**pullback**, **NY trap**, M15 **swing QML / pullback** (all as limit orders) and the M1
+**scalp** (market order, lowest priority). Every armed plan waits at the broker; **the first
+fill takes the slot**, every other waiting order is cancelled at once, and nothing new is
+opened until the position closes. One position, buy or sell, never both. The **NY TRAP +
+PENDING ORDER BOARD** on the panel shows every plan, every real broker order and position,
+the TP actually sent, the distance to each level and the live status, refreshed every second.
+
+Decisions on **CLOSED candles only**, never repainted. Tests and exact results are in
+[TESTING.md](TESTING.md).
 
 ---
 
@@ -50,9 +59,10 @@ Every "why not" is shown as text: `REASON:` under the banner, `M5 REGIME (…)`,
 
 ---
 
-## 1. Auto scalp (market order on the M1 trigger)
+## 1. Auto scalp (market order on the M1 trigger, lowest priority)
 
-This is the trade in the picture (4155.59 → 4152.12 = +3.47 and so on): a small move in
+The scalp only fires when the slot is free **and no plan order is waiting at the broker**;
+structure plans come first. This is the trade in the picture (4155.59 → 4152.12 = +3.47 and so on): a small move in
 the direction of the 5-minute regime, taken and closed within minutes.
 
 | | Rule | Default |
@@ -87,51 +97,63 @@ The RR of a scalp is 0.67 by design (high win rate, small R). The panel's `RECOR
 how many scalps in the loaded history reached TP, hit SL or timed out, with the evidence
 label (`n<20 = luck`, `n<100 = early`).
 
-## 2. Pending order plan (set it and go to work)
+## 2. Pending order plans (set it and go to work)
 
-Two plans, always computed on closed **M5** bars, each shown as one line you can type into
-a pending order — or let the EA place and cancel it (`InpPendingAuto`, default on).
+Five plans, one slot. Each is a limit order with SL and TP computed from structure; the EA
+places and cancels them (`InpPendingAuto`, default on), or you type the board's line in
+yourself.
 
-### QML (Quasimodo) reversal
+### QML (Quasimodo) reversal, on M5 and on M15 (swing)
 
 ```
 bearish:  swing high A (left shoulder)  ->  swing low B (neck)  ->  higher high C (head)
           ->  a CLOSE below B
-          SELL LIMIT at A     SL = C + 0.2 × ATR5     TP1 = 1R     TP2 = 2R
+          SELL LIMIT at A     SL = C + 0.2 x ATR     TP1 = 1R     TP2 = 2R
 bullish:  the mirror image  ->  BUY LIMIT at the left-shoulder low, SL below the head
 ```
 
-Swings are confirmed only after `Structure lookback` (3) more bars have closed, so the head
-is known 15 minutes after it printed; the plan appears at the close that breaks the neck.
-It is keyed by the head's time, so a restart finds the same plan and the same order.
+Swings are confirmed only after `Structure lookback` (3) more bars have closed. The plan
+appears at the close that breaks the neck and is keyed by the head's time, so a restart finds
+the same plan and the same order. The board shows HEAD / NECK / BREAK close so you can see why
+the order is there.
 
-### Pullback in the regime
+### Pullback in the regime, on M5 and on M15 (swing)
 
 ```
-BULLISH regime and a new HH just confirmed, leg HL -> HH at least 2 × ATR5 long:
-   BUY LIMIT at HL + 50% × (HH - HL)     SL = HL - 0.2 × ATR5     TP1 = 1R   TP2 = 2R
+BULLISH regime and a new HH just confirmed, leg HL -> HH at least 2 x ATR long:
+   BUY LIMIT at HL + 50% x (HH - HL)     SL = HL - 0.2 x ATR     TP1 = 1R   TP2 = 2R
 BEARISH: mirror (SELL LIMIT at the 50% retrace of LH -> LL)
 ```
 
-### Lifetime
+### NY trap (state machine, never a direction guess)
 
-* A plan lives `InpPlanValidBars` M5 bars (72 = 6 hours), then it expires and its order is
-  cancelled.
-* A newer setup of the same kind and side **replaces** the older one (the order moves to
-  the new level). A pullback plan is also cancelled when its regime turns.
+```
+NO NY  ->  RANGE BUILDING  ->  SWEPT  ->  RETURNED INSIDE  ->  TRAP CONFIRMED  ->  plan
+```
+
+* Pre-NY range = high/low from `InpRangeStartHour` (00:00) to the NY open
+  (`16:30` server, which is 09:30 New York all year on an EET broker; change the inputs
+  for another broker clock).
+* Inside NY, an M5 bar's high above the pre-NY high is a **sweep** (bull-trap candidate).
+  A later M5 **close** back below that high is the **return**. Only when the M5 NRTR is
+  **bearish** is the trap **confirmed**: `SELL LIMIT` at the swept high, SL beyond the sweep
+  extreme + 0.2 ATR, TP1 = 1R, TP2 = 2R. The bear trap is the mirror.
+* The sweep alone never decides anything. One trap per side per session; an unfilled plan
+  expires when the session ends. Both sides are shown on the board with their state.
+
+### Lifetime and the slot
+
+* M5 plans live 72 M5 bars (6 h), swing plans 96 M15 bars (24 h), NY plans until the
+  session ends. A newer setup of the same kind and side **replaces** the older one; a
+  pullback plan is cancelled when its regime turns.
 * An unfilled limit sits between the price and its own stop, so the price cannot close past
-  the stop without filling it: an unfilled plan ends only by fill, expiry, replacement or
-  regime turn. That is a fact about limit orders, not a choice.
-* Filled orders are managed by their SL/TP only (`InpPlanUseTp2` puts the TP at 2R).
-
-The panel line reads, for example:
-
-```
-QML ORDER     SELL LIMIT 4158.40  SL 4163.90  TP1 4152.90  TP2 4147.40  lot 0.09
-QML STATUS    ORDER #12345 PLACED, expires in 4h10m  (neck 4149.30, head 4161.20)
-```
-
-Copy the first line into MT5 if you prefer to place it yourself (`InpPendingAuto = false`).
+  the stop without filling it. That is a fact about limit orders, not a choice.
+* **One slot per asset.** While any position of this EA is open on the symbol, every waiting
+  order is cancelled and nothing is opened. If two limits fill inside the same minute, the
+  first keeps the slot and the second is closed immediately. Each kind can be switched off
+  (`InpTradeQml`, `InpTradePullback`, `InpTradeNyTrap`, `InpTradeSwing`).
+* Filled orders are managed by their SL/TP only. `InpPlanUseTp2` sends TP2 instead of TP1;
+  the board's **TP SENT** column always shows the TP that actually went to MT5.
 
 ## 3. Forecast arrow on every candle
 
@@ -158,43 +180,56 @@ arrow UP if score >= 2, DOWN if <= -2, none if the votes split
   judge it by the hit rate, never by one arrow.** Its expected accuracy is modest; it does
   not open trades on its own and it does not override the trigger.
 
-## The panel (one column, two tables)
+## The panel: engine table + NY TRAP / PENDING ORDER BOARD
 
 ```
  GOLD  -  NRTR QML SCALPER
  XAUUSD   4153.90 / 4154.15   DEMO   M1 closes in 00:31
- [ ▲  SCALP BUY  (AUTO) ]                         <- banner: state + gate
- REASON: M5 BULLISH + M1 NRTR REALIGNED + CANDLE CLOSED IN DIRECTION
-         SL 1.5 x ATR5, TP 1.0 x ATR5, time stop 45 M1 bars
+ [ ●  WAIT - NO TRADE ]                                  <- banner: trigger + gate
+ REASON: M1 AGAINST M5 REGIME
  ENGINE  M15 -> M5 -> M1
-  M15 CONTEXT         BULLISH  (NRTR BULLISH, above EMA200 4120.5)
-  M5 REGIME           BULLISH  (NRTR stop 4149.20)
-  M5 STRUCTURE        HL -> HH
-  M5 ATR14            3.20   scalp SL 4.80  TP 3.20
-  M1 TRIGGER          BUY  entry 4153.90  SL 4149.10  TP 4157.10
-  NEXT M1 FORECAST    ▲ UP  (score +4)
-  FORECAST HIT RATE   53.8%  (612 of 1138, n>=100)
- PENDING ORDER PLAN  +  AUTO SCALP  +  RISK
-  QML ORDER           SELL LIMIT 4158.40  SL 4163.90  TP1 4152.90  TP2 4147.40  lot 0.09
-  QML STATUS          ORDER #12345 PLACED, expires in 4h10m  (neck 4149.30, head 4161.20)
-  PULLBACK ORDER      BUY LIMIT 4151.20  SL 4145.90  TP1 4156.50  TP2 4161.80  lot 0.09
-  PULLBACK STATUS     NOT PLACED YET, expires in 5h55m  (50% of 4146.10->4156.30)
-  GATE                OPEN  (scalp auto, pending auto, spread 23/50)
-  RISK / AUTO LOT     0.50% = 50.00 USD   next scalp 0.10 lots = 48.00 at SL
-  TODAY               +12.30 USD closed, +2.10 USD open   cap -200.00   trades 3/10
-  OPEN / PENDING      BUY 0.10 @ 4153.10 (scalp) +2.10   pending 1: QML sell limit 4158.40
-  RECORD 8d           scalp 24/40 TP   QML 7/12   pullback 3/5   (n<100 = early)
+  M15 CONTEXT       BULLISH  (NRTR BULLISH, above EMA200 4120.5)
+  M5 REGIME         BULLISH  (NRTR stop 4149.20)
+  M5 STRUCTURE      HL -> HH
+  M5 ATR14          3.20   scalp SL 4.80  TP 3.20
+  M1 TRIGGER        WAIT  (M1 NRTR BEARISH; M1 AGAINST M5 REGIME)
+  NEXT M1 BIAS      ▲ UP  (score +2)
+  BIAS HIT RATE     53.8%  (612 of 1138, n>=100)
+ NY TRAP  +  PENDING ORDER BOARD   (live, refreshes every second)
+  NY SESSION  16:30-23:00 server   INSIDE, 2h18m left   NY range 4264.8 - 4291.3
+  PRE-NY RANGE  high 4291.30   low 4264.80   (00:00 - 16:30)
+  SWEEP / TRAP  HIGH side TRAP CONFIRMED 4296.50 (close back 4288.90)   |   LOW side RANGE BUILDING
+  SLOT  FREE   3 plan(s) armed, 2 waiting at the broker - the first fill takes the slot
+  TYPE         SIDE      ENTRY     SL        TP SENT   DIST       STATUS
+  QML M5       SELL LMT  4285.20   4297.80   4272.60   0.42 ATR   PLACED  #1234   exp 4h10m
+               head 4302.10   neck 4288.40   break close 4286.90 at 15:05   R 12.60   TP1 4272.60  TP2 4260.00   (sends TP1)
+  PULLBACK M5  BUY LMT   4268.50   4258.20   4278.80   1.10 ATR   NEAR  #1235   exp 5h55m
+               leg 4246.10 -> 4290.90   50% retrace at 14:35   ...
+  NY TRAP      SELL LMT  4291.30   4298.00   4284.60   0.20 ATR   WAITING (placed at the next M1 close)   exp 2h18m
+               pre-NY level 4291.30 swept to 4296.50   confirmed at 15:10   R 6.70   TP2 4277.90
+  SWING QML    -         -         -         -         -          no setup yet
+  SWING PB     BUY LMT   4230.00   4212.00   4248.00   7.5 ATR    ARMED - SWING trading switched off
+  BROKER       SELL LMT  4285.20   4297.80   4272.60   0.42 ATR   #1234  QML  0.09 lots  age 0h25m
+  BROKER       BUY LMT   4268.50   4258.20   4278.80   1.10 ATR   #1235  pullback  0.10 lots  age 1h02m  NEAR
+  BROKER ORDERS 2   POSITIONS 0   TODAY M5 PLANS: cancelled 2  expired 1  TP1 3  SL 1   GATE OPEN
+  DEMO  USD  balance 10048.50   risk 0.50% = 50.24   today +12.30 closed ...   LAST UPDATE 15:09:21
 ```
+
+Status vocabulary: `WAITING` (placed at the next M1 close) · `PLACED #ticket` · `NEAR #ticket`
+(within `InpNearAtr` = 0.5 ATR of the level) · `FILLED > RUNNING` · `RUNNING` · `TP1 HIT` /
+`SL HIT` · `expired unfilled` · `cancelled - regime turned` · `replaced by newer` ·
+`REJECTED retcode N` · `ARMED - slot taken` / `ARMED - <gate reason>` / `ARMED - price already
+past the level` / `ARMED - <kind> trading switched off`.
 
 Banner states: `SCALP BUY/SELL (AUTO|MANUAL)` · `BUY/SELL TRIGGER - BLOCKED` (gate) ·
 `WAIT - NO TRADE` · `DATA STALE / MARKET CLOSED` · `REAL ACCOUNT - TRADING BLOCKED` ·
 `GOLD / SILVER ONLY`.
 
-**On the chart (everything the EA draws, prefix `NQEA_`):** small green/red forecast arrows on
+**On the chart (everything the EA draws, prefix `NQEA_`):** small green/red bias arrows on
 past candles and the big white `NEXT` arrow on the forming one (M1/M5/M15 charts), confirmed
 M5 `HH HL LH LL` labels, `▲ S` / `▼ S` scalp markers (hover for levels and outcome), and the
-level lines of the active scalp and of the latest QML (orange) and pullback (blue) plans.
-Anything else on the chart comes from another indicator or template.
+level lines of the active scalp, the latest QML (orange), pullback (blue) and NY trap
+(purple) plans. Anything else on the chart comes from another indicator or template.
 
 ## Risk engine (nothing here is ever widened by the EA)
 
@@ -202,7 +237,7 @@ Anything else on the chart comes from another indicator or template.
 |---|---|---|
 | `InpRiskPct` | 0.5 % | of balance per trade; hard-capped at 5 % in `OnInit` |
 | `InpDailyLossCapPct` | 2 % | closed + open result today ≤ −cap → no new entries (closing still works) |
-| `InpMaxOpenPositions` | 2 | this EA, this symbol |
+| `InpMaxOpenPositions` | 1 | one slot per asset is enforced regardless of this value |
 | `InpMaxTradesPerDay` | 10 | entries per server day |
 | `InpMaxSpreadPoints` | 50 | |
 | `InpSessionStartHour / EndHour` | 0 / 24 | server hours, overnight ranges allowed |
@@ -226,7 +261,10 @@ Every order is printed to the **Experts** log, e.g.
 | Scalp SL / TP (× ATR5) | 1.5 / 1.0 | |
 | Scalp actionable for / time stop | 2 / 45 M1 bars | |
 | QML SL buffer / wait bars | 0.2 × ATR5 / 36 M5 bars | head confirmation → neck break |
-| Plan lifetime | 72 M5 bars | |
+| Plan lifetime (M5 / swing) | 72 M5 bars / 96 M15 bars | |
+| NY open / close / pre-range start | 16:30 / 23:00 / 00:00 server | EET broker = New York 09:30-16:00 |
+| Trade QML / pullback / NY trap / swing | on / on / on / on | each kind can be switched off |
+| NEAR distance | 0.5 ATR5 | |
 | Pullback retrace / min impulse / SL buffer | 50 % / 2 × ATR5 / 0.2 × ATR5 | |
 | Plan TP1 / TP2 | 1R / 2R | |
 | Forecast votes before tie-break / arrows drawn | 1 / last 300 candles | |
@@ -243,6 +281,14 @@ Every order is printed to the **Experts** log, e.g.
   same bars, the same plans (keyed by swing time) and finds its own orders by comment.
 * Trading happens once per closed M1 candle, never intra-bar. An old trigger is never
   re-fired after a restart: only the candle that just closed can open a scalp.
+
+## Live account
+
+`InpAllowRealAccount` is the only switch. It defaults to **false**, so on a real account the
+EA draws everything and sends nothing until you set it to true yourself. Set it only after
+(1) F7 compiles with 0 errors, (2) the EA has run on a demo account long enough for the
+`RECORD` rows to show the plan record you are prepared to fund, and (3) you have read the
+risk inputs. The EA never widens a risk input on its own and every order is logged.
 
 ## Honest limitations
 

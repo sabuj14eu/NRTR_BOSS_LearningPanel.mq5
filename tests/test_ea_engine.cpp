@@ -490,6 +490,83 @@ int main()
    }
    end("E09");
 
+   begin("E10 NY trap state machine: range -> sweep -> return -> confirmation -> plan; expiry at session end");
+   {
+      // one server day of M5 bars: pre-NY 00:00-16:30 in 90..100, then the NY session
+      auto mk = [&](std::vector<SBar> &v, double o, double h, double l, double c) {
+         v.push_back({T0 + (long long)v.size() * 300, o, h, l, c});
+      };
+      std::vector<SBar> v;
+      int preBars = (16 * 60 + 30) / 5;   // bars before 16:30
+      for(int i = 0; i < preBars; i++)
+      {
+         double x = 95.0 + 4.0 * std::sin(i * 0.37);   // range 91..99
+         mk(v, x, x + 0.5, x - 0.5, x + 0.2);
+      }
+      double preHi = 0, preLo = 1e9;
+      for(const SBar &b : v) { preHi = std::max(preHi, b.h); preLo = std::min(preLo, b.l); }
+      mk(v, 96.0, 97.0, 95.5, 96.5);              // 16:30 inside the range
+      mk(v, 96.5, preHi + 1.5, 96.0, preHi + 0.8); // 16:35 SWEEP above the pre-NY high
+      int sweepBar = (int)v.size() - 1;
+      mk(v, preHi + 0.8, preHi + 1.0, preHi - 1.5, preHi - 1.0);   // 16:40 close back inside -> RETURNED
+      int retBar = (int)v.size() - 1;
+      mk(v, preHi - 1.0, preHi - 0.5, preHi - 2.0, preHi - 1.8);   // 16:45 confirmation bar
+      int confBar = (int)v.size() - 1;
+      mk(v, preHi - 1.8, preHi + 0.2, preHi - 2.0, preHi - 0.5);   // 16:50 touches the shoulder -> fill
+      int fillBar = (int)v.size() - 1;
+      for(int i = 0; i < 6; i++) mk(v, preHi - 0.5, preHi - 0.3, preHi - 0.9, preHi - 0.6);
+      mk(v, preHi - 0.6, preHi - 0.5, preHi - 6.0, preHi - 5.0);   // drops through TP1
+      int tpBar = (int)v.size() - 1;
+      while(v.size() < 288) mk(v, preHi - 5.0, preHi - 4.5, preHi - 5.5, preHi - 5.0);
+      mk(v, 90, 91, 89, 90);   // first bar of the next day
+      NqSeries s;
+      fill(s, v, 300);
+      NqCalcATR(s.h, s.l, s.c, s.n, P.atrPeriod, s.atr);
+      std::vector<int> conf((size_t)s.n, 1);           // bullish everywhere ...
+      for(int i = confBar; i < s.n; i++) conf[(size_t)i] = -1;   // ... bearish from the confirmation bar
+      std::vector<NqPlan> plans;
+      int np = 0;
+      NqNyState y;
+      NqRunNyTrap(s, conf, P, 0, 16 * 60 + 30, 23 * 60, plans, np, y);
+      CHECK(np == 1, "exactly one NY plan");
+      if(np == 1)
+      {
+         const NqPlan &pl = plans[0];
+         CHECK(pl.kind == NQ_PLAN_NY && pl.dir == NQ_SELL && pl.tf == 300, "bull trap -> SELL plan on M5");
+         CHECK(pl.idx == confBar, "armed on the confirmation bar, not on the sweep or the return");
+         CHECK(near(pl.entry, NqRoundTick(preHi, 0.01, 2, 0)) && near(pl.lvlA, preHi) && near(pl.lvlB, s.h[sweepBar]), "entry = swept pre-NY high, extreme recorded");
+         CHECK(pl.sl > s.h[sweepBar], "SL beyond the sweep extreme");
+         CHECK(pl.fillIdx == fillBar && pl.status == NQ_PL_TP1 && pl.statusIdx == tpBar, "filled at the level, reached TP1");
+      }
+      CHECK(y.day == NqDayOf(v.back().t) && y.stBull == NQ_NY_NONE, "the next day starts a fresh state");
+      // no confirmation -> no plan, and the state stays RETURNED until the session ends
+      std::vector<int> bull((size_t)s.n, 1);
+      std::vector<NqPlan> p2;
+      int np2 = 0;
+      NqNyState y2;
+      std::vector<SBar> v2(v.begin(), v.begin() + retBar + 3);
+      NqSeries s2;
+      fill(s2, v2, 300);
+      NqCalcATR(s2.h, s2.l, s2.c, s2.n, P.atrPeriod, s2.atr);
+      bull.resize((size_t)s2.n, 1);
+      NqRunNyTrap(s2, bull, P, 0, 16 * 60 + 30, 23 * 60, p2, np2, y2);
+      CHECK(np2 == 0 && y2.stBull == NQ_NY_RETURNED && y2.stBear == NQ_NY_OPEN, "sweep + return without confirmation is not a trade");
+      // armed but never filled -> expires when the session ends
+      std::vector<SBar> v3(v.begin(), v.begin() + confBar + 1);
+      for(int i = 0; i < 80; i++) v3.push_back({T0 + (long long)v3.size() * 300, preHi - 3.0, preHi - 2.5, preHi - 3.5, preHi - 3.0});
+      NqSeries s3;
+      fill(s3, v3, 300);
+      NqCalcATR(s3.h, s3.l, s3.c, s3.n, P.atrPeriod, s3.atr);
+      std::vector<int> c3((size_t)s3.n, -1);
+      std::vector<NqPlan> p3;
+      int np3 = 0;
+      NqNyState y3;
+      NqRunNyTrap(s3, c3, P, 0, 16 * 60 + 30, 23 * 60, p3, np3, y3);
+      CHECK(np3 == 1 && p3[0].status == NQ_PL_EXPIRED && y3.stBull == NQ_NY_DONE && !y3.inSession, "unfilled plan expires at the session end");
+      CHECK(near(NqDistAtr(NQ_SELL, 101.0, 100.0, 100.2, 2.0), 0.5) && near(NqDistAtr(NQ_BUY, 99.0, 100.0, 100.2, 2.0), 0.6), "distance in ATR units from bid (sell) / ask (buy)");
+   }
+   end("E10");
+
    std::printf("\nEA ENGINE TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
 }

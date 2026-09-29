@@ -82,7 +82,7 @@ enum { CORNER_LEFT_UPPER = 0 };
 enum { ANCHOR_LEFT_UPPER = 0, ANCHOR_LEFT_LOWER, ANCHOR_CENTER, ANCHOR_UPPER, ANCHOR_LOWER, ANCHOR_TOP, ANCHOR_BOTTOM };
 enum { BORDER_FLAT = 0 };
 enum { STYLE_SOLID = 0, STYLE_DASH, STYLE_DOT };
-enum { TIME_DATE = 1, TIME_MINUTES = 2 };
+enum { TIME_DATE = 1, TIME_MINUTES = 2, TIME_SECONDS = 4 };
 enum { CHARTEVENT_CHART_CHANGE = 9 };
 enum { CHART_WIDTH_IN_PIXELS = 1, CHART_HEIGHT_IN_PIXELS };
 const color clrWhite = 0xFFFFFF;
@@ -319,6 +319,7 @@ inline string TimeToString(datetime t, int flags)
    std::string out;
    if(flags & TIME_DATE) { std::strftime(b, sizeof b, "%Y.%m.%d", &g); out += b; }
    if(flags & TIME_MINUTES) { if(!out.empty()) out += " "; std::strftime(b, sizeof b, "%H:%M", &g); out += b; }
+   if(flags & TIME_SECONDS) { if(!out.empty()) out += " "; std::strftime(b, sizeof b, "%H:%M:%S", &g); out += b; }
    return out;
 }
 

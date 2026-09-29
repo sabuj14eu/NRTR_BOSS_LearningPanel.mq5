@@ -34,8 +34,8 @@ before relying on it.** If F7 reports anything, send the exact message.
 ```
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-EA ENGINE TESTS:  66 checks passed, 0 failed
-EA TESTS:         52 checks passed, 0 failed
+EA ENGINE TESTS:  76 checks passed, 0 failed
+EA TESTS:         62 checks passed, 0 failed
 MetaEditor F7:    NOT RUN (not available in the build environment)
 ```
 
@@ -52,20 +52,21 @@ MetaEditor F7:    NOT RUN (not available in the build environment)
 | E07 | Synthetic 6-day market (34 pullback + 35 QML plans, 94 scalp signals): every plan obeys its geometry and regime, fills/expiries match the bars, one live plan per kind+side; every scalp signal is the first candle of an aligned episode with SL 1.5 ATR5 / TP 1.0 ATR5, judged SL-first then time stop; BUY/SELL state only while a signal is young; WAIT always has a reason | PASS |
 | E08 | No repaint: 12 cut points over 8640 M1 bars, silver spec; all past states, arrows, signals and plans equal the full run | PASS |
 | E09 | Freshness (M1 4 min old = stale), metal detection, every reason/gate bit named, stale named first | PASS |
+| E10 | NY trap state machine on a crafted server day: pre-NY range, sweep, return, plan armed only on the confirmation bar (SELL LIMIT at the swept high, SL beyond the extreme), filled and TP1; sweep + return without confirmation is not a trade; an unfilled plan expires at the session end; next day starts fresh; distance in ATR units | PASS |
 
 ### Whole-EA tests (`tests/test_ea.cpp`, gold-like and silver-like synthetic markets)
 
 | # | Case | Result |
 |---|---|---|
-| A1 | Demo account: 20 scalps sent; each maps to an engine signal (side, SL, TP, magic, symbol); lot within the risk allowance; one order per signal; at most one scalp open; exits by SL/TP; two panel tables, not three | PASS |
-| A2 | Pending plans over five days (30 placed, 4 filled): both kinds placed; each order matches an ACTIVE plan (entry, SL, TP1, side); a plan whose limit already filled is never placed twice (this caught a real bug); every order risks ≤ 0.5 % at the SL; cancelled only when the plan ended; live orders always belong to a live plan; fills at the plan entry with the plan's SL/TP | PASS |
-| A3 | REAL account: zero requests; banner and gate row say so | PASS |
+| A1 | Demo account: every scalp maps to an engine signal (side, SL, TP, magic, symbol); lot within the risk allowance; one order per signal; scalps are the lowest priority (none while a plan order waits); exits by SL/TP; engine table + board | PASS |
+| A2 | Plans over five days (49 limits placed, 5 filled; QML, pullback, NY trap and swing kinds all placed): each order matches an ACTIVE plan of an enabled kind (entry, SL, TP1, side); a plan never has two orders nor an order beside its own position (this caught a real bug); every order risks ≤ 0.5 % at the SL; **one slot**: never two positions and no waiting order while a position is open (caught a same-tick scalp-after-limit bug); fills at the plan entry with the plan's SL/TP carried into the position or its exit | PASS |
+| A3 | REAL account: zero requests; banner and board footer say so | PASS |
 | A4 | Daily loss cap: no new entries, a stale scalp still closed by the time stop; spread 500: no entries; terminal autotrading off: no entries | PASS |
 | A5 | Regime flip closes an open scalp against the new M5 regime on the next closed candle, logged with the reason | PASS |
 | A6 | Restart on the same day: same plans/signals, 378 panel + chart objects identical, no request sent, no duplicate orders afterwards | PASS |
 | A7 | Frozen feed: banner DATA STALE, nothing sent. EURUSD: nothing at all | PASS |
 | A8 | Arrows: one per candle in the window + the wide white live one with its NEXT label (301 = 301), no candle without an arrow; 50 candles later every past arrow unchanged; hit-rate row shows % and n | PASS |
-| A9 | Panel: 16 rows (7 engine + 9 plan/scalp/risk), no key twice, every row has a value, single column under 500 px | PASS |
+| A9 | Panel: 7 engine rows, no key twice, every row has a value; board with TYPE/SIDE/ENTRY/SL/TP SENT/DIST/STATUS for 5 plan slots + 6 broker rows, NY session / pre-NY range / sweep-trap / slot lines, LAST UPDATE; a planted broker order and position appear as rows within one refresh with ticket, kind, NEAR and RUNNING; slot line reads TAKEN | PASS |
 | A10 | Silver (3 digits, tick value 5): SL/TP on the 0.001 grid, lots from the real tick value; with every order rejected: rejections logged, a rejected scalp is not re-sent for the same trigger | PASS |
 
 ## Manual checks in MT5 (10 minutes)
