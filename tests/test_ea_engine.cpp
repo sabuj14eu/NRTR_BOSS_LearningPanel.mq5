@@ -166,7 +166,10 @@ int main()
       {
          int exp = 2 * s.hi[i] + s.dir[i] + NqSign(s.c[i], s.o[i]) + (s.emaF[i] > 0 ? NqSign(s.c[i], s.emaF[i]) : 0);
          if(s.fcScore[i] != exp) okScore = false;
-         if(s.fc[i] != (exp >= 2 ? 1 : (exp <= -2 ? -1 : 0))) okScore = false;
+         int want = (exp >= 2) ? 1 : ((exp <= -2) ? -1 : 0);
+         if(want == 0) want = (s.dir[i] != 0) ? s.dir[i] : NqSign(s.c[i], s.o[i]);
+         if(want == 0 && i > 0) want = s.fc[i - 1];
+         if(s.fc[i] != want) okScore = false;
          if(i + 1 < s.n && s.fc[i] != 0)
          {
             int want = (NqSign(s.c[i + 1], s.c[i]) == s.fc[i]) ? 1 : -1;
@@ -174,7 +177,10 @@ int main()
          }
          if(i + 1 < s.n && s.fc[i] == 0 && s.fcHit[i] != 0) okHit = false;
       }
-      CHECK(okScore, "score = 2*higher + nrtr + body + ema side; arrow only at |score|>=2");
+      CHECK(okScore, "score = 2*higher + nrtr + body + ema side; below the threshold the tie-break gives every candle an arrow");
+      bool everyCandle = true;
+      for(int i = 15; i < s.n; i++) if(s.fc[i] == 0) everyCandle = false;
+      CHECK(everyCandle, "an arrow on every candle once the NRTR is ready");
       CHECK(okHit, "hit = next close vs this close, equal = miss");
       CHECK(lastUnresolved, "the newest forecast is unresolved until the next candle closes");
       int n = 0, h = 0;

@@ -9,36 +9,34 @@ Run everything with:
 ## What was run, and what it proves
 
 MetaQuotes' compiler (MetaEditor) only runs on Windows/Wine and could not be downloaded in
-the build environment. Both files were therefore verified like this:
+the build environment. The EA was therefore verified like this:
 
-1. **Safety scans.** `tests/check_safety.py` (indicator): pure ASCII, declared as an
-   indicator, none of 42 forbidden identifiers (all trade calls, `CTrade`, `WebRequest`,
-   sockets, notifications, mail, FTP, `#import`, `#include`, file and global-variable
-   writes); position API read-only. `tests/check_safety_ea.py` (EA): none of 30 forbidden
+1. **Safety scan** (`tests/check_safety_ea.py`): pure ASCII; none of 30 forbidden
    identifiers (network, files, DLLs, async/`CTrade` order paths, stop orders); the required
    guards present (`ACCOUNT_TRADE_MODE_DEMO` check, `InpAllowRealAccount` defaulting to
    `false`, `NqRiskGate`, `NqLotFor`); **exactly one `OrderSend` call site**; no literal lot
    size anywhere.
 2. **Surrogate compile of the whole file.** `tests/mql2cpp.py` rewrites *syntax only*
    (`input` → `const`, `T &a[]` → `std::vector<T>&`, `#property` removed). The **real
-   `.mq5` text** is compiled with `g++ -Wall -Wextra -Werror` against a simulated terminal:
-   `tests/mt5_sim.h` (indicator, deliberately **no trade API**) and `tests/mt5_sim_ea.h`
-   (EA: in-memory positions, pending orders, deal history, account, matching engine that
-   fills limits and stops bar by bar, SL first).
-3. **Engine tests** run the engine block of each real source on crafted and synthetic data.
-4. **Whole-file tests** run `OnInit → OnTick/OnCalculate → OnTimer → OnDeinit` on the
-   simulated terminal and read the panel and orders back.
+   `.mq5` text** is compiled with `g++ -Wall -Wextra -Werror` against a simulated terminal
+   (`tests/mt5_sim_ea.h`: in-memory positions, pending orders, deal history, account, and a
+   matching engine that fills limits and stops bar by bar, SL first).
+3. **Engine tests** run the engine block of the real source on crafted and synthetic data.
+4. **Whole-EA tests** run `OnInit → OnTick → OnTimer → OnDeinit` on the simulated terminal
+   and read the panel, arrows and orders back.
 
 **What this does NOT prove:** that MetaEditor accepts every MQL5-specific construct, and how
 it behaves on a real broker feed. **Press F7 in MetaEditor and do the manual checks below
-before relying on either file.** If F7 reports anything, send the exact message.
+before relying on it.** If F7 reports anything, send the exact message.
 
 ## Results (2026-09-29)
 
 ```
-INDICATOR  safety scan PASS · full file g++ 0 errors · engine 96 passed · indicator 74 passed
-EA         safety scan PASS · full file g++ 0 errors · engine 65 passed · whole-EA 50 passed
-MetaEditor F7: NOT RUN (not available in the build environment)
+EA SAFETY SCAN: PASS
+EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
+EA ENGINE TESTS:  66 checks passed, 0 failed
+EA TESTS:         52 checks passed, 0 failed
+MetaEditor F7:    NOT RUN (not available in the build environment)
 ```
 
 ### EA engine tests (`tests/test_ea_engine.cpp`)
@@ -46,7 +44,7 @@ MetaEditor F7: NOT RUN (not available in the build environment)
 | # | Case | Result |
 |---|---|---|
 | E01 | M5 regime: NRTR + confirmed structure → BULL/BEAR, else CHOP with the reason; M15 context | PASS |
-| E02 | Forecast: score = 2·higher + NRTR + body + EMA side; arrow at |score| ≥ 2; hit judged only at the next close; equal close = miss; newest arrow unresolved | PASS |
+| E02 | Forecast: score = 2·higher + NRTR + body + EMA side; below the threshold the tie-break (NRTR, body, previous) gives every candle an arrow; hit judged only at the next close; equal close = miss; newest arrow unresolved | PASS |
 | E03 | Auto lot: risk / loss-per-lot, floored to the step; min lot too risky → 0 (no trade); volMax clamp; silver tick value 5 | PASS |
 | E04 | Risk gate bits (real account, autotrading, spread, daily cap at and inside the limit, max open, max trades, session incl. overnight) | PASS |
 | E05 | Bearish QML on crafted bars: created on the neck-break close (never before), SELL LIMIT = left shoulder, SL = head + 0.2 ATR, TP1 1R / TP2 2R, keyed by head time; filled on the shoulder touch, reached TP1; a gap through shoulder and head = fill and stop on the same bar | PASS |
@@ -66,23 +64,18 @@ MetaEditor F7: NOT RUN (not available in the build environment)
 | A5 | Regime flip closes an open scalp against the new M5 regime on the next closed candle, logged with the reason | PASS |
 | A6 | Restart on the same day: same plans/signals, 378 panel + chart objects identical, no request sent, no duplicate orders afterwards | PASS |
 | A7 | Frozen feed: banner DATA STALE, nothing sent. EURUSD: nothing at all | PASS |
-| A8 | Arrows: one per forecast candle in the window + the live one (212 = 212); 50 candles later every past arrow unchanged; hit-rate row shows % and n | PASS |
+| A8 | Arrows: one per candle in the window + the wide white live one with its NEXT label (301 = 301), no candle without an arrow; 50 candles later every past arrow unchanged; hit-rate row shows % and n | PASS |
 | A9 | Panel: 16 rows (7 engine + 9 plan/scalp/risk), no key twice, every row has a value, single column under 500 px | PASS |
 | A10 | Silver (3 digits, tick value 5): SL/TP on the 0.001 grid, lots from the real tick value; with every order rejected: rejections logged, a rejected scalp is not re-sent for the same trigger | PASS |
 
-### Indicator (unchanged, still green)
-
-The 15 required cases of the learning panel are listed in the previous version of this file
-and still pass: engine 96 / 96, indicator 74 / 74.
-
 ## Manual checks in MT5 (10 minutes)
 
-1. **Compile:** MetaEditor → open each file → **F7**. Expect `0 errors, 0 warnings`.
+1. **Compile:** MetaEditor → open the file → **F7**. Expect `0 errors, 0 warnings`.
 2. **Demo guard:** attach the EA to XAUUSD M1 on a demo account: the price line shows `DEMO`
    and the `GATE` row `OPEN` (with Algo Trading on). On a real account the banner must read
    `REAL ACCOUNT - TRADING BLOCKED`.
 3. **Restart:** note the plan lines, the last scalp marker and the `RECORD` row; close and
    reopen MT5 the same day; they must be identical and no order must be duplicated.
-4. **Arrows:** watch one M1 candle close: the white live arrow must turn green or red and a
-   new white arrow must appear on the new candle.
+4. **Arrows:** watch one M1 candle close: the big white `NEXT` arrow must turn into a small
+   green or red one and a new white `NEXT` arrow must appear on the new candle.
 5. Optional: attach to EURUSD. It must show **GOLD / SILVER ONLY**.

@@ -435,7 +435,7 @@ int main()
       std::map<std::string, long long> before;
       int arrows = 0;
       for(auto &kv : SIM.objs)
-         if(kv.first.compare(0, 7, "NQEA_A_") == 0) { arrows++; before[kv.first] = kv.second.i[OBJPROP_ARROWCODE]; }
+         if(kv.first.compare(0, 7, "NQEA_A_") == 0 && kv.first != "NQEA_A_LIVE_T") { arrows++; before[kv.first] = kv.second.i[OBJPROP_ARROWCODE]; }
       int want = 0;
       int n = g_s1.n;
       for(int i = std::max(1, n - InpArrowBars); i < n; i++) if(g_s1.fc[i - 1] != 0) want++;
@@ -443,6 +443,11 @@ int main()
       std::printf("    %d arrows drawn (%d expected)\n", arrows, want);
       CHECK(arrows == want, "one arrow per forecast candle in the window + the live one");
       CHECK(SIM.objs.count("NQEA_A_LIVE") == (g_s1.fc[n - 1] != 0 ? 1u : 0u), "live arrow present exactly when there is a forecast");
+      CHECK(g_s1.fc[n - 1] != 0 && SIM.objs["NQEA_A_LIVE"].i[OBJPROP_WIDTH] == 3 && obj("NQEA_A_LIVE_T").find("NEXT") == 0,
+            "the live arrow is wide and carries a NEXT label");
+      int noArrow = 0;
+      for(int i = std::max(1, n - InpArrowBars); i < n; i++) if(g_s1.fc[i - 1] == 0) noArrow++;
+      CHECK(noArrow == 0, "every candle in the window has an arrow");
       run(START + 401, START + 450);
       int changed = 0, kept = 0;
       for(auto &kv : before)

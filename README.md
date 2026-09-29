@@ -1,19 +1,19 @@
-# NRTR Gold & Silver tools for MT5
+# NRTR QML Metal Scalper (MT5, Gold & Silver)
 
-Two standalone files for **XAUUSD / Gold** and **XAGUSD / Silver** only. Nothing else. No
-SignalMesh, no Telegram, no network, no DLLs, no files.
+One standalone Expert Advisor, `NRTR_QML_MetalScalper.mq5`, for **XAUUSD / Gold** and
+**XAGUSD / Silver** only. Nothing else. No SignalMesh, no Telegram, no network, no DLLs, no
+files. It replaces the earlier learning-panel indicator (removed from this repository; it is
+in the git history if ever needed). **Remove the old indicator from your chart**: the EA draws
+everything it drew and more, and two sets of labels only clutter the chart.
 
-| File | Type | What it does |
-|---|---|---|
-| `NRTR_QML_MetalScalper.mq5` | **Expert Advisor** (the final tool) | M15 context → M5 regime + structure → M1 trigger → risk engine → auto lot → MT5 **demo**. Auto scalps, places/cancels **QML** and **pullback** pending orders, draws a **forecast arrow on every candle**, one compact panel. |
-| `NRTR_BOSS_LearningPanel.mq5` | Indicator (learning tool, unchanged) | 15M boss / 5M trigger CLICK BUY / CLICK SELL panel. Never trades. |
-
-Both decide on **CLOSED candles only** and never repaint. Tests and exact results are in
-[TESTING.md](TESTING.md).
+M15 context → M5 regime + structure → M1 trigger → risk engine → auto lot → MT5 **demo**.
+Auto scalps, places/cancels **QML** and **pullback** pending orders, draws a **forecast arrow
+on every candle**, one compact panel. Decisions on **CLOSED candles only**, never repainted.
+Tests and exact results are in [TESTING.md](TESTING.md).
 
 ---
 
-## Install (EA)
+## Install
 
 1. MT5 → **File → Open Data Folder** → `MQL5/Experts/`. Copy `NRTR_QML_MetalScalper.mq5` there.
 2. MetaEditor → open → **F7**. Expect `0 errors`.
@@ -145,8 +145,12 @@ arrow UP if score >= 2, DOWN if <= -2, none if the votes split
 
 * On an M1 chart the higher vote is the M5 regime; on M5 it is the M15 context; on M15
   there is none.
-* **White arrow on the forming candle = the live forecast.** It is made at the previous
-  close and does not move until the candle closes.
+* When the votes split, the tie is broken by the candle's own NRTR, then its body, then the
+  previous arrow, so **every candle carries an arrow**. The panel says `tie-break` when that
+  happened; a tie-break arrow is weaker than a full-score one and is counted in the same
+  hit rate.
+* **The big white arrow with the `NEXT` label on the forming candle = the live forecast.**
+  It is made at the previous close and does not move until the candle closes.
 * When the candle closes, its arrow turns **green (hit)** or **red (miss)**: hit = the close
   went the forecast way; an unchanged close counts as a miss.
 * `NEXT M1 FORECAST` and `FORECAST HIT RATE` on the panel show the live arrow and the
@@ -186,9 +190,11 @@ Banner states: `SCALP BUY/SELL (AUTO|MANUAL)` · `BUY/SELL TRIGGER - BLOCKED` (g
 `WAIT - NO TRADE` · `DATA STALE / MARKET CLOSED` · `REAL ACCOUNT - TRADING BLOCKED` ·
 `GOLD / SILVER ONLY`.
 
-**On the chart:** forecast arrows (M1/M5/M15 charts), confirmed M5 `HH HL LH LL` labels,
-`▲ S` / `▼ S` scalp markers (hover for levels and outcome), the levels of the active scalp
-and of the latest QML (orange) and pullback (blue) plans.
+**On the chart (everything the EA draws, prefix `NQEA_`):** small green/red forecast arrows on
+past candles and the big white `NEXT` arrow on the forming one (M1/M5/M15 charts), confirmed
+M5 `HH HL LH LL` labels, `▲ S` / `▼ S` scalp markers (hover for levels and outcome), and the
+level lines of the active scalp and of the latest QML (orange) and pullback (blue) plans.
+Anything else on the chart comes from another indicator or template.
 
 ## Risk engine (nothing here is ever widened by the EA)
 
@@ -223,7 +229,7 @@ Every order is printed to the **Experts** log, e.g.
 | Plan lifetime | 72 M5 bars | |
 | Pullback retrace / min impulse / SL buffer | 50 % / 2 × ATR5 / 0.2 × ATR5 | |
 | Plan TP1 / TP2 | 1R / 2R | |
-| Forecast min score / arrows drawn | 2 / last 300 candles | |
+| Forecast votes before tie-break / arrows drawn | 1 / last 300 candles | |
 | History used | 8 days | |
 | Panel size / corner / X / Y | 1.0 / top-left / 12 / 24 | bottom-left is the other option |
 

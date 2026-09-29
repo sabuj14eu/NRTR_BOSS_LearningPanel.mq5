@@ -570,8 +570,11 @@ int NqRegimeDecision(int dir5, int st, int &reasons)
 
 //--- FORECAST for the next candle, made at the close of candle i.
 //    Votes: higher-TF (x2), own NRTR, close vs fast EMA, last body.
-//    fc = +1 UP / -1 DOWN / 0 no arrow. fcHit[i] is judged at close i+1
-//    against close[i+1] vs close[i]. An equal close counts as a miss.
+//    fc = +1 UP / -1 DOWN. When the votes split (|score| < minScore) the
+//    tie is broken by the own NRTR, then the candle body, then the previous
+//    forecast, so EVERY candle carries an arrow (fc = 0 only before any
+//    information exists). fcHit[i] is judged at close i+1 against
+//    close[i+1] vs close[i]. An equal close counts as a miss.
 void NqForecastSeries(NqSeries &s, int minScore)
 {
    int n = s.n;
@@ -586,11 +589,16 @@ void NqForecastSeries(NqSeries &s, int minScore)
       if(s.emaF[i] > 0.0)
          score += NqSign(s.c[i], s.emaF[i]);
       s.fcScore[i] = score;
-      s.fc[i] = 0;
       if(score >= minScore)
          s.fc[i] = 1;
       else if(score <= -minScore)
          s.fc[i] = -1;
+      else if(s.dir[i] != 0)
+         s.fc[i] = s.dir[i];
+      else if(NqSign(s.c[i], s.o[i]) != 0)
+         s.fc[i] = NqSign(s.c[i], s.o[i]);
+      else
+         s.fc[i] = (i > 0) ? s.fc[i - 1] : 0;
       s.fcHit[i] = 0;
       if(i > 0 && s.fc[i - 1] != 0)
          s.fcHit[i - 1] = (NqSign(s.c[i], s.c[i - 1]) == s.fc[i - 1]) ? 1 : -1;
@@ -1580,7 +1588,7 @@ input bool           InpAllowRealAccount = false;       // Allow trading on a RE
 input int            InpMagic            = 180915;      // Magic number
 input int            InpSlippagePoints   = 20;          // Max slippage (points)
 input group "Forecast arrows"
-input int            InpForecastMinScore = 2;           // Score needed for an arrow (1-5)
+input int            InpForecastMinScore = 1;           // Votes needed before the tie-break (1-5)
 input int            InpArrowBars        = 300;         // Arrows drawn on the last N candles
 input group "Display"
 input double         InpPanelScale       = 1.0;         // Panel size (0.7 - 1.6)
@@ -1789,6 +1797,9 @@ void NqUpdate()
          g_seen5 = t5;
          g_seen1 = t1;
          NqRecompute();
+         // MT5 draws newer objects on top: recreate the panel after the
+         // chart objects so labels and arrows never cover it
+         ObjectsDeleteAll(0, NQ_PFX_P);
       }
    }
    NqReadAccount();
@@ -2413,7 +2424,7 @@ void NqText(string name, datetime t, double price, string txt, color clr, int si
    ObjectSetString(0, name, OBJPROP_TOOLTIP, tip);
 }
 
-void NqArrow(string name, datetime t, double price, int dir, color clr, string tip)
+void NqArrow(string name, datetime t, double price, int dir, color clr, int width, string tip)
 {
    if(ObjectFind(0, name) < 0)
       ObjectCreate(0, name, OBJ_ARROW, 0, t, price);
@@ -2422,7 +2433,7 @@ void NqArrow(string name, datetime t, double price, int dir, color clr, string t
    ObjectSetInteger(0, name, OBJPROP_ARROWCODE, (dir > 0) ? 233 : 234);
    ObjectSetInteger(0, name, OBJPROP_ANCHOR, (dir > 0) ? ANCHOR_TOP : ANCHOR_BOTTOM);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
    ObjectSetString(0, name, OBJPROP_TOOLTIP, tip);
@@ -2480,18 +2491,22 @@ void NqDrawArrowsFor(const NqSeries &s, string tfName)
       string tip = tfName + " forecast made " + TimeToString(s.t[i - 1] + s.sec, TIME_MINUTES) + ": " +
                    ((f > 0) ? "UP" : "DOWN") + " (score " + IntegerToString(s.fcScore[i - 1]) + ") - " +
                    ((hit > 0) ? "HIT" : ((hit < 0) ? "MISS" : "open"));
-      NqArrow(NQ_PFX_A + IntegerToString((long)s.t[i]), s.t[i], price, f, clr, tip);
+      NqArrow(NQ_PFX_A + IntegerToString((long)s.t[i]), s.t[i], price, f, clr, 1, tip);
    }
-   // the live arrow: forecast for the candle that is forming right now
+   // the live arrow: forecast for the candle that is forming right now,
+   // drawn big and white on the forming candle with a NEXT label
    int fl = s.fc[n - 1];
    if(fl != 0)
    {
       datetime tl = s.t[n - 1] + s.sec;
       double off = (s.atr[n - 1] > 0.0) ? s.atr[n - 1] * 0.25 : 0.0;
       double price = (fl > 0) ? s.l[n - 1] - off : s.h[n - 1] + off;
-      NqArrow(NQ_PFX_A + "LIVE", tl, price, fl, clrWhite,
-              "LIVE " + tfName + " forecast for the forming candle: " + ((fl > 0) ? "UP" : "DOWN") +
-              " (score " + IntegerToString(s.fcScore[n - 1]) + ")");
+      string tip = "LIVE " + tfName + " forecast for the forming candle: " + ((fl > 0) ? "UP" : "DOWN") +
+                   " (score " + IntegerToString(s.fcScore[n - 1]) + ")";
+      NqArrow(NQ_PFX_A + "LIVE", tl, price, fl, clrWhite, 3, tip);
+      double off2 = (s.atr[n - 1] > 0.0) ? s.atr[n - 1] * 1.2 : 0.0;
+      NqText(NQ_PFX_A + "LIVE_T", tl, (fl > 0) ? price - off2 : price + off2, "NEXT " + ((fl > 0) ? NqSymUp() : NqSymDown()),
+             clrWhite, 9, (fl > 0) ? ANCHOR_UPPER : ANCHOR_LOWER, tip);
    }
 }
 
@@ -2869,7 +2884,9 @@ void NqDrawPanel()
       else if(f < 0)
          fcT = NqSymDown() + " DOWN   (score " + IntegerToString(g_s1.fcScore[i1]) + ")";
       else
-         fcT = "NO ARROW   (score " + IntegerToString(g_s1.fcScore[i1]) + ", votes split)";
+         fcT = "NO ARROW YET   (no information)";
+      if(f != 0 && MathAbs(g_s1.fcScore[i1]) < InpForecastMinScore)
+         fcT = fcT + "  tie-break";
       fcC = NqDirColor(f);
    }
    NqRow("e6", kx, vx, yr, "NEXT M1 FORECAST", fcT, fcC, cKey, fs);
