@@ -59,16 +59,19 @@ def main() -> int:
         rhs = m.group(1).strip()
         if re.fullmatch(r"[0-9.]+", rhs):
             fails.append(f"literal lot size: req.volume = {rhs}")
-    # the real-account guard must be a default-off input
-    if not re.search(r"input\s+bool\s+InpAllowRealAccount\s*=\s*false", code):
-        fails.append("InpAllowRealAccount must default to false")
+    # the real-account switch must be an input, never a hard-coded constant
+    if not re.search(r"input\s+bool\s+InpAllowRealAccount\s*=\s*(true|false)", code):
+        fails.append("InpAllowRealAccount must be a bool input")
+    # the terminal's Algo Trading button must be honoured
+    if "TERMINAL_TRADE_ALLOWED" not in code or "MQL_TRADE_ALLOWED" not in code:
+        fails.append("Algo Trading switch (TERMINAL_TRADE_ALLOWED / MQL_TRADE_ALLOWED) not checked")
     if fails:
         for f in fails:
             print("  FAIL", f)
         print(f"EA SAFETY SCAN: FAIL ({len(fails)} problems)")
         return 1
     print(f"  checked {len(FORBIDDEN)} forbidden identifiers, {len(REQUIRED)} required guards, one OrderSend site")
-    print("EA SAFETY SCAN: PASS - no network/file/DLL calls; single audited order path; demo guard default-on")
+    print("EA SAFETY SCAN: PASS - no network/file/DLL calls; single audited order path; Algo Trading switch honoured")
     return 0
 
 

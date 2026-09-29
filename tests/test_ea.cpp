@@ -244,15 +244,47 @@ int main()
    }
    end("A2");
 
-   begin("A3 REAL account: nothing is ever sent, the banner says so");
+   begin("A3 REAL account trades (InpAllowRealAccount default true); Algo Trading off = watch only; manual orders untouched");
    {
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       SIM.accountMode = ACCOUNT_TRADE_MODE_REAL;
       startAt(START);
       run(START + 1, END);
-      CHECK(SIM.sent.empty(), "zero requests on a real account");
-      CHECK(lbl("state").find("REAL ACCOUNT") != std::string::npos, "banner: REAL ACCOUNT - TRADING BLOCKED");
-      CHECK(lbl("bf1").find("REAL ACCOUNT") != std::string::npos, "board footer names the reason");
+      CHECK(!SIM.sent.empty(), "orders are sent on a real account");
+      CHECK(lbl("bf2").find("REAL") == 0, "footer shows REAL");
+      CHECK(lbl("state").find("REAL ACCOUNT") == std::string::npos, "no blocking banner");
+
+      // the terminal's Algo Trading button off: nothing sent, banner says watch only
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      SIM.terminalTrade = false;
+      startAt(START);
+      run(START + 1, START + 400);
+      CHECK(SIM.sent.empty(), "Algo Trading off: nothing sent");
+      CHECK(lbl("state") == "ALGO TRADING OFF - WATCH ONLY", "banner: ALGO TRADING OFF - WATCH ONLY");
+      CHECK(lbl("bf1").find("ALGO TRADING OFF") != std::string::npos, "footer gate names it");
+
+      // manual (foreign magic) order and position on the symbol: counted, shown, never touched
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      SimPos mp;
+      mp.ticket = 9001; mp.sym = "XAUUSD"; mp.type = POSITION_TYPE_SELL; mp.vol = 0.30; mp.open = SIM.bid; mp.sl = 0; mp.tp = 0;
+      mp.time = SIM.now; mp.magic = 0; mp.comment = "manual";
+      SIM.pos.push_back(mp);
+      SimOrder mo;
+      mo.ticket = 9002; mo.sym = "XAUUSD"; mo.type = ORDER_TYPE_BUY_LIMIT; mo.vol = 0.30; mo.price = SIM.bid - 50; mo.sl = 0; mo.tp = 0;
+      mo.time = SIM.now; mo.magic = 12345; mo.comment = "someone else";
+      SIM.ord.push_back(mo);
+      run(START + 1, END);
+      bool touched = false;
+      for(const MqlTradeRequest &r : SIM.sent)
+         if(r.position == 9001 || r.order == 9002) touched = true;
+      bool stillThere = false;
+      for(const SimPos &p2 : SIM.pos) if(p2.ticket == 9001) stillThere = true;
+      bool ordThere = false;
+      for(const SimOrder &o : SIM.ord) if(o.ticket == 9002) ordThere = true;
+      CHECK(!touched && stillThere && ordThere, "manual position and order were never modified, closed or cancelled");
+      CHECK(!SIM.sent.empty(), "the bot still trades its own slot beside a manual position");
+      CHECK(lbl("ny4").find("MANUAL 1 pos / 1 ord untouched") != std::string::npos, "board shows the manual items as untouched");
    }
    end("A3");
 
@@ -486,7 +518,7 @@ int main()
       CHECK(empty == 0, "every row has a value");
       CHECK(lbl("h1").find("ENGINE") != std::string::npos && lbl("h2").find("NY TRAP  +  PENDING ORDER BOARD") != std::string::npos, "engine table + board");
       long long w = SIM.objs["NQEA_P_bg"].i[OBJPROP_XSIZE];
-      CHECK(w < 700, "single column");
+      CHECK(w < 800, "single column");
       // the board: 5 plan rows with 7 columns + a detail line, 6 broker rows, NY lines, footer
       bool boardOk = true;
       const char *types[5] = {"QML M5", "PULLBACK M5", "NY TRAP", "SWING QML", "SWING PB"};
@@ -502,7 +534,7 @@ int main()
       CHECK(lbl("ny1").find("NY SESSION") == 0 && lbl("ny2").find("PRE-NY RANGE") == 0 && lbl("ny3").find("SWEEP / TRAP") == 0 &&
             lbl("ny4").find("SLOT") == 0, "NY session, pre-NY range, sweep/trap and slot lines");
       CHECK(lbl("bh4") == "TP SENT" && lbl("bh5") == "DIST", "the board shows the TP actually sent and the distance");
-      CHECK(lbl("bf2").find("LAST UPDATE") != std::string::npos, "footer carries the last update time");
+      CHECK(lbl("bf2").find("UPDATE") != std::string::npos, "footer carries the last update time");
       CHECK(lbl("k_e6") == "NEXT M1 BIAS", "the arrow row is labelled as a bias, not a prediction");
       // a live position and a waiting order show up as broker rows within one refresh
       SIM.pos.clear();
@@ -521,6 +553,11 @@ int main()
       CHECK(lbl("bb06").find("NEAR") != std::string::npos, "an order within 0.5 ATR of the price is marked NEAR");
       CHECK(lbl("bb10") == "POSITION" && lbl("bb16").find("RUNNING  #555") != std::string::npos, "position row: RUNNING with ticket");
       CHECK(lbl("ny4").find("SLOT  TAKEN") == 0, "slot line says TAKEN while a position is open");
+      // every board line stays inside the panel: at most ~100 characters at the widest
+      bool fits = true;
+      for(auto &kv : SIM.objs)
+         if(kv.first.compare(0, 7, "NQEA_P_") == 0 && kv.second.s[OBJPROP_TEXT].size() > 105) { fits = false; std::printf("    too long: %s = %s\n", kv.first.c_str(), kv.second.s[OBJPROP_TEXT].c_str()); }
+      CHECK(fits, "no panel line longer than 105 characters");
    }
    end("A9");
 

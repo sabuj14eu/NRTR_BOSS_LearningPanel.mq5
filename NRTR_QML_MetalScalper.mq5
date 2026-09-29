@@ -28,7 +28,7 @@
 #property version     "1.00"
 #property description "Gold/Silver: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback pending-order plans + per-candle forecast arrows."
-#property description "Trades on DEMO accounts only unless InpAllowRealAccount is set."
+#property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
 #property strict
 
 //=== NB_ENGINE_BEGIN ===
@@ -1703,17 +1703,17 @@ string NqGateName(int bit)
 {
    switch(bit)
    {
-      case NQ_K_REAL_ACCOUNT:   return "REAL ACCOUNT - BLOCKED (demo only)";
-      case NQ_K_TRADE_DISABLED: return "AUTOTRADING OFF IN TERMINAL / EA";
-      case NQ_K_AUTO_OFF:       return "AUTO TRADE SWITCHED OFF";
-      case NQ_K_DAILY_CAP:      return "DAILY LOSS CAP HIT - NO NEW TRADES";
-      case NQ_K_MAX_TRADES:     return "MAX TRADES FOR TODAY REACHED";
-      case NQ_K_MAX_POS:        return "MAX OPEN POSITIONS REACHED";
-      case NQ_K_SESSION:        return "OUTSIDE TRADING SESSION";
+      case NQ_K_REAL_ACCOUNT:   return "REAL ACCOUNT NOT ALLOWED";
+      case NQ_K_TRADE_DISABLED: return "ALGO TRADING OFF";
+      case NQ_K_AUTO_OFF:       return "AUTO TRADE OFF";
+      case NQ_K_DAILY_CAP:      return "DAILY LOSS CAP HIT";
+      case NQ_K_MAX_TRADES:     return "MAX TRADES TODAY";
+      case NQ_K_MAX_POS:        return "MAX POSITIONS";
+      case NQ_K_SESSION:        return "OUTSIDE SESSION";
       case NQ_K_SPREAD:         return "SPREAD TOO WIDE";
-      case NQ_K_STOPS_LEVEL:    return "SL/TP INSIDE BROKER STOPS LEVEL";
-      case NQ_K_LOT_TOO_SMALL:  return "MIN LOT RISKS MORE THAN ALLOWED";
-      case NQ_K_MARGIN:         return "NOT ENOUGH FREE MARGIN";
+      case NQ_K_STOPS_LEVEL:    return "SL/TP INSIDE STOPS LEVEL";
+      case NQ_K_LOT_TOO_SMALL:  return "MIN LOT RISKS TOO MUCH";
+      case NQ_K_MARGIN:         return "NO FREE MARGIN";
    }
    return "";
 }
@@ -1846,13 +1846,13 @@ input int            InpSwingValidBars   = 96;          // Swing plan lifetime (
 input double         InpNearAtr          = 0.5;         // "NEAR" when the price is within x ATR5 of a limit
 input group "Risk engine (explicit - the EA never widens these)"
 input double         InpRiskPct          = 0.5;         // Risk per trade (% of balance)
-input double         InpDailyLossCapPct  = 2.0;         // Daily loss cap (% of balance) - stops new trades
+input double         InpDailyLossCapPct  = 2.0;         // Daily loss cap (% of balance) stops new trades; 0 = off
 input int            InpMaxOpenPositions = 1;           // Max open positions (ONE SLOT per asset is enforced regardless)
-input int            InpMaxTradesPerDay  = 10;          // Max entries per day
+input int            InpMaxTradesPerDay  = 0;           // Max entries per day (0 = unlimited)
 input int            InpMaxSpreadPoints  = 50;          // Max spread (points)
-input int            InpSessionStartHour = 0;           // Session start (server hour)
+input int            InpSessionStartHour = 0;           // Session start (server hour); 0-24 = trade round the clock
 input int            InpSessionEndHour   = 24;          // Session end (server hour)
-input bool           InpAllowRealAccount = false;       // Allow trading on a REAL account (default: demo only)
+input bool           InpAllowRealAccount = true;        // Trade on a REAL account (false = demo only). The MT5 Algo Trading button is the on/off switch
 input int            InpMagic            = 180915;      // Magic number
 input int            InpSlippagePoints   = 20;          // Max slippage (points)
 input group "Forecast arrows"
@@ -1909,6 +1909,8 @@ int      g_dataR;
 bool     g_newBar1;
 
 // account view (this EA's magic, this symbol)
+int      g_manualPos;   // positions / orders on this symbol that are NOT this EA's: never touched
+int      g_manualOrd;
 int      g_openCount;
 double   g_floating;
 int      g_scalpCount;
@@ -2298,6 +2300,8 @@ void NqReadAccount()
    g_openCount = 0;
    g_floating = 0.0;
    g_scalpCount = 0;
+   g_manualPos = 0;
+   g_manualOrd = 0;
    g_posText = "";
    int total = PositionsTotal();
    for(int i = 0; i < total; i++)
@@ -2306,7 +2310,11 @@ void NqReadAccount()
       if(tk == 0)
          continue;
       if(!NqIsOurs(PositionGetInteger(POSITION_MAGIC), PositionGetString(POSITION_SYMBOL)))
+      {
+         if(PositionGetString(POSITION_SYMBOL) == g_sym)
+            g_manualPos++;
          continue;
+      }
       g_openCount++;
       double pr = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
       g_floating += pr;
@@ -2332,7 +2340,11 @@ void NqReadAccount()
       if(tk == 0)
          continue;
       if(!NqIsOurs(OrderGetInteger(ORDER_MAGIC), OrderGetString(ORDER_SYMBOL)))
+      {
+         if(OrderGetString(ORDER_SYMBOL) == g_sym)
+            g_manualOrd++;
          continue;
+      }
       g_pendCount++;
       string cmt = OrderGetString(ORDER_COMMENT);
       string kind = NqKindOfComment(cmt);
@@ -3161,7 +3173,7 @@ string NqMoney(double v)
 void NqDrawPanel()
 {
    double sc = MathMax(0.7, MathMin(1.6, InpPanelScale));
-   int W = (int)MathRound(640 * sc);
+   int W = (int)MathRound(790 * sc);
    int rh = (int)MathRound(17 * sc);
    int pad = (int)MathRound(10 * sc);
    int fs = (int)MathRound(9 * sc);
@@ -3228,6 +3240,11 @@ void NqDrawPanel()
    else if((g_gate & NQ_K_REAL_ACCOUNT) != 0)
    {
       st = "!  REAL ACCOUNT - TRADING BLOCKED";
+      bc = cBlock;
+   }
+   else if((g_gate & NQ_K_TRADE_DISABLED) != 0)
+   {
+      st = "ALGO TRADING OFF - WATCH ONLY";
       bc = cBlock;
    }
    else if(!g_fresh && ok)
@@ -3379,7 +3396,7 @@ void NqDrawPanel()
 
    // ---------------- BOTTOM: NY TRAP + PENDING ORDER BOARD ----------------
    NqRect("t2", tx, y, TW, tBotH, cTbl, cDim);
-   NqLabel("h2", kx, y + 3, "NY TRAP  +  PENDING ORDER BOARD   (live, refreshes every second)", cMetal, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
+   NqLabel("h2", kx, y + 3, "NY TRAP  +  PENDING ORDER BOARD   (live, every second)", cMetal, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
    yr = y + rh + 3;
    int n5 = ok ? g_s5.n : 0;
    double atr5 = (ok && n5 > 0) ? g_s5.atr[n5 - 1] : 0.0;
@@ -3389,40 +3406,39 @@ void NqDrawPanel()
    bool nyNow = (nowMod >= nyStart && nowMod < nyEnd);
    string hhmmS = IntegerToString(InpNyStartHour, 2, '0') + ":" + IntegerToString(InpNyStartMin, 2, '0');
    string hhmmE = IntegerToString(InpNyEndHour, 2, '0') + ":" + IntegerToString(InpNyEndMin, 2, '0');
-   string nyT = "NY SESSION  " + hhmmS + "-" + hhmmE + " server   ";
+   string nyT = "NY SESSION  " + hhmmS + "-" + hhmmE + "  ";
    if(nyNow)
       nyT = nyT + "INSIDE, " + NqHhMm((long)(nyEnd - nowMod) * 60) + " left";
    else if(nowMod < nyStart)
       nyT = nyT + "opens in " + NqHhMm((long)(nyStart - nowMod) * 60);
    else
-      nyT = nyT + "closed for today";
+      nyT = nyT + "closed today";
    bool sameDay = ok && g_nyState.day == NqDayOf(nowS);
    if(sameDay && g_nyState.nyOk)
       nyT = nyT + "   NY range " + NqPx(g_nyState.nyLo) + " - " + NqPx(g_nyState.nyHi);
    NqLabel("ny1", kx, yr, nyT, cVal, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
    yr += rh;
-   string preT = "PRE-NY RANGE  ";
+   string preT = "PRE-NY RANGE  " + IntegerToString(InpRangeStartHour, 2, '0') + ":00-" + hhmmS + "  ";
    if(sameDay && g_nyState.preOk)
-      preT = preT + "high " + NqPx(g_nyState.preHi) + "   low " + NqPx(g_nyState.preLo) + "   (" +
-             IntegerToString(InpRangeStartHour, 2, '0') + ":00 - " + hhmmS + ")";
+      preT = preT + "high " + NqPx(g_nyState.preHi) + "   low " + NqPx(g_nyState.preLo);
    else
-      preT = preT + "not built yet today";
+      preT = preT + "not built yet";
    NqLabel("ny2", kx, yr, preT, cVal, fs, "Arial", ANCHOR_LEFT_UPPER);
    yr += rh;
    string sw = "SWEEP / TRAP  ";
    color swC = cDim;
    if(sameDay && g_nyState.preOk)
    {
-      string hi = "HIGH side " + NqNyStateText(g_nyState.stBull);
+      string hi = "HIGH: " + NqNyStateText(g_nyState.stBull);
       if(g_nyState.stBull >= NQ_NY_SWEPT && g_nyState.stBull != NQ_NY_DONE)
          hi = hi + " " + NqPx(g_nyState.sweepHi);
       if(g_nyState.stBull >= NQ_NY_RETURNED && g_nyState.stBull != NQ_NY_DONE)
-         hi = hi + " (close back " + NqPx(g_nyState.retCloseHi) + ")";
-      string lo = "LOW side " + NqNyStateText(g_nyState.stBear);
+         hi = hi + " (close " + NqPx(g_nyState.retCloseHi) + ")";
+      string lo = "LOW: " + NqNyStateText(g_nyState.stBear);
       if(g_nyState.stBear >= NQ_NY_SWEPT && g_nyState.stBear != NQ_NY_DONE)
          lo = lo + " " + NqPx(g_nyState.sweepLo);
       if(g_nyState.stBear >= NQ_NY_RETURNED && g_nyState.stBear != NQ_NY_DONE)
-         lo = lo + " (close back " + NqPx(g_nyState.retCloseLo) + ")";
+         lo = lo + " (close " + NqPx(g_nyState.retCloseLo) + ")";
       sw = sw + hi + "   |   " + lo;
       swC = (g_nyState.stBull == NQ_NY_CONFIRMED || g_nyState.stBear == NQ_NY_CONFIRMED) ? cWait : cVal;
    }
@@ -3434,7 +3450,7 @@ void NqDrawPanel()
    color actC = cWait;
    if(g_openCount > 0)
    {
-      act = act + "TAKEN - " + g_posText + "   (waiting orders are cancelled until it closes)";
+      act = act + "TAKEN  " + g_posText + "   (orders wait until it closes)";
       actC = cVal;
    }
    else
@@ -3446,22 +3462,23 @@ void NqDrawPanel()
          if(NqSlotPlan(q, pl) && pl.status == NQ_PL_ACTIVE && NqKindEnabled(pl))
             armed++;
       }
-      act = act + "FREE   " + IntegerToString(armed) + " plan(s) armed, " + IntegerToString(g_pendCount) +
-            " waiting at the broker - the first fill takes the slot" +
-            ((InpScalpAuto && g_pendCount == 0) ? "; scalp may fire" : "");
+      act = act + "FREE  " + IntegerToString(armed) + " armed, " + IntegerToString(g_pendCount) +
+            " waiting - the first fill takes it" + ((InpScalpAuto && g_pendCount == 0) ? ", scalp may fire" : "");
       actC = (armed > 0) ? cUp : cWait;
    }
+   if(g_manualPos + g_manualOrd > 0)
+      act = act + "   MANUAL " + IntegerToString(g_manualPos) + " pos / " + IntegerToString(g_manualOrd) + " ord untouched";
    NqLabel("ny4", kx, yr, act, actC, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
    yr += rh + 2;
 
    // column header
    int cx0 = kx;
-   int cx1 = tx + (int)MathRound(86 * sc);
-   int cx2 = tx + (int)MathRound(160 * sc);
-   int cx3 = tx + (int)MathRound(236 * sc);
-   int cx4 = tx + (int)MathRound(312 * sc);
-   int cx5 = tx + (int)MathRound(388 * sc);
-   int cx6 = tx + (int)MathRound(446 * sc);
+   int cx1 = tx + (int)MathRound(96 * sc);
+   int cx2 = tx + (int)MathRound(172 * sc);
+   int cx3 = tx + (int)MathRound(254 * sc);
+   int cx4 = tx + (int)MathRound(336 * sc);
+   int cx5 = tx + (int)MathRound(418 * sc);
+   int cx6 = tx + (int)MathRound(486 * sc);
    NqLabel("bh0", cx0, yr, "TYPE", cKey, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
    NqLabel("bh1", cx1, yr, "SIDE", cKey, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
    NqLabel("bh2", cx2, yr, "ENTRY", cKey, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
@@ -3518,7 +3535,7 @@ void NqDrawPanel()
          {
             cSt = cWait;
             if(!autoPlan)
-               stT = "ARMED - " + NqPlanKindText(pl.kind) + " trading switched off";
+               stT = "ARMED - " + NqPlanKindText(pl.kind) + " off";
             else
             {
                if(NqPlanHasPosition(pl))
@@ -3540,7 +3557,7 @@ void NqDrawPanel()
                      cSt = cBlock;
                   }
                   else if(!InpPendingAuto)
-                     stT = "ARMED - auto pending off, place it yourself";
+                     stT = "ARMED - auto pending off";
                   else if(g_openCount > 0)
                      stT = "ARMED - slot taken";
                   else if(g_gate != 0)
@@ -3549,12 +3566,12 @@ void NqDrawPanel()
                      cSt = cBlock;
                   }
                   else if(dist < 0.0)
-                     stT = "ARMED - price already past the level";
+                     stT = "ARMED - price past level";
                   else
-                     stT = "WAITING (placed at the next M1 close)";
+                     stT = "WAITING (next M1 close)";
                }
             }
-            stT = stT + "   exp " + NqHhMm(expSec);
+            stT = stT + "  exp " + NqHhMm(expSec);
          }
          else if(pl.status == NQ_PL_FILLED)
          {
@@ -3567,16 +3584,15 @@ void NqDrawPanel()
             cSt = (pl.status == NQ_PL_TP1) ? cUp : ((pl.status == NQ_PL_SL) ? cDn : cVal);
          }
          string when = TimeToString(tPlan + secP, TIME_MINUTES);
+         string tps = "  R " + NqPx(pl.risk) + "  TP1 " + NqPx(pl.tp1) + "  TP2 " + NqPx(pl.tp2) + (InpPlanUseTp2 ? "  (TP2 sent)" : "  (TP1 sent)");
          if(kind == NQ_PLAN_QML)
-            det = "head " + NqPx(pl.lvlB) + "   neck " + NqPx(pl.lvlA) + "   break close " + NqPx(useM5 ? g_s5.c[pl.idx] : g_s15r.c[pl.idx]) +
-                  " at " + when + "   R " + NqPx(pl.risk) + "   TP1 " + NqPx(pl.tp1) + "  TP2 " + NqPx(pl.tp2);
+            det = "head " + NqPx(pl.lvlB) + "  neck " + NqPx(pl.lvlA) + "  break " + NqPx(useM5 ? g_s5.c[pl.idx] : g_s15r.c[pl.idx]) +
+                  " @" + when + tps;
          else if(kind == NQ_PLAN_PB)
-            det = "leg " + NqPx(pl.lvlA) + " " + NqSymArrow() + " " + NqPx(pl.lvlB) + "   " + DoubleToString(InpPbRetrace * 100.0, 0) +
-                  "% retrace at " + when + "   R " + NqPx(pl.risk) + "   TP1 " + NqPx(pl.tp1) + "  TP2 " + NqPx(pl.tp2);
+            det = "leg " + NqPx(pl.lvlA) + NqSymArrow() + NqPx(pl.lvlB) + "  " + DoubleToString(InpPbRetrace * 100.0, 0) +
+                  "% retrace @" + when + tps;
          else
-            det = "pre-NY level " + NqPx(pl.lvlA) + " swept to " + NqPx(pl.lvlB) + "   confirmed at " + when +
-                  "   R " + NqPx(pl.risk) + "   TP2 " + NqPx(pl.tp2);
-         det = det + (InpPlanUseTp2 ? "   (sends TP2)" : "   (sends TP1)");
+            det = "level " + NqPx(pl.lvlA) + " swept to " + NqPx(pl.lvlB) + "  confirmed @" + when + tps;
       }
       NqLabel(id + "0", cx0, yr, typ, cKey, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
       NqLabel(id + "1", cx1, yr, side, cRow, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
@@ -3612,8 +3628,8 @@ void NqDrawPanel()
       NqLabel(id + "3", cx3, yr, NqPx(OrderGetDouble(ORDER_SL)), cDn, fs, "Arial", ANCHOR_LEFT_UPPER);
       NqLabel(id + "4", cx4, yr, NqPx(OrderGetDouble(ORDER_TP)), cUp, fs, "Arial", ANCHOR_LEFT_UPPER);
       NqLabel(id + "5", cx5, yr, (atr5 > 0.0) ? (DoubleToString(dist, 2) + " ATR") : "-", cVal, fs, "Arial", ANCHOR_LEFT_UPPER);
-      NqLabel(id + "6", cx6, yr, "#" + IntegerToString((long)tk) + "  " + kindT + "  " + DoubleToString(OrderGetDouble(ORDER_VOLUME_CURRENT), 2) +
-              " lots  age " + NqHhMm(age) + ((atr5 > 0.0 && dist >= 0.0 && dist <= InpNearAtr) ? "  NEAR" : ""), cVal, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
+      NqLabel(id + "6", cx6, yr, "#" + IntegerToString((long)tk) + " " + kindT + " " + DoubleToString(OrderGetDouble(ORDER_VOLUME_CURRENT), 2) +
+              " lot  " + NqHhMm(age) + ((atr5 > 0.0 && dist >= 0.0 && dist <= InpNearAtr) ? "  NEAR" : ""), cVal, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
       yr += rh;
       shown++;
    }
@@ -3636,8 +3652,8 @@ void NqDrawPanel()
       NqLabel(id + "3", cx3, yr, NqPx(PositionGetDouble(POSITION_SL)), cDn, fs, "Arial", ANCHOR_LEFT_UPPER);
       NqLabel(id + "4", cx4, yr, NqPx(PositionGetDouble(POSITION_TP)), cUp, fs, "Arial", ANCHOR_LEFT_UPPER);
       NqLabel(id + "5", cx5, yr, NqMoney(pr), (pr >= 0.0) ? cUp : cDn, fs, "Arial", ANCHOR_LEFT_UPPER);
-      NqLabel(id + "6", cx6, yr, "RUNNING  #" + IntegerToString((long)tk) + "  " + kindT + "  " + DoubleToString(PositionGetDouble(POSITION_VOLUME), 2) +
-              " lots  age " + NqHhMm(age), cUp, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
+      NqLabel(id + "6", cx6, yr, "RUNNING  #" + IntegerToString((long)tk) + " " + kindT + " " + DoubleToString(PositionGetDouble(POSITION_VOLUME), 2) +
+              " lot  " + NqHhMm(age), cUp, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
       yr += rh;
       shown++;
    }
@@ -3673,19 +3689,19 @@ void NqDrawPanel()
             cSl++;
       }
    }
-   string gateT = (g_gate == 0) ? "GATE OPEN" : NqGateAt(g_gate, 0);
-   NqLabel("bf1", kx, yr, "BROKER ORDERS " + IntegerToString(g_pendCount) + "   POSITIONS " + IntegerToString(g_openCount) +
-           "   TODAY M5 PLANS: cancelled " + IntegerToString(cCan) + "  expired " + IntegerToString(cExp) + "  TP1 " +
+   string gateT = (g_gate == 0) ? "GATE OPEN" : ("GATE: " + NqGateAt(g_gate, 0));
+   NqLabel("bf1", kx, yr, "ORDERS " + IntegerToString(g_pendCount) + "  POSITIONS " + IntegerToString(g_openCount) +
+           "  TODAY M5: cancelled " + IntegerToString(cCan) + "  expired " + IntegerToString(cExp) + "  TP1 " +
            IntegerToString(cTp) + "  SL " + IntegerToString(cSl) + "   " + gateT, (g_gate == 0) ? cVal : cBlock, fsH, "Arial Bold", ANCHOR_LEFT_UPPER);
    yr += rh;
    string accT = g_isDemo ? "DEMO" : "REAL";
-   NqLabel("bf2", kx, yr, accT + "  " + g_accCcy + "  balance " + DoubleToString(g_balance, 2) +
-           "   risk " + DoubleToString(InpRiskPct, 2) + "% = " + DoubleToString(g_riskMoney, 2) + "   today " + NqMoney(g_dayPnl) +
-           " closed, " + NqMoney(g_floating) + " open   cap -" + DoubleToString(g_capMoney, 2) + "   scalp " +
-           (InpScalpAuto ? "AUTO" : "off") + "   LAST UPDATE " + TimeToString(nowS, TIME_SECONDS), cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
+   NqLabel("bf2", kx, yr, accT + " " + g_accCcy + "  bal " + DoubleToString(g_balance, 2) +
+           "  risk " + DoubleToString(InpRiskPct, 2) + "%=" + DoubleToString(g_riskMoney, 2) + "  day " + DoubleToString(g_dayPnl, 2) +
+           "/" + DoubleToString(g_floating, 2) + "  cap " + ((g_capMoney > 0.0) ? ("-" + DoubleToString(g_capMoney, 2)) : "off") +
+           "  scalp " + (InpScalpAuto ? "auto" : "off") + "  UPDATE " + TimeToString(nowS, TIME_SECONDS), cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
    y += tBotH + 4;
 
-   NqLabel("f1", ox + pad, y, "Closed candles only. One slot per asset. Bias arrows are a vote, judge the hit rate. Last: " + g_lastTrade,
+   NqLabel("f1", ox + pad, y, "Closed candles only. One slot per asset. Only this EA's orders are touched. Last: " + g_lastTrade,
            cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
 }
 //+------------------------------------------------------------------+

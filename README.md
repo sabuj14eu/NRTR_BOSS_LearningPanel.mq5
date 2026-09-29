@@ -29,9 +29,8 @@ Decisions on **CLOSED candles only**, never repainted. Tests and exact results a
 3. Open an **XAUUSD M1** or **XAGUSD M1** chart (M5 or M15 also work; arrows are drawn only on
    M1/M5/M15 charts). Drag the EA on. Tick **Allow Algo Trading** in the dialog and the
    **Algo Trading** button in the toolbar.
-4. The account must be a **DEMO** account. On a real account the EA shows
-   **REAL ACCOUNT - TRADING BLOCKED** and sends nothing, unless you set
-   `InpAllowRealAccount = true` yourself.
+4. The **Algo Trading** button in the toolbar is the on/off switch. Green = the bot trades
+   (real or demo); off = watch only.
 
 On any other symbol the panel shows **GOLD / SILVER ONLY** and does nothing.
 
@@ -222,8 +221,8 @@ Status vocabulary: `WAITING` (placed at the next M1 close) · `PLACED #ticket` �
 past the level` / `ARMED - <kind> trading switched off`.
 
 Banner states: `SCALP BUY/SELL (AUTO|MANUAL)` · `BUY/SELL TRIGGER - BLOCKED` (gate) ·
-`WAIT - NO TRADE` · `DATA STALE / MARKET CLOSED` · `REAL ACCOUNT - TRADING BLOCKED` ·
-`GOLD / SILVER ONLY`.
+`WAIT - NO TRADE` · `DATA STALE / MARKET CLOSED` · `ALGO TRADING OFF - WATCH ONLY` ·
+`REAL ACCOUNT - TRADING BLOCKED` (only if you set `InpAllowRealAccount = false`) · `GOLD / SILVER ONLY`.
 
 **On the chart (everything the EA draws, prefix `NQEA_`):** small green/red bias arrows on
 past candles and the big white `NEXT` arrow on the forming one (M1/M5/M15 charts), confirmed
@@ -236,12 +235,12 @@ level lines of the active scalp, the latest QML (orange), pullback (blue) and NY
 | Input | Default | |
 |---|---|---|
 | `InpRiskPct` | 0.5 % | of balance per trade; hard-capped at 5 % in `OnInit` |
-| `InpDailyLossCapPct` | 2 % | closed + open result today ≤ −cap → no new entries (closing still works) |
+| `InpDailyLossCapPct` | 2 % | closed + open result today ≤ −cap → no new entries (closing still works); 0 = off |
 | `InpMaxOpenPositions` | 1 | one slot per asset is enforced regardless of this value |
-| `InpMaxTradesPerDay` | 10 | entries per server day |
+| `InpMaxTradesPerDay` | 0 = unlimited | entries per server day |
 | `InpMaxSpreadPoints` | 50 | |
 | `InpSessionStartHour / EndHour` | 0 / 24 | server hours, overnight ranges allowed |
-| `InpAllowRealAccount` | **false** | the only way to trade on a real account |
+| `InpAllowRealAccount` | **true** | false restricts the EA to demo accounts |
 | `InpMagic` | 180915 | |
 
 Per order the EA also refuses (and says why) when the SL/TP sit inside the broker's stops
@@ -282,13 +281,30 @@ Every order is printed to the **Experts** log, e.g.
 * Trading happens once per closed M1 candle, never intra-bar. An old trigger is never
   re-fired after a restart: only the candle that just closed can open a scalp.
 
-## Live account
+## Live account and the on/off switch
 
-`InpAllowRealAccount` is the only switch. It defaults to **false**, so on a real account the
-EA draws everything and sends nothing until you set it to true yourself. Set it only after
-(1) F7 compiles with 0 errors, (2) the EA has run on a demo account long enough for the
-`RECORD` rows to show the plan record you are prepared to fund, and (3) you have read the
-risk inputs. The EA never widens a risk input on its own and every order is logged.
+The EA trades on **real and demo accounts alike** (`InpAllowRealAccount` defaults to true;
+set it to false to restrict it to demo). **The MT5 Algo Trading button is the switch**: green
+= the bot trades, off = the banner reads `ALGO TRADING OFF - WATCH ONLY`, everything is still
+computed and drawn, nothing is sent. No sleep: the session filter defaults to round the clock
+and the trades-per-day limit defaults to unlimited. The daily loss cap (2 % of balance) is the
+only limit left on by default; set `InpDailyLossCapPct = 0` to remove it. The EA never widens
+a risk input on its own and every order is logged. Before the first live day: F7 must compile
+with 0 errors and a demo run should show a plan record you are prepared to fund.
+
+## Only its own orders
+
+Everything the EA reads or changes is filtered by its magic number (`InpMagic`). A position
+or pending order you placed by hand, or one from another EA, is **never modified, closed or
+cancelled**, does not occupy the slot, and is listed on the SLOT line as
+`MANUAL n pos / n ord untouched` so you can see it is there.
+
+## Which sessions
+
+The QML, pullback, swing and scalp plans run in every session (Asia, London, New York) and
+the BROKER rows show every live order and position of this EA at any hour. Only the NY trap
+is session-bound: it needs a pre-NY range and the NY window. There is no Asia or London trap
+state machine.
 
 ## Honest limitations
 

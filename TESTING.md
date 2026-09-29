@@ -13,9 +13,9 @@ the build environment. The EA was therefore verified like this:
 
 1. **Safety scan** (`tests/check_safety_ea.py`): pure ASCII; none of 30 forbidden
    identifiers (network, files, DLLs, async/`CTrade` order paths, stop orders); the required
-   guards present (`ACCOUNT_TRADE_MODE_DEMO` check, `InpAllowRealAccount` defaulting to
-   `false`, `NqRiskGate`, `NqLotFor`); **exactly one `OrderSend` call site**; no literal lot
-   size anywhere.
+   guards present (`InpAllowRealAccount` as a bool input, the Algo Trading switch honoured,
+   `NqRiskGate`, `NqLotFor`); **exactly one `OrderSend` call site**; no literal lot size
+   anywhere.
 2. **Surrogate compile of the whole file.** `tests/mql2cpp.py` rewrites *syntax only*
    (`input` → `const`, `T &a[]` → `std::vector<T>&`, `#property` removed). The **real
    `.mq5` text** is compiled with `g++ -Wall -Wextra -Werror` against a simulated terminal
@@ -35,7 +35,7 @@ before relying on it.** If F7 reports anything, send the exact message.
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 EA ENGINE TESTS:  76 checks passed, 0 failed
-EA TESTS:         62 checks passed, 0 failed
+EA TESTS:         69 checks passed, 0 failed
 MetaEditor F7:    NOT RUN (not available in the build environment)
 ```
 
@@ -60,7 +60,7 @@ MetaEditor F7:    NOT RUN (not available in the build environment)
 |---|---|---|
 | A1 | Demo account: every scalp maps to an engine signal (side, SL, TP, magic, symbol); lot within the risk allowance; one order per signal; scalps are the lowest priority (none while a plan order waits); exits by SL/TP; engine table + board | PASS |
 | A2 | Plans over five days (49 limits placed, 5 filled; QML, pullback, NY trap and swing kinds all placed): each order matches an ACTIVE plan of an enabled kind (entry, SL, TP1, side); a plan never has two orders nor an order beside its own position (this caught a real bug); every order risks ≤ 0.5 % at the SL; **one slot**: never two positions and no waiting order while a position is open (caught a same-tick scalp-after-limit bug); fills at the plan entry with the plan's SL/TP carried into the position or its exit | PASS |
-| A3 | REAL account: zero requests; banner and board footer say so | PASS |
+| A3 | REAL account trades (default); Algo Trading off: nothing sent, banner `ALGO TRADING OFF - WATCH ONLY`; a manual position and a foreign-magic order on the symbol are never modified, closed or cancelled, do not block the bot, and are listed as untouched | PASS |
 | A4 | Daily loss cap: no new entries, a stale scalp still closed by the time stop; spread 500: no entries; terminal autotrading off: no entries | PASS |
 | A5 | Regime flip closes an open scalp against the new M5 regime on the next closed candle, logged with the reason | PASS |
 | A6 | Restart on the same day: same plans/signals, 378 panel + chart objects identical, no request sent, no duplicate orders afterwards | PASS |
@@ -72,9 +72,9 @@ MetaEditor F7:    NOT RUN (not available in the build environment)
 ## Manual checks in MT5 (10 minutes)
 
 1. **Compile:** MetaEditor → open the file → **F7**. Expect `0 errors, 0 warnings`.
-2. **Demo guard:** attach the EA to XAUUSD M1 on a demo account: the price line shows `DEMO`
-   and the `GATE` row `OPEN` (with Algo Trading on). On a real account the banner must read
-   `REAL ACCOUNT - TRADING BLOCKED`.
+2. **Switch:** attach the EA to XAUUSD M1; with Algo Trading off the banner must read
+   `ALGO TRADING OFF - WATCH ONLY` and nothing may be sent; turn it on and the footer must
+   read `GATE OPEN`.
 3. **Restart:** note the plan lines, the last scalp marker and the `RECORD` row; close and
    reopen MT5 the same day; they must be identical and no order must be duplicated.
 4. **Arrows:** watch one M1 candle close: the big white `NEXT` arrow must turn into a small
