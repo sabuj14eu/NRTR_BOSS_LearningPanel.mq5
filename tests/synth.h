@@ -27,7 +27,9 @@ struct Synth
 
 inline double snap(double p, double tick) { return std::round(p / tick) * tick; }
 
-inline std::vector<SBar> gen5m(uint64_t seed, int n, long long start, double price, double tick, double vol)
+// generic bar generator: `sec` seconds per bar, regimes of regMin..regMax bars
+inline std::vector<SBar> genBars(uint64_t seed, int n, long long start, double price, double tick, double vol,
+                                 int sec, int regMin, int regMax)
 {
    Synth s(seed);
    std::vector<SBar> v;
@@ -39,7 +41,7 @@ inline std::vector<SBar> gen5m(uint64_t seed, int n, long long start, double pri
    {
       if(left <= 0)
       {
-         left = 120 + (int)(s.uni() * 300);
+         left = regMin + (int)(s.uni() * (regMax - regMin));
          double r = s.uni();
          drift = (r < 0.4) ? vol * 0.35 : (r < 0.8 ? -vol * 0.35 : 0.0);
       }
@@ -48,10 +50,21 @@ inline std::vector<SBar> gen5m(uint64_t seed, int n, long long start, double pri
       double nc = snap(o + drift + vol * s.gauss(), tick);
       double h = snap(std::max(o, nc) + std::fabs(vol * 0.6 * s.gauss()), tick);
       double l = snap(std::min(o, nc) - std::fabs(vol * 0.6 * s.gauss()), tick);
-      v.push_back({start + (long long)i * 300, o, h, l, nc});
+      v.push_back({start + (long long)i * sec, o, h, l, nc});
       c = nc;
    }
    return v;
+}
+
+// the original 5M generator (unchanged sequence for the indicator tests)
+inline std::vector<SBar> gen5m(uint64_t seed, int n, long long start, double price, double tick, double vol)
+{
+   return genBars(seed, n, start, price, tick, vol, 300, 120, 420);
+}
+// 1M bars with regimes long enough to build M5 structure
+inline std::vector<SBar> gen1m(uint64_t seed, int n, long long start, double price, double tick, double vol)
+{
+   return genBars(seed, n, start, price, tick, vol, 60, 600, 2100);
 }
 
 inline std::vector<SBar> agg(const std::vector<SBar> &m5, int sec)
