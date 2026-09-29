@@ -61,7 +61,10 @@ Every "why not" is shown as text: `REASON:` under the banner, `M5 REGIME (…)`,
 ## 1. Auto scalp (market order on the M1 trigger, lowest priority)
 
 The scalp only fires when the slot is free **and no plan order is waiting at the broker**;
-structure plans come first. This is the trade in the picture (4155.59 → 4152.12 = +3.47 and so on): a small move in
+structure plans come first. The board's `SCALP M1` row is **always visible** with the levels a
+scalp would use right now (side from the M5 regime, live entry, SL, TP, lot) and either
+`TRIGGER NOW` or the exact `WAIT:` reason, so you can take it by hand at any time. This is the
+trade in the picture (4155.59 → 4152.12 = +3.47 and so on): a small move in
 the direction of the 5-minute regime, taken and closed within minutes.
 
 | | Rule | Default |
@@ -154,7 +157,28 @@ NO NY  ->  RANGE BUILDING  ->  SWEPT  ->  RETURNED INSIDE  ->  TRAP CONFIRMED  -
 * Filled orders are managed by their SL/TP only. `InpPlanUseTp2` sends TP2 instead of TP1;
   the board's **TP SENT** column always shows the TP that actually went to MT5.
 
-## 3. Forecast arrow on every candle
+## 3. Session levels, breakouts, VWAP (to read the day)
+
+Drawn on the chart and summarised on the board's `LEVELS` and `BREAK` lines, for the current
+server day:
+
+| Level | Window (server, EET broker defaults) | Line |
+|---|---|---|
+| PD HIGH / LOW | previous day's range | gold, active all day |
+| ASIA HIGH / LOW | 01:00-10:00 | teal |
+| LONDON HIGH / LOW | 10:00-NY open | blue |
+| PRE-NY HIGH / LOW | 00:00-NY open | grey |
+| NY HIGH / LOW | 16:30-23:00 | purple |
+| VWAP | from 00:00, typical price x tick volume | yellow polyline + label |
+
+A level is **dotted while its session is still building** and **solid once the session has
+ended** (only then can it be broken). A **BREAKOUT** mark is printed at the first M5 **close**
+above an active high; a **BREAKDOWN** at the first close below an active low; once per level
+per day. The `BREAK` line names the latest one with its time, the `LEVELS` line lists the
+prices (`*` = still building) and whether the price is above or below VWAP. These are for
+reading the day; they do not open trades by themselves.
+
+## 4. Forecast arrow on every candle
 
 Every candle carries an arrow with the forecast for the **next** candle, made at this
 candle's close:
@@ -198,7 +222,9 @@ arrow UP if score >= 2, DOWN if <= -2, none if the votes split
   NY SESSION  16:30-23:00 server   INSIDE, 2h18m left   NY range 4264.8 - 4291.3
   PRE-NY RANGE  high 4291.30   low 4264.80   (00:00 - 16:30)
   SWEEP / TRAP  HIGH side TRAP CONFIRMED 4296.50 (close back 4288.90)   |   LOW side RANGE BUILDING
-  SLOT  FREE   3 plan(s) armed, 2 waiting at the broker - the first fill takes the slot
+  SLOT  FREE  3 armed, 2 waiting - the first fill takes it
+  LEVELS  PD 4170.10/4120.50  ASIA 4145.20/4130.00  LON 4161.30/4128.40  VWAP 4150.20 (above)
+  BREAK  BREAKOUT above LONDON HIGH 4161.30 @15:10   before: breakdown ASIA LOW @09:40
   TYPE         SIDE      ENTRY     SL        TP SENT   DIST       STATUS
   QML M5       SELL LMT  4285.20   4297.80   4272.60   0.42 ATR   PLACED  #1234   exp 4h10m
                head 4302.10   neck 4288.40   break close 4286.90 at 15:05   R 12.60   TP1 4272.60  TP2 4260.00   (sends TP1)
@@ -207,7 +233,9 @@ arrow UP if score >= 2, DOWN if <= -2, none if the votes split
   NY TRAP      SELL LMT  4291.30   4298.00   4284.60   0.20 ATR   WAITING (placed at the next M1 close)   exp 2h18m
                pre-NY level 4291.30 swept to 4296.50   confirmed at 15:10   R 6.70   TP2 4277.90
   SWING QML    -         -         -         -         -          no setup yet
-  SWING PB     BUY LMT   4230.00   4212.00   4248.00   7.5 ATR    ARMED - SWING trading switched off
+  SWING PB     BUY LMT   4230.00   4212.00   4248.00   7.5 ATR    ARMED - SWING off
+  SCALP M1     BUY MKT   4154.15   4149.35   4157.35   live       WAIT: M1 AGAINST M5 REGIME
+               M1 NRTR BEARISH  regime BULLISH  ATR5 3.20  SL 1.5xATR  TP 1.0xATR  0.10 lot = 48.00 at SL  time stop 45 M1
   BROKER       SELL LMT  4285.20   4297.80   4272.60   0.42 ATR   #1234  QML  0.09 lots  age 0h25m
   BROKER       BUY LMT   4268.50   4258.20   4278.80   1.10 ATR   #1235  pullback  0.10 lots  age 1h02m  NEAR
   BROKER ORDERS 2   POSITIONS 0   TODAY M5 PLANS: cancelled 2  expired 1  TP1 3  SL 1   GATE OPEN
@@ -264,6 +292,8 @@ Every order is printed to the **Experts** log, e.g.
 | NY open / close / pre-range start | 16:30 / 23:00 / 00:00 server | EET broker = New York 09:30-16:00 |
 | Trade QML / pullback / NY trap / swing | on / on / on / on | each kind can be switched off |
 | NEAR distance | 0.5 ATR5 | |
+| Asia start / end, London start | 01 / 10 / 10 server hours | London ends at the NY open |
+| Draw levels | on | session highs/lows, previous day, VWAP, break marks |
 | Pullback retrace / min impulse / SL buffer | 50 % / 2 × ATR5 / 0.2 × ATR5 | |
 | Plan TP1 / TP2 | 1R / 2R | |
 | Forecast votes before tie-break / arrows drawn | 1 / last 300 candles | |

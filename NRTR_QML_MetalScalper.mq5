@@ -219,6 +219,7 @@ struct NqSeries
    double   h[];
    double   l[];
    double   c[];
+   double   v[];          // tick volume (VWAP)
    double   atr[];
    double   emaS[];
    double   emaF[];
@@ -254,6 +255,7 @@ void NqSeriesResize(NqSeries &s, int n)
    ArrayResize(s.h, n);
    ArrayResize(s.l, n);
    ArrayResize(s.c, n);
+   ArrayResize(s.v, n);
 }
 
 //--- price grid: round to the symbol's real tick size (mode -1 down, +1 up, 0 nearest)
@@ -1371,6 +1373,210 @@ void NqRunNyTrap(const NqSeries &s, const int &conf[], const NqParams &P, int ra
    }
 }
 
+//--- SESSION LEVELS + BREAKS on closed bars, for the current server day.
+//    Asia / London / pre-NY / NY highs and lows and the previous day's
+//    high and low. A level is ACTIVE once its session has ended (the
+//    previous day's levels all day). A CLOSE above an active high that
+//    the previous close was not above is a BREAKOUT; below an active low,
+//    a BREAKDOWN. First cross only, per level, per day.
+#define NQ_LV_PDH   0
+#define NQ_LV_PDL   1
+#define NQ_LV_ASH   2
+#define NQ_LV_ASL   3
+#define NQ_LV_LOH   4
+#define NQ_LV_LOL   5
+#define NQ_LV_PNH   6
+#define NQ_LV_PNL   7
+#define NQ_LV_NYH   8
+#define NQ_LV_NYL   9
+#define NQ_LV_COUNT 10
+#define NQ_BRK_MAX  12
+
+struct NqLevels
+{
+   int      day;
+   double   px[10];       // level prices, index NQ_LV_*
+   bool     ok[10];       // level exists
+   bool     act[10];      // level is active (its session ended / previous day)
+   bool     broken[10];   // already crossed today
+   datetime from[10];     // time the level became active (line start)
+};
+
+struct NqBreak
+{
+   int      level;        // NQ_LV_*
+   int      dir;          // +1 breakout above a high, -1 breakdown below a low
+   int      idx;          // bar of the close that crossed
+   double   close;
+};
+
+string NqLevelName(int lv)
+{
+   switch(lv)
+   {
+      case NQ_LV_PDH: return "PD HIGH";
+      case NQ_LV_PDL: return "PD LOW";
+      case NQ_LV_ASH: return "ASIA HIGH";
+      case NQ_LV_ASL: return "ASIA LOW";
+      case NQ_LV_LOH: return "LONDON HIGH";
+      case NQ_LV_LOL: return "LONDON LOW";
+      case NQ_LV_PNH: return "PRE-NY HIGH";
+      case NQ_LV_PNL: return "PRE-NY LOW";
+      case NQ_LV_NYH: return "NY HIGH";
+      case NQ_LV_NYL: return "NY LOW";
+   }
+   return "";
+}
+
+void NqLevelsReset(NqLevels &L, int day)
+{
+   L.day = day;
+   for(int i = 0; i < NQ_LV_COUNT; i++)
+   {
+      L.px[i] = 0.0;
+      L.ok[i] = false;
+      L.act[i] = false;
+      L.broken[i] = false;
+      L.from[i] = 0;
+   }
+}
+
+void NqLevelGrow(NqLevels &L, int hiIdx, int loIdx, double h, double l)
+{
+   if(!L.ok[hiIdx] || h > L.px[hiIdx])
+      L.px[hiIdx] = h;
+   if(!L.ok[loIdx] || l < L.px[loIdx])
+      L.px[loIdx] = l;
+   L.ok[hiIdx] = true;
+   L.ok[loIdx] = true;
+}
+
+void NqRunLevels(const NqSeries &s, int asiaS, int asiaE, int lonS, int lonE, int preS, int nyS, int nyE,
+                 NqLevels &L, NqBreak &brk[], int &nBrk)
+{
+   ArrayResize(brk, 0);
+   nBrk = 0;
+   NqLevelsReset(L, -1);
+   double dayHi = 0.0;
+   double dayLo = 0.0;
+   bool dayOk = false;
+   int n = s.n;
+   for(int t = 0; t < n; t++)
+   {
+      int day = NqDayOf(s.t[t]);
+      int mod = NqMinuteOfDay(s.t[t]);
+      if(day != L.day)
+      {
+         // roll the day: yesterday's range becomes today's PD levels
+         NqLevelsReset(L, day);
+         ArrayResize(brk, 0);
+         nBrk = 0;
+         if(dayOk)
+         {
+            L.px[NQ_LV_PDH] = dayHi;
+            L.px[NQ_LV_PDL] = dayLo;
+            L.ok[NQ_LV_PDH] = true;
+            L.ok[NQ_LV_PDL] = true;
+            L.act[NQ_LV_PDH] = true;
+            L.act[NQ_LV_PDL] = true;
+            L.from[NQ_LV_PDH] = s.t[t];
+            L.from[NQ_LV_PDL] = s.t[t];
+         }
+         dayOk = false;
+      }
+      if(!dayOk || s.h[t] > dayHi)
+         dayHi = s.h[t];
+      if(!dayOk || s.l[t] < dayLo)
+         dayLo = s.l[t];
+      dayOk = true;
+      // 1) breaks are judged BEFORE this bar can extend a level
+      for(int lv = 0; lv < NQ_LV_COUNT; lv++)
+      {
+         if(!L.act[lv] || L.broken[lv] || t == 0)
+            continue;
+         bool isHigh = (lv % 2 == 0);
+         bool cross = isHigh ? (s.c[t] > L.px[lv] && s.c[t - 1] <= L.px[lv]) : (s.c[t] < L.px[lv] && s.c[t - 1] >= L.px[lv]);
+         if(cross && nBrk < NQ_BRK_MAX)
+         {
+            ArrayResize(brk, nBrk + 1, 16);
+            brk[nBrk].level = lv;
+            brk[nBrk].dir = isHigh ? 1 : -1;
+            brk[nBrk].idx = t;
+            brk[nBrk].close = s.c[t];
+            nBrk++;
+            L.broken[lv] = true;
+         }
+      }
+      // 2) sessions grow while open and become active when they end
+      bool inAsia = (mod >= asiaS && mod < asiaE);
+      bool inLon = (mod >= lonS && mod < lonE);
+      bool inPre = (mod >= preS && mod < nyS);
+      bool inNy = (mod >= nyS && mod < nyE);
+      if(inAsia)
+         NqLevelGrow(L, NQ_LV_ASH, NQ_LV_ASL, s.h[t], s.l[t]);
+      else if(L.ok[NQ_LV_ASH] && !L.act[NQ_LV_ASH] && mod >= asiaE)
+      {
+         L.act[NQ_LV_ASH] = true;
+         L.act[NQ_LV_ASL] = true;
+         L.from[NQ_LV_ASH] = s.t[t];
+         L.from[NQ_LV_ASL] = s.t[t];
+      }
+      if(inLon)
+         NqLevelGrow(L, NQ_LV_LOH, NQ_LV_LOL, s.h[t], s.l[t]);
+      else if(L.ok[NQ_LV_LOH] && !L.act[NQ_LV_LOH] && mod >= lonE)
+      {
+         L.act[NQ_LV_LOH] = true;
+         L.act[NQ_LV_LOL] = true;
+         L.from[NQ_LV_LOH] = s.t[t];
+         L.from[NQ_LV_LOL] = s.t[t];
+      }
+      if(inPre)
+         NqLevelGrow(L, NQ_LV_PNH, NQ_LV_PNL, s.h[t], s.l[t]);
+      else if(L.ok[NQ_LV_PNH] && !L.act[NQ_LV_PNH] && mod >= nyS)
+      {
+         L.act[NQ_LV_PNH] = true;
+         L.act[NQ_LV_PNL] = true;
+         L.from[NQ_LV_PNH] = s.t[t];
+         L.from[NQ_LV_PNL] = s.t[t];
+      }
+      if(inNy)
+         NqLevelGrow(L, NQ_LV_NYH, NQ_LV_NYL, s.h[t], s.l[t]);
+      else if(L.ok[NQ_LV_NYH] && !L.act[NQ_LV_NYH] && mod >= nyE)
+      {
+         L.act[NQ_LV_NYH] = true;
+         L.act[NQ_LV_NYL] = true;
+         L.from[NQ_LV_NYH] = s.t[t];
+         L.from[NQ_LV_NYL] = s.t[t];
+      }
+   }
+}
+
+//--- day VWAP on closed bars: sum(typical x volume) / sum(volume) from the
+//    first bar of the server day. 0.0 before any volume.
+void NqCalcDayVwap(const NqSeries &s, double &vwap[])
+{
+   int n = s.n;
+   ArrayResize(vwap, n);
+   int day = -1;
+   double pv = 0.0;
+   double vv = 0.0;
+   for(int i = 0; i < n; i++)
+   {
+      int d = NqDayOf(s.t[i]);
+      if(d != day)
+      {
+         day = d;
+         pv = 0.0;
+         vv = 0.0;
+      }
+      double tp = (s.h[i] + s.l[i] + s.c[i]) / 3.0;
+      double vol = (s.v[i] > 0.0) ? s.v[i] : 1.0;
+      pv += tp * vol;
+      vv += vol;
+      vwap[i] = (vv > 0.0) ? pv / vv : 0.0;
+   }
+}
+
 string NqNyStateText(int st)
 {
    switch(st)
@@ -1842,6 +2048,10 @@ input int            InpNyStartMin       = 30;          // NY open, server minut
 input int            InpNyEndHour        = 23;          // NY close, server hour
 input int            InpNyEndMin         = 0;           // NY close, server minute
 input int            InpRangeStartHour   = 0;           // Pre-NY range starts at (server hour)
+input int            InpAsiaStartHour    = 1;           // Asia session start (server hour)   EET: 01:00
+input int            InpAsiaEndHour      = 10;          // Asia session end (server hour)     EET: 10:00 = London open
+input int            InpLondonStartHour  = 10;          // London session start (server hour); it ends at the NY open
+input bool           InpDrawLevels       = true;        // Draw session highs/lows, previous day, VWAP and break marks
 input int            InpSwingValidBars   = 96;          // Swing plan lifetime (M15 bars)  96 = 24 hours
 input double         InpNearAtr          = 0.5;         // "NEAR" when the price is within x ATR5 of a limit
 input group "Risk engine (explicit - the EA never widens these)"
@@ -1899,6 +2109,10 @@ int      g_nSwing;
 NqPlan   g_ny[];
 int      g_nNy;
 NqNyState g_nyState;
+NqLevels g_levels;
+NqBreak  g_brk[];
+int      g_nBrk;
+double   g_vwap1[];    // day VWAP per closed M1 bar
 string   g_rejCmt;     // last rejected pending order (comment) and its retcode
 int      g_rejCode;
 datetime g_seen15;
@@ -1964,7 +2178,9 @@ int OnInit()
       InpSessionEndHour < 0 || InpSessionEndHour > 24 || InpMagic <= 0 || InpForecastMinScore < 1 ||
       InpArrowBars < 0 || InpNyStartHour < 0 || InpNyStartHour > 23 || InpNyStartMin < 0 || InpNyStartMin > 59 ||
       InpNyEndHour < 0 || InpNyEndHour > 24 || InpNyEndMin < 0 || InpNyEndMin > 59 || InpRangeStartHour < 0 ||
-      InpRangeStartHour > 23 || InpSwingValidBars < 1 || InpNearAtr < 0.0 ||
+      InpRangeStartHour > 23 || InpSwingValidBars < 1 || InpNearAtr < 0.0 || InpAsiaStartHour < 0 || InpAsiaStartHour > 23 ||
+      InpAsiaEndHour < 1 || InpAsiaEndHour > 24 || InpAsiaStartHour >= InpAsiaEndHour || InpLondonStartHour < 0 ||
+      InpLondonStartHour > 23 || InpLondonStartHour * 60 >= InpNyStartHour * 60 + InpNyStartMin ||
       InpNyStartHour * 60 + InpNyStartMin >= InpNyEndHour * 60 + InpNyEndMin ||
       InpRangeStartHour * 60 >= InpNyStartHour * 60 + InpNyStartMin)
    {
@@ -2022,6 +2238,10 @@ int OnInit()
    ArrayResize(g_ny, 0);
    g_nNy = 0;
    NqNyReset(g_nyState, -1);
+   NqLevelsReset(g_levels, -1);
+   ArrayResize(g_brk, 0);
+   g_nBrk = 0;
+   ArrayResize(g_vwap1, 0);
    g_rejCmt = "";
    g_rejCode = 0;
    g_seen15 = 0;
@@ -2167,6 +2387,7 @@ bool NqLoad(ENUM_TIMEFRAMES tf, NqSeries &s, int &why)
       s.h[i] = r[i].high;
       s.l[i] = r[i].low;
       s.c[i] = r[i].close;
+      s.v[i] = (double)r[i].tick_volume;
    }
    if(n < 2)
    {
@@ -2214,7 +2435,12 @@ void NqRecompute()
    // NY trap on M5, confirmed by the M5 NRTR (read-only plans)
    NqRunNyTrap(g_s5, g_s5.dir, g_P, InpRangeStartHour * 60, InpNyStartHour * 60 + InpNyStartMin,
                InpNyEndHour * 60 + InpNyEndMin, g_ny, g_nNy, g_nyState);
-   // swing plans: the same QML / pullback engine on M15 structure (read-only)
+   // session levels, breaks (M5 closes) and the day VWAP (M1)
+   NqRunLevels(g_s5, InpAsiaStartHour * 60, InpAsiaEndHour * 60, InpLondonStartHour * 60,
+               InpNyStartHour * 60 + InpNyStartMin, InpRangeStartHour * 60, InpNyStartHour * 60 + InpNyStartMin,
+               InpNyEndHour * 60 + InpNyEndMin, g_levels, g_brk, g_nBrk);
+   NqCalcDayVwap(g_s1, g_vwap1);
+   // swing plans: the same QML / pullback engine on M15 structure
    NqSeriesResize(g_s15r, g_s15.n);
    g_s15r.sec = g_s15.sec;
    for(int i = 0; i < g_s15.n; i++)
@@ -2224,6 +2450,7 @@ void NqRecompute()
       g_s15r.h[i] = g_s15.h[i];
       g_s15r.l[i] = g_s15.l[i];
       g_s15r.c[i] = g_s15.c[i];
+      g_s15r.v[i] = g_s15.v[i];
    }
    NqRunRegime(g_s15r, g_piv15r, g_ctxEmpty, g_P);
    NqParams Pswing = g_P;
@@ -3071,6 +3298,67 @@ void NqDrawChart()
       NqLevel(NQ_PFX_C + "L_" + id + "1", ts, g_plans[k].tp1, cUp, STYLE_DASH, nmk + " TP1");
       NqLevel(NQ_PFX_C + "L_" + id + "2", ts, g_plans[k].tp2, cUp, STYLE_DOT, nmk + " TP2");
    }
+   // session levels (support / resistance), break marks and the day VWAP
+   if(InpDrawLevels && g_levels.day == NqDayOf(g_s5.t[n5 - 1]))
+   {
+      color cLv[10];
+      cLv[0] = NQ_RGB(212, 175, 55);  cLv[1] = NQ_RGB(212, 175, 55);    // previous day: gold
+      cLv[2] = NQ_RGB(0, 190, 190);   cLv[3] = NQ_RGB(0, 190, 190);     // Asia: teal
+      cLv[4] = NQ_RGB(90, 150, 255);  cLv[5] = NQ_RGB(90, 150, 255);    // London: blue
+      cLv[6] = NQ_RGB(170, 170, 170); cLv[7] = NQ_RGB(170, 170, 170);   // pre-NY: grey
+      cLv[8] = NQ_RGB(200, 120, 255); cLv[9] = NQ_RGB(200, 120, 255);   // NY: purple
+      for(int lv = 0; lv < NQ_LV_COUNT; lv++)
+      {
+         if(!g_levels.ok[lv])
+            continue;
+         datetime from = (g_levels.from[lv] > 0) ? g_levels.from[lv] : g_s5.t[n5 - 1];
+         string tag = NqLevelName(lv) + (g_levels.act[lv] ? "" : " (building)") + (g_levels.broken[lv] ? " broken" : "");
+         NqLevel(NQ_PFX_C + "LV_" + IntegerToString(lv), from, g_levels.px[lv], cLv[lv],
+                 g_levels.act[lv] ? STYLE_SOLID : STYLE_DOT, tag);
+      }
+      for(int b = 0; b < g_nBrk; b++)
+      {
+         int i = g_brk[b].idx;
+         string txt = (g_brk[b].dir > 0) ? ("BREAKOUT " + NqSymUp() + " " + NqLevelName(g_brk[b].level))
+                                         : ("BREAKDOWN " + NqSymDown() + " " + NqLevelName(g_brk[b].level));
+         double off = (g_s5.atr[i] > 0.0) ? g_s5.atr[i] * 0.8 : 0.0;
+         NqText(NQ_PFX_C + "BK_" + IntegerToString(i), g_s5.t[i], (g_brk[b].dir > 0) ? g_s5.h[i] + off : g_s5.l[i] - off, txt,
+                (g_brk[b].dir > 0) ? cUp : cDn, 8, (g_brk[b].dir > 0) ? ANCHOR_LOWER : ANCHOR_UPPER,
+                txt + " at " + NqPx(g_levels.px[g_brk[b].level]) + ", M5 close " + NqPx(g_brk[b].close) + " " +
+                TimeToString(g_s5.t[i] + g_s5.sec, TIME_MINUTES));
+      }
+      // VWAP polyline for today, one segment per 5 closed M1 bars
+      int dayNow = NqDayOf(g_s1.t[n1 - 1]);
+      int first = n1 - 1;
+      while(first > 0 && NqDayOf(g_s1.t[first - 1]) == dayNow)
+         first--;
+      color cVw = NQ_RGB(255, 210, 80);
+      int seg = 0;
+      for(int i = first; i + 5 < n1; i += 5)
+      {
+         if(g_vwap1[i] <= 0.0 || g_vwap1[i + 5] <= 0.0)
+            continue;
+         string nm = NQ_PFX_C + "VW_" + IntegerToString(seg++);
+         if(ObjectFind(0, nm) < 0)
+            ObjectCreate(0, nm, OBJ_TREND, 0, g_s1.t[i], g_vwap1[i], g_s1.t[i + 5], g_vwap1[i + 5]);
+         ObjectSetInteger(0, nm, OBJPROP_TIME, 0, g_s1.t[i]);
+         ObjectSetDouble(0, nm, OBJPROP_PRICE, 0, g_vwap1[i]);
+         ObjectSetInteger(0, nm, OBJPROP_TIME, 1, g_s1.t[i + 5]);
+         ObjectSetDouble(0, nm, OBJPROP_PRICE, 1, g_vwap1[i + 5]);
+         ObjectSetInteger(0, nm, OBJPROP_COLOR, cVw);
+         ObjectSetInteger(0, nm, OBJPROP_STYLE, STYLE_SOLID);
+         ObjectSetInteger(0, nm, OBJPROP_WIDTH, 2);
+         ObjectSetInteger(0, nm, OBJPROP_RAY_RIGHT, false);
+         ObjectSetInteger(0, nm, OBJPROP_SELECTABLE, false);
+         ObjectSetInteger(0, nm, OBJPROP_HIDDEN, true);
+         ObjectSetInteger(0, nm, OBJPROP_BACK, true);
+         ObjectSetString(0, nm, OBJPROP_TOOLTIP, "day VWAP");
+      }
+      if(g_vwap1[n1 - 1] > 0.0)
+         NqText(NQ_PFX_C + "VW_T", g_s1.t[n1 - 1] + g_s1.sec, g_vwap1[n1 - 1], "VWAP " + NqPx(g_vwap1[n1 - 1]), cVw, 8,
+                ANCHOR_LEFT_LOWER, "day VWAP from " + IntegerToString(0) + ":00 server");
+   }
+
    // NY trap: the armed plan
    int kn = NqLatestPlan(g_ny, g_nNy, NQ_PLAN_NY);
    if(kn >= 0)
@@ -3184,7 +3472,7 @@ void NqDrawPanel()
    int vOff = (int)MathRound(122 * sc);
    int bannerH = (int)MathRound(38 * sc);
    int rowsTop = 7;
-   int rowsBot = 4 + 1 + 5 * 2 + NQ_BOARD_BROKER_ROWS + 2;   // NY lines, header, plan rows, broker rows, footer
+   int rowsBot = 6 + 1 + 6 * 2 + NQ_BOARD_BROKER_ROWS + 2;   // NY/level lines, header, plan + scalp rows, broker rows, footer
    int tTopH = rh + 3 + rowsTop * rh + 4;
    int tBotH = rh + 3 + rowsBot * rh + 8;
    int H = pad * 2 + (int)MathRound(rh * 1.4) + rh + 4 + bannerH + 4 + 2 * rh + tTopH + 6 + tBotH + 4 + rh;
@@ -3469,6 +3757,45 @@ void NqDrawPanel()
    if(g_manualPos + g_manualOrd > 0)
       act = act + "   MANUAL " + IntegerToString(g_manualPos) + " pos / " + IntegerToString(g_manualOrd) + " ord untouched";
    NqLabel("ny4", kx, yr, act, actC, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
+   yr += rh;
+   string lvT = "LEVELS  ";
+   bool lvOk = ok && g_levels.day == NqDayOf(nowS);
+   if(lvOk)
+   {
+      if(g_levels.ok[NQ_LV_PDH])
+         lvT = lvT + "PD " + NqPx(g_levels.px[NQ_LV_PDH]) + "/" + NqPx(g_levels.px[NQ_LV_PDL]) + "  ";
+      if(g_levels.ok[NQ_LV_ASH])
+         lvT = lvT + "ASIA " + NqPx(g_levels.px[NQ_LV_ASH]) + "/" + NqPx(g_levels.px[NQ_LV_ASL]) + (g_levels.act[NQ_LV_ASH] ? "" : "*") + "  ";
+      if(g_levels.ok[NQ_LV_LOH])
+         lvT = lvT + "LON " + NqPx(g_levels.px[NQ_LV_LOH]) + "/" + NqPx(g_levels.px[NQ_LV_LOL]) + (g_levels.act[NQ_LV_LOH] ? "" : "*") + "  ";
+      double vw = (g_s1.n > 0 && ArraySize(g_vwap1) == g_s1.n) ? g_vwap1[g_s1.n - 1] : 0.0;
+      if(vw > 0.0)
+         lvT = lvT + "VWAP " + NqPx(vw) + ((bid > vw) ? " (above)" : ((bid < vw) ? " (below)" : " (on)"));
+      if(lvT == "LEVELS  ")
+         lvT = lvT + "building (* = session still open)";
+   }
+   else
+      lvT = lvT + "---";
+   NqLabel("ny5", kx, yr, lvT, cVal, fs, "Arial", ANCHOR_LEFT_UPPER);
+   yr += rh;
+   string bkT = "BREAK  ";
+   color bkC = cDim;
+   if(lvOk && g_nBrk > 0)
+   {
+      int b = g_nBrk - 1;
+      bkT = bkT + ((g_brk[b].dir > 0) ? "BREAKOUT above " : "BREAKDOWN below ") + NqLevelName(g_brk[b].level) + " " +
+            NqPx(g_levels.px[g_brk[b].level]) + " @" + TimeToString(g_s5.t[g_brk[b].idx] + g_s5.sec, TIME_MINUTES);
+      if(g_nBrk > 1)
+      {
+         int b2 = g_nBrk - 2;
+         bkT = bkT + "   before: " + ((g_brk[b2].dir > 0) ? "breakout " : "breakdown ") + NqLevelName(g_brk[b2].level) +
+               " @" + TimeToString(g_s5.t[g_brk[b2].idx] + g_s5.sec, TIME_MINUTES);
+      }
+      bkC = (g_brk[b].dir > 0) ? cUp : cDn;
+   }
+   else
+      bkT = bkT + "no M5 close through an active level yet today";
+   NqLabel("ny6", kx, yr, bkT, bkC, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
    yr += rh + 2;
 
    // column header
@@ -3603,6 +3930,78 @@ void NqDrawPanel()
       NqLabel(id + "6", cx6, yr, stT, cSt, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
       yr += rh;
       NqLabel(id + "d", cx1, yr, det, cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
+      yr += rh;
+   }
+
+   // SCALP row: always visible with the levels a scalp would use RIGHT NOW,
+   // so it can be taken by hand even while the trigger is WAIT
+   {
+      string side = "-";
+      string vE = "-";
+      string vS = "-";
+      string vT = "-";
+      string vD = "-";
+      string stT = ok ? "---" : "---";
+      string det = " ";
+      color cRow = cDim;
+      color cSt = cDim;
+      if(ok && atr5 > 0.0)
+      {
+         int reg = g_s5.regime[n5 - 1];
+         int st1 = g_s1.state[g_s1.n - 1];
+         double slD = NormalizeDouble(InpScalpSlAtr * atr5, g_digits);
+         double tpD = NormalizeDouble(InpScalpTpAtr * atr5, g_digits);
+         double lot = NqLotFor(g_riskMoney, slD, g_tick, g_tickValue, g_volMin, g_volMax, g_volStep);
+         string lotT = (lot > 0.0) ? (DoubleToString(lot, 2) + " lot = " + DoubleToString(NqLossAt(lot, slD, g_tick, g_tickValue), 2) + " at SL") : "min lot too big";
+         if(reg == NQ_REG_BULL || reg == NQ_REG_BEAR)
+         {
+            side = (reg > 0) ? "BUY MKT" : "SELL MKT";
+            cRow = NqDirColor(reg);
+            double entry = (reg > 0) ? askP : bidP;
+            vE = NqPx(entry);
+            vS = NqPx((reg > 0) ? NqRoundTick(entry - slD, g_tick, g_digits, -1) : NqRoundTick(entry + slD, g_tick, g_digits, 1));
+            vT = NqPx((reg > 0) ? NqRoundTick(entry + tpD, g_tick, g_digits, 1) : NqRoundTick(entry - tpD, g_tick, g_digits, -1));
+            vD = "live";
+            if(st1 == NQ_BUY || st1 == NQ_SELL)
+            {
+               stT = "TRIGGER NOW" + (InpScalpAuto ? ((g_gate == 0) ? " - auto" : (" - " + NqGateAt(g_gate, 0))) : " - manual");
+               cSt = (g_gate == 0 || !InpScalpAuto) ? cUp : cBlock;
+            }
+            else
+            {
+               stT = "WAIT: " + NqReasonAt(g_s1.reasons[g_s1.n - 1], 0);
+               cSt = cWait;
+            }
+         }
+         else
+         {
+            side = "NONE";
+            vE = NqPx(bidP);
+            vS = NqSymDot() + " " + NqPx(slD);
+            vT = NqSymDot() + " " + NqPx(tpD);
+            vD = "dist";
+            stT = "WAIT: M5 CHOP - no direction";
+            cSt = cWait;
+         }
+         string regS = (reg == NQ_REG_BULL) ? "BULL" : ((reg == NQ_REG_BEAR) ? "BEAR" : "CHOP");
+         det = "M1 NRTR " + NqDirText(g_s1.dir[g_s1.n - 1]) + "  M5 " + regS + "  ATR5 " + NqPx(atr5) +
+               "  SL " + DoubleToString(InpScalpSlAtr, 1) + "x  TP " + DoubleToString(InpScalpTpAtr, 1) + "x  " + lotT +
+               "  stop " + IntegerToString(InpScalpTimeStop) + " M1";
+      }
+      else if(ok)
+      {
+         stT = "ATR not ready";
+         cSt = cWait;
+      }
+      NqLabel("bs0", cx0, yr, "SCALP M1", cKey, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
+      NqLabel("bs1", cx1, yr, side, cRow, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
+      NqLabel("bs2", cx2, yr, vE, cVal, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
+      NqLabel("bs3", cx3, yr, vS, (vS == "-") ? cDim : cDn, fs, "Arial", ANCHOR_LEFT_UPPER);
+      NqLabel("bs4", cx4, yr, vT, (vT == "-") ? cDim : cUp, fs, "Arial", ANCHOR_LEFT_UPPER);
+      NqLabel("bs5", cx5, yr, vD, cVal, fs, "Arial", ANCHOR_LEFT_UPPER);
+      NqLabel("bs6", cx6, yr, stT, cSt, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
+      yr += rh;
+      NqLabel("bsd", cx1, yr, det, cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
       yr += rh;
    }
 

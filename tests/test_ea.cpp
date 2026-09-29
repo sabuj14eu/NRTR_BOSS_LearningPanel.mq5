@@ -531,9 +531,40 @@ int main()
       }
       for(int i = 0; i < 6; i++) if(lbl(("bb" + std::to_string(i) + "0").c_str()) == "<missing>") boardOk = false;
       CHECK(boardOk, "board rows: TYPE SIDE ENTRY SL TP DIST STATUS for 5 plan slots + 6 broker rows");
+      // the scalp row is always there with live levels
+      {
+         int reg = g_s5.regime[g_s5.n - 1];
+         std::string side = lbl("bs1"), st = lbl("bs6"), det = lbl("bsd");
+         bool rowOk = (lbl("bs0") == "SCALP M1") && det.find("ATR5") != std::string::npos && det.find("stop ") != std::string::npos;
+         if(reg == NQ_REG_BULL) rowOk = rowOk && side == "BUY MKT" && lbl("bs2") != "-" && lbl("bs3") != "-" && lbl("bs4") != "-";
+         else if(reg == NQ_REG_BEAR) rowOk = rowOk && side == "SELL MKT" && lbl("bs2") != "-";
+         else rowOk = rowOk && side == "NONE" && st.find("CHOP") != std::string::npos;
+         int st1 = g_s1.state[g_s1.n - 1];
+         if(st1 == NQ_BUY || st1 == NQ_SELL) rowOk = rowOk && st.find("TRIGGER NOW") == 0;
+         else if(reg != NQ_REG_CHOP) rowOk = rowOk && st.find("WAIT: ") == 0;
+         CHECK(rowOk, "SCALP M1 row: side from the regime, live entry/SL/TP, TRIGGER NOW or the WAIT reason");
+         // levels agree with the engine's geometry for the live price
+         if(reg == NQ_REG_BULL)
+         {
+            double atr5 = g_s5.atr[g_s5.n - 1];
+            double ask = SIM.bid + SIM.spreadPts * SIM.point;
+            CHECK(near(std::stod(lbl("bs2")), ask, 0.006) && near(std::stod(lbl("bs3")), NqRoundTick(ask - 1.5 * atr5, 0.01, 2, -1), 0.011) &&
+                  near(std::stod(lbl("bs4")), NqRoundTick(ask + 1.0 * atr5, 0.01, 2, 1), 0.011), "scalp levels = ask -1.5 ATR5 / +1.0 ATR5");
+         }
+      }
       CHECK(lbl("ny1").find("NY SESSION") == 0 && lbl("ny2").find("PRE-NY RANGE") == 0 && lbl("ny3").find("SWEEP / TRAP") == 0 &&
             lbl("ny4").find("SLOT") == 0, "NY session, pre-NY range, sweep/trap and slot lines");
       CHECK(lbl("bh4") == "TP SENT" && lbl("bh5") == "DIST", "the board shows the TP actually sent and the distance");
+      CHECK(lbl("ny5").find("LEVELS") == 0 && lbl("ny5").find("VWAP") != std::string::npos && lbl("ny6").find("BREAK") == 0,
+            "LEVELS line with VWAP and a BREAK line");
+      int lvLines = 0, vwSegs = 0;
+      for(auto &kv : SIM.objs)
+      {
+         if(kv.first.compare(0, 10, "NQEA_C_LV_") == 0 && kv.first.find("_T") == std::string::npos) lvLines++;
+         if(kv.first.compare(0, 10, "NQEA_C_VW_") == 0 && kv.first != "NQEA_C_VW_T") vwSegs++;
+      }
+      std::printf("    %d level lines, %d VWAP segments\n", lvLines, vwSegs);
+      CHECK(lvLines >= 2 && vwSegs > 10, "session / previous-day level lines and the VWAP polyline are on the chart");
       CHECK(lbl("bf2").find("UPDATE") != std::string::npos, "footer carries the last update time");
       CHECK(lbl("k_e6") == "NEXT M1 BIAS", "the arrow row is labelled as a bias, not a prediction");
       // a live position and a waiting order show up as broker rows within one refresh

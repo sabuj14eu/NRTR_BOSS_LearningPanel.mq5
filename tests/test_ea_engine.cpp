@@ -567,6 +567,62 @@ int main()
    }
    end("E10");
 
+   begin("E11 session levels, breakout / breakdown on the first M5 close through an active level, day VWAP");
+   {
+      // two server days of M5 bars. Day 1: flat 100 +- 1 (PD range). Day 2: Asia 01:00-10:00
+      // in 95..105, London 10:00-16:30 in 97..103 then a close above the Asia high at 12:00.
+      auto mk = [&](std::vector<SBar> &v, double o, double h, double l, double c) {
+         v.push_back({T0 + (long long)v.size() * 300, o, h, l, c});
+      };
+      std::vector<SBar> v;
+      for(int i = 0; i < 288; i++) mk(v, 100, 101, 99, 100);   // day 1
+      for(int i = 0; i < 288; i++)                              // day 2
+      {
+         int mod = i * 5;
+         if(mod < 60) mk(v, 100, 100.5, 99.5, 100);
+         else if(mod < 600) mk(v, 100, 105, 95, 100);           // Asia
+         else if(mod < 720) mk(v, 100, 103, 97, 100);           // London first two hours
+         else if(mod == 720) mk(v, 100, 106, 99, 105.5);        // 12:00 close above ASIA HIGH (105) and PD HIGH (101)
+         else if(mod < 990) mk(v, 105.5, 106, 105, 105.5);
+         else mk(v, 105.5, 106, 105, 105.5);                    // NY
+      }
+      NqSeries s;
+      fill(s, v, 300);
+      for(int i = 0; i < s.n; i++) s.v[i] = 100.0;
+      NqLevels L;
+      std::vector<NqBreak> brk;
+      int nb = 0;
+      NqRunLevels(s, 60, 600, 600, 990, 0, 990, 1380, L, brk, nb);
+      CHECK(L.day == NqDayOf(v.back().t), "levels are for the last day");
+      CHECK(L.ok[NQ_LV_PDH] && near(L.px[NQ_LV_PDH], 101) && near(L.px[NQ_LV_PDL], 99) && L.act[NQ_LV_PDH], "previous day high/low active all day");
+      CHECK(L.ok[NQ_LV_ASH] && near(L.px[NQ_LV_ASH], 105) && near(L.px[NQ_LV_ASL], 95) && L.act[NQ_LV_ASH], "Asia high/low active after 10:00");
+      CHECK(L.ok[NQ_LV_LOH] && near(L.px[NQ_LV_LOH], 106) && near(L.px[NQ_LV_LOL], 97) && L.act[NQ_LV_LOH], "London high/low active after 16:30");
+      CHECK(L.ok[NQ_LV_PNH] && near(L.px[NQ_LV_PNH], 106) && near(L.px[NQ_LV_PNL], 95) && L.act[NQ_LV_PNH], "pre-NY range = whole day before 16:30");
+      CHECK(L.ok[NQ_LV_NYH] && L.act[NQ_LV_NYH] && near(L.px[NQ_LV_NYH], 106), "NY high/low active after 23:00");
+      // breaks: at 12:00 the close crosses PD HIGH (101) and ASIA HIGH (105), once each; PD HIGH was
+      // first crossed at 01:00? no - closes stayed at 100 until 12:00
+      int brkAsia = 0, brkPd = 0, other = 0;
+      for(int k = 0; k < nb; k++)
+      {
+         if(brk[(size_t)k].level == NQ_LV_ASH && brk[(size_t)k].dir > 0 && NqMinuteOfDay(s.t[brk[(size_t)k].idx]) == 720) brkAsia++;
+         else if(brk[(size_t)k].level == NQ_LV_PDH && brk[(size_t)k].dir > 0 && NqMinuteOfDay(s.t[brk[(size_t)k].idx]) == 720) brkPd++;
+         else other++;
+      }
+      CHECK(brkAsia == 1 && brkPd == 1 && other == 0, "exactly one BREAKOUT per level, on the first close through it");
+      CHECK(L.broken[NQ_LV_ASH] && L.broken[NQ_LV_PDH] && !L.broken[NQ_LV_ASL], "broken flags");
+      // VWAP: constant volume -> mean of typical prices within the day, reset at midnight
+      std::vector<double> vw;
+      NqCalcDayVwap(s, vw);
+      double tpSum = 0; int cnt = 0; bool okV = true;
+      for(int i = 288; i < s.n; i++)
+      {
+         tpSum += (s.h[i] + s.l[i] + s.c[i]) / 3.0; cnt++;
+         if(!near(vw[(size_t)i], tpSum / cnt, 1e-9)) okV = false;
+      }
+      CHECK(okV && near(vw[287], 100.0), "day VWAP = running mean of typical price (constant volume), reset at midnight");
+   }
+   end("E11");
+
    std::printf("\nEA ENGINE TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
 }
