@@ -167,7 +167,7 @@ int main()
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       const size_t START2 = 1440 + 17;   // five days: enough plans to see fills
       startAt(START2);
-      int placed = 0, bad = 0, cancels = 0, wrongCancel = 0, twice = 0, overRisk = 0;
+      int placed = 0, bad = 0, cancels = 0, wrongCancel = 0, twice = 0, overRisk = 0, radarBad = 0;
       std::set<std::string> seen;
       double maxBal = SIM.balance;
       for(size_t i = START2 + 1; i <= END; i++)
@@ -184,7 +184,11 @@ int main()
                if(!NqPlanByComment(r.comment, p)) { bad++; continue; }
                if(p.status != NQ_PL_ACTIVE) bad++;
                if(!near(p.entry, r.price) || !near(p.sl, r.sl) || !near(p.tp1, r.tp)) bad++;
-               if((p.dir > 0) != (r.type == ORDER_TYPE_BUY_LIMIT)) bad++;
+               bool isBuy = (r.type == ORDER_TYPE_BUY_LIMIT || r.type == ORDER_TYPE_BUY_STOP);
+               bool isStop = (r.type == ORDER_TYPE_BUY_STOP || r.type == ORDER_TYPE_SELL_STOP);
+               if((p.dir > 0) != isBuy) bad++;
+               if((p.kind == NQ_PLAN_RADAR) != isStop) radarBad++;   // radar = STOP, everything else = LIMIT
+               if(p.kind == NQ_PLAN_RADAR && ((p.dir > 0 && r.price <= p.lvlA) || (p.dir < 0 && r.price >= p.lvlA))) radarBad++;
                seen.insert(r.comment.substr(0, 4));
                // never a second order or an open position for the same plan
                int same = 0;
@@ -240,6 +244,10 @@ int main()
       CHECK(overRisk == 0, "every limit order risks at most 0.5% of the balance at the SL");
       CHECK(wrongCancel == 0, "ONE SLOT: never two positions, and no waiting order while a position is open");
       CHECK(seen.count("NQ-N") + seen.count("NQ-K") + seen.count("NQ-L") > 0, "NY trap / swing plans are traded too");
+      CHECK(seen.count("NQ-R") > 0 && radarBad == 0, "radar plans are STOP orders beyond their level; all other plans are limits");
+      int stopFills = 0;
+      for(const SimDeal &d : SIM.deals) if(d.reason == "stop") stopFills++;
+      std::printf("    stop fills: %d\n", stopFills);
       CHECK(fillBad == 0, "fills happened at the plan entry");
    }
    end("A2");
@@ -521,8 +529,8 @@ int main()
       CHECK(w < 800, "single column");
       // the board: 5 plan rows with 7 columns + a detail line, 6 broker rows, NY lines, footer
       bool boardOk = true;
-      const char *types[5] = {"QML M5", "PULLBACK M5", "NY TRAP", "SWING QML", "SWING PB"};
-      for(int q = 0; q < 5; q++)
+      const char *types[7] = {"QML M5", "PULLBACK M5", "NY TRAP", "SWING QML", "SWING PB", "RADAR UP", "RADAR DOWN"};
+      for(int q = 0; q < 7; q++)
       {
          std::string id = "bp" + std::to_string(q);
          if(lbl((id + "0").c_str()) != types[q]) boardOk = false;
@@ -557,6 +565,9 @@ int main()
       CHECK(lbl("bh4") == "TP SENT" && lbl("bh5") == "DIST", "the board shows the TP actually sent and the distance");
       CHECK(lbl("ny5").find("LEVELS") == 0 && lbl("ny5").find("VWAP") != std::string::npos && lbl("ny6").find("BREAK") == 0,
             "LEVELS line with VWAP and a BREAK line");
+      CHECK(lbl("rd1").find("RADAR") == 0 && lbl("rd2").find("RADAR") == 0 &&
+            (lbl("rd1").find("score") != std::string::npos || lbl("rd1").find("no resistance") != std::string::npos),
+            "RADAR lines for both directions with the measured score");
       int lvLines = 0, vwSegs = 0;
       for(auto &kv : SIM.objs)
       {

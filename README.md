@@ -9,8 +9,9 @@ history keeps it). **Remove the old indicator from your chart.**
 M15 context -> M5 regime + structure -> M1 trigger -> risk engine -> auto lot -> MT5
 ```
 
-The bot has full power over five setups and **one slot per asset**: M5 **QML**, M5
-**pullback**, **NY trap**, M15 **swing QML / pullback** (all as limit orders) and the M1
+The bot has full power over six setups and **one slot per asset**: M5 **QML**, M5
+**pullback**, **NY trap**, M15 **swing QML / pullback** (limit orders), the **IMPULSE RADAR**
+(stop orders beyond the nearest level, armed only when measured pressure is high) and the M1
 **scalp** (market order, lowest priority). Every armed plan waits at the broker; **the first
 fill takes the slot**, every other waiting order is cancelled at once, and nothing new is
 opened until the position closes. One position, buy or sell, never both. The **NY TRAP +
@@ -157,7 +158,47 @@ NO NY  ->  RANGE BUILDING  ->  SWEPT  ->  RETURNED INSIDE  ->  TRAP CONFIRMED  -
 * Filled orders are managed by their SL/TP only. `InpPlanUseTp2` sends TP2 instead of TP1;
   the board's **TP SENT** column always shows the TP that actually went to MT5.
 
-## 3. Session levels, breakouts, VWAP (to read the day)
+## 3. IMPULSE RADAR (breakout / breakdown BEFORE the break, STOP orders)
+
+The pullback plans wait for a retracement that a one-way day may never give. The radar asks
+the other question: *is pressure building against the nearest level, and where is the trigger
+just beyond it?* It runs on closed M5 bars, for both directions at once, and scores measured
+conditions out of 10. No percentage is invented.
+
+| Component | Points | Measured how |
+|---|---|---|
+| Structure | 0-2 | M5 regime agrees (NRTR + HH/HL or LH/LL) = 2; last swing label alone (HH / LL) = 1 |
+| Compression | 0-2 | mean range of the last 4 bars ≤ 0.8 × the 12 before (+1); ≥ 2 tests of the level within 0.3 ATR without closing through it (+1) |
+| Proximity | 0-2 | close within 0.5 ATR of the level (2) / within 1 ATR (1) |
+| Candle efficiency | 0-2 | mean signed body ÷ range of the last 4 bars ≥ 0.6 (2) / ≥ 0.4 (1); wicks count against |
+| Momentum persistence | 0-1 | three closes in a row in the direction (▲▲▲, not ▲▼▲) |
+| M15 boss | 0-1 | M15 context agrees |
+
+The **level** is the nearest of: previous-day high/low, Asia / London / pre-NY / NY highs and
+lows once their session has ended, and the nearest confirmed M5 swing. States: `NO LEVEL`,
+`FAR` (> 2 ATR), `BUILDING` (< 5), `NEAR` (≤ 1 ATR, 5-6), **`READY`** (≥ 7 within 1 ATR).
+
+`READY` arms the plan: **BUY STOP at level + 0.15 ATR** (SELL STOP mirrored), SL below the
+last confirmed swing on the other side (else 1.5 ATR), TP1 = 1R, TP2 = 2R. If the price never
+breaks, nothing happens. Unfilled plans end when the pressure fails (score < 5 while the level
+is still the target), when the price crawls through the level without reaching the stop, on
+expiry, or when a newer level replaces them.
+
+**False-break filter.** A fill whose M5 bar, or the next one, **closes back through the
+level** is closed at once (`FALSE BREAK`), whatever the SL says. The record counts it as a
+loss.
+
+**Macro filter (optional).** Set `InpMacroSymbol` to your broker's dollar-index symbol
+(`USDX`, `DXY`, ...). The board shows its M15 NRTR direction, and with `InpMacroBlocks` a
+radar order is not placed while the index moves the same way as the metal's intended break
+(gold up + DXY up = blocked; gold up + DXY down = allowed). Empty = no macro filter.
+
+The board shows two `RADAR` lines (level, distance, score with its six components, state) and
+two plan rows `RADAR UP` / `RADAR DOWN` with the armed stop order and its live status. The
+scalp remains the lowest priority; the radar is one more limit/stop plan inside the one-slot
+rule.
+
+## 4. Session levels, breakouts, VWAP (to read the day)
 
 Drawn on the chart and summarised on the board's `LEVELS` and `BREAK` lines, for the current
 server day:
@@ -178,7 +219,7 @@ per day. The `BREAK` line names the latest one with its time, the `LEVELS` line 
 prices (`*` = still building) and whether the price is above or below VWAP. These are for
 reading the day; they do not open trades by themselves.
 
-## 4. Forecast arrow on every candle
+## 5. Forecast arrow on every candle
 
 Every candle carries an arrow with the forecast for the **next** candle, made at this
 candle's close:
@@ -225,6 +266,8 @@ arrow UP if score >= 2, DOWN if <= -2, none if the votes split
   SLOT  FREE  3 armed, 2 waiting - the first fill takes it
   LEVELS  PD 4170.10/4120.50  ASIA 4145.20/4130.00  LON 4161.30/4128.40  VWAP 4150.20 (above)
   BREAK  BREAKOUT above LONDON HIGH 4161.30 @15:10   before: breakdown ASIA LOW @09:40
+  RADAR ▲  4161.29  dist 0.30 ATR  score 8/10 HIGH  (struct 2 compr 2 prox 2 eff 1 mom 1 m15 0)  READY
+  RADAR ▼  4113.49  dist 8.70 ATR  score 3/10 LOW   (struct 0 compr 1 prox 0 eff 1 mom 1 m15 0)  FAR   macro USDX BEARISH
   TYPE         SIDE      ENTRY     SL        TP SENT   DIST       STATUS
   QML M5       SELL LMT  4285.20   4297.80   4272.60   0.42 ATR   PLACED  #1234   exp 4h10m
                head 4302.10   neck 4288.40   break close 4286.90 at 15:05   R 12.60   TP1 4272.60  TP2 4260.00   (sends TP1)
@@ -234,6 +277,9 @@ arrow UP if score >= 2, DOWN if <= -2, none if the votes split
                pre-NY level 4291.30 swept to 4296.50   confirmed at 15:10   R 6.70   TP2 4277.90
   SWING QML    -         -         -         -         -          no setup yet
   SWING PB     BUY LMT   4230.00   4212.00   4248.00   7.5 ATR    ARMED - SWING off
+  RADAR UP     BUY STOP  4161.80   4152.30   4171.30   0.30 ATR   PLACED  #1240  exp 5h40m
+               level 4161.29  SL swing 4152.90  score now 8/10 HIGH  eff 71%  armed @15:05  R 9.50 ...
+  RADAR DOWN                                                       BUILDING  score 3/10  (armed at 7 within 1 ATR)
   SCALP M1     BUY MKT   4154.15   4149.35   4157.35   live       WAIT: M1 AGAINST M5 REGIME
                M1 NRTR BEARISH  regime BULLISH  ATR5 3.20  SL 1.5xATR  TP 1.0xATR  0.10 lot = 48.00 at SL  time stop 45 M1
   BROKER       SELL LMT  4285.20   4297.80   4272.60   0.42 ATR   #1234  QML  0.09 lots  age 0h25m
@@ -290,7 +336,9 @@ Every order is printed to the **Experts** log, e.g.
 | QML SL buffer / wait bars | 0.2 × ATR5 / 36 M5 bars | head confirmation → neck break |
 | Plan lifetime (M5 / swing) | 72 M5 bars / 96 M15 bars | |
 | NY open / close / pre-range start | 16:30 / 23:00 / 00:00 server | EET broker = New York 09:30-16:00 |
-| Trade QML / pullback / NY trap / swing | on / on / on / on | each kind can be switched off |
+| Trade QML / pullback / NY trap / swing / radar | on | each kind can be switched off |
+| Radar stop buffer | 0.15 ATR5 | beyond the level |
+| Macro symbol / macro blocks | empty / on | e.g. USDX; empty = no macro filter |
 | NEAR distance | 0.5 ATR5 | |
 | Asia start / end, London start | 01 / 10 / 10 server hours | London ends at the NY open |
 | Draw levels | on | session highs/lows, previous day, VWAP, break marks |

@@ -15,8 +15,8 @@ FORBIDDEN = [
     "FileOpen", "FileWrite", "FileCopy", "FileDelete", "GlobalVariableSet", "ChartOpen", "ChartClose",
     # the only order path is OrderSend (synchronous, result checked); no async, no CTrade
     "OrderSendAsync", "CTrade", "CPositionInfo", "COrderInfo", "OrderCloseBy", "PositionCloseBy",
-    # scalp/plan sizes must come from the risk engine, never a literal lot
-    "ORDER_TYPE_BUY_STOP", "ORDER_TYPE_SELL_STOP", "TRADE_ACTION_CLOSE_BY",
+    # close-by is never used (one slot per asset, positions close by their own deal)
+    "TRADE_ACTION_CLOSE_BY",
 ]
 REQUIRED = [
     ("ACCOUNT_TRADE_MODE_DEMO", "demo-account guard"),

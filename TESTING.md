@@ -34,8 +34,8 @@ before relying on it.** If F7 reports anything, send the exact message.
 ```
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-EA ENGINE TESTS:  85 checks passed, 0 failed
-EA TESTS:         72 checks passed, 0 failed
+EA ENGINE TESTS:  98 checks passed, 0 failed
+EA TESTS:         74 checks passed, 0 failed
 MetaEditor F7:    NOT RUN (not available in the build environment)
 ```
 
@@ -52,6 +52,7 @@ MetaEditor F7:    NOT RUN (not available in the build environment)
 | E07 | Synthetic 6-day market (34 pullback + 35 QML plans, 94 scalp signals): every plan obeys its geometry and regime, fills/expiries match the bars, one live plan per kind+side; every scalp signal is the first candle of an aligned episode with SL 1.5 ATR5 / TP 1.0 ATR5, judged SL-first then time stop; BUY/SELL state only while a signal is young; WAIT always has a reason | PASS |
 | E08 | No repaint: 12 cut points over 8640 M1 bars, silver spec; all past states, arrows, signals and plans equal the full run | PASS |
 | E09 | Freshness (M1 4 min old = stale), metal detection, every reason/gate bit named, stale named first | PASS |
+| E12 | Impulse radar on a crafted rise under the previous-day high: every component measured (compression 2, proximity 2, momentum 1, M15 1, efficiency ≥ 1), READY at score ≥ 7 within 1 ATR arms a BUY STOP at level + 0.15 ATR with SL below and TP1 above; 2+ ATR away is FAR; an earlier plan at a passed level is dropped; the break bar fills the stop and TP1 follows; a spike that closes back below the level is a FALSE BREAK; falling pressure cancels an unfilled plan; nearest active levels per bar are causal | PASS |
 | E11 | Session levels on two crafted days: previous-day high/low active all day, Asia / London / pre-NY / NY highs and lows become active when their session ends; exactly one BREAKOUT per level on the first M5 close through it; day VWAP = running mean of typical price under constant volume, reset at midnight | PASS |
 | E10 | NY trap state machine on a crafted server day: pre-NY range, sweep, return, plan armed only on the confirmation bar (SELL LIMIT at the swept high, SL beyond the extreme), filled and TP1; sweep + return without confirmation is not a trade; an unfilled plan expires at the session end; next day starts fresh; distance in ATR units | PASS |
 
@@ -60,14 +61,14 @@ MetaEditor F7:    NOT RUN (not available in the build environment)
 | # | Case | Result |
 |---|---|---|
 | A1 | Demo account: every scalp maps to an engine signal (side, SL, TP, magic, symbol); lot within the risk allowance; one order per signal; scalps are the lowest priority (none while a plan order waits); exits by SL/TP; engine table + board | PASS |
-| A2 | Plans over five days (49 limits placed, 5 filled; QML, pullback, NY trap and swing kinds all placed): each order matches an ACTIVE plan of an enabled kind (entry, SL, TP1, side); a plan never has two orders nor an order beside its own position (this caught a real bug); every order risks ≤ 0.5 % at the SL; **one slot**: never two positions and no waiting order while a position is open (caught a same-tick scalp-after-limit bug); fills at the plan entry with the plan's SL/TP carried into the position or its exit | PASS |
+| A2 | Plans over five days (80 orders placed, 5 limit + 12 stop fills; QML, pullback, NY trap, swing and radar kinds all placed; radar orders are STOP orders beyond their level, everything else a limit): each order matches an ACTIVE plan of an enabled kind (entry, SL, TP1, side); a plan never has two orders nor an order beside its own position (this caught a real bug); every order risks ≤ 0.5 % at the SL; **one slot**: never two positions and no waiting order while a position is open (caught a same-tick scalp-after-limit bug); fills at the plan entry with the plan's SL/TP carried into the position or its exit | PASS |
 | A3 | REAL account trades (default); Algo Trading off: nothing sent, banner `ALGO TRADING OFF - WATCH ONLY`; a manual position and a foreign-magic order on the symbol are never modified, closed or cancelled, do not block the bot, and are listed as untouched | PASS |
 | A4 | Daily loss cap: no new entries, a stale scalp still closed by the time stop; spread 500: no entries; terminal autotrading off: no entries | PASS |
 | A5 | Regime flip closes an open scalp against the new M5 regime on the next closed candle, logged with the reason | PASS |
 | A6 | Restart on the same day: same plans/signals, 378 panel + chart objects identical, no request sent, no duplicate orders afterwards | PASS |
 | A7 | Frozen feed: banner DATA STALE, nothing sent. EURUSD: nothing at all | PASS |
 | A8 | Arrows: one per candle in the window + the wide white live one with its NEXT label (301 = 301), no candle without an arrow; 50 candles later every past arrow unchanged; hit-rate row shows % and n | PASS |
-| A9 | Panel: 7 engine rows, no key twice, every row has a value; board with TYPE/SIDE/ENTRY/SL/TP SENT/DIST/STATUS for 5 plan slots, a permanent SCALP M1 row whose live levels equal ask ∓ 1.5 / ± 1.0 ATR5 with TRIGGER NOW or the WAIT reason, LEVELS (with VWAP) and BREAK lines, level lines and the VWAP polyline on the chart, + 6 broker rows, NY session / pre-NY range / sweep-trap / slot lines, LAST UPDATE; a planted broker order and position appear as rows within one refresh with ticket, kind, NEAR and RUNNING; slot line reads TAKEN | PASS |
+| A9 | Panel: 7 engine rows, no key twice, every row has a value; board with TYPE/SIDE/ENTRY/SL/TP SENT/DIST/STATUS for 7 plan slots (incl. RADAR UP / DOWN), two RADAR score lines, a permanent SCALP M1 row whose live levels equal ask ∓ 1.5 / ± 1.0 ATR5 with TRIGGER NOW or the WAIT reason, LEVELS (with VWAP) and BREAK lines, level lines and the VWAP polyline on the chart, + 6 broker rows, NY session / pre-NY range / sweep-trap / slot lines, LAST UPDATE; a planted broker order and position appear as rows within one refresh with ticket, kind, NEAR and RUNNING; slot line reads TAKEN | PASS |
 | A10 | Silver (3 digits, tick value 5): SL/TP on the 0.001 grid, lots from the real tick value; with every order rejected: rejections logged, a rejected scalp is not re-sent for the same trigger | PASS |
 
 ## Manual checks in MT5 (10 minutes)

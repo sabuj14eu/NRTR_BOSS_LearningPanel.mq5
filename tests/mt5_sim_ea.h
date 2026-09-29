@@ -170,6 +170,7 @@ struct SimState
    double contract = 100.0, leverage = 100.0;
    double bid = 0.0;
    std::vector<MqlRates> m1, m5, m15;   // full history, may extend past `now`
+   std::vector<MqlRates> macro15;       // optional M15 series of a second symbol (macro filter)
    datetime now = 0;
    bool copyFail = false;
    int accountMode = ACCOUNT_TRADE_MODE_DEMO;
@@ -205,10 +206,25 @@ inline int simVisible(ENUM_TIMEFRAMES tf)
    while(k < (int)v.size() && v[(size_t)k].time <= SIM.now) k++;
    return k;
 }
-inline int Bars(const string &, ENUM_TIMEFRAMES tf) { return simVisible(tf); }
-inline int iBarShift(const string &, ENUM_TIMEFRAMES tf, datetime t, bool exact = false)
+inline bool simIsMacro(const string &sym) { return sym != SIM.sym && sym != _Symbol; }
+inline int simVisibleMacro()
+{
+   int k = 0;
+   while(k < (int)SIM.macro15.size() && SIM.macro15[(size_t)k].time <= SIM.now) k++;
+   return k;
+}
+inline int Bars(const string &sym, ENUM_TIMEFRAMES tf) { return simIsMacro(sym) ? simVisibleMacro() : simVisible(tf); }
+inline int iBarShift(const string &sym, ENUM_TIMEFRAMES tf, datetime t, bool exact = false)
 {
    (void)exact;
+   if(simIsMacro(sym))
+   {
+      int v = simVisibleMacro();
+      if(v == 0 || t < SIM.macro15[0].time) return -1;
+      int k = v - 1;
+      while(k > 0 && SIM.macro15[(size_t)k].time > t) k--;
+      return v - 1 - k;
+   }
    int v = simVisible(tf);
    const auto &s = simSeries(tf);
    if(v == 0 || t < s[0].time) return -1;
@@ -222,9 +238,18 @@ inline datetime iTime(const string &, ENUM_TIMEFRAMES tf, int shift)
    if(shift < 0 || shift >= v) return 0;
    return simSeries(tf)[(size_t)(v - 1 - shift)].time;
 }
-inline int CopyRates(const string &, ENUM_TIMEFRAMES tf, int start, int count, std::vector<MqlRates> &out)
+inline int CopyRates(const string &sym, ENUM_TIMEFRAMES tf, int start, int count, std::vector<MqlRates> &out)
 {
    if(SIM.copyFail) return -1;
+   if(simIsMacro(sym))
+   {
+      int vm = simVisibleMacro();
+      if(start >= vm || count <= 0) return -1;
+      int last = vm - 1 - start;
+      int first = std::max(0, last - count + 1);
+      out.assign(SIM.macro15.begin() + first, SIM.macro15.begin() + last + 1);
+      return (int)out.size();
+   }
    int v = simVisible(tf);
    if(start >= v || count <= 0) return -1;
    int last = v - 1 - start;
@@ -580,6 +605,18 @@ inline bool OrderSend(const MqlTradeRequest &req, MqlTradeResult &res)
          if((req.sl > 0 && req.sl < req.price + minDist) || (req.tp > 0 && req.tp > req.price - minDist))
          { res.retcode = TRADE_RETCODE_INVALID_STOPS; return false; }
       }
+      else if(req.type == ORDER_TYPE_BUY_STOP)
+      {
+         if(req.price < simAsk() + minDist) { res.retcode = TRADE_RETCODE_INVALID_PRICE; return false; }
+         if((req.sl > 0 && req.sl > req.price - minDist) || (req.tp > 0 && req.tp < req.price + minDist))
+         { res.retcode = TRADE_RETCODE_INVALID_STOPS; return false; }
+      }
+      else if(req.type == ORDER_TYPE_SELL_STOP)
+      {
+         if(req.price > SIM.bid - minDist) { res.retcode = TRADE_RETCODE_INVALID_PRICE; return false; }
+         if((req.sl > 0 && req.sl < req.price + minDist) || (req.tp > 0 && req.tp > req.price - minDist))
+         { res.retcode = TRADE_RETCODE_INVALID_STOPS; return false; }
+      }
       else { res.retcode = TRADE_RETCODE_INVALID; return false; }
       SimOrder o;
       o.ticket = SIM.nextTicket++;
@@ -621,11 +658,14 @@ inline void simBarPath(const MqlRates &b)
    for(size_t i = 0; i < SIM.ord.size();)
    {
       SimOrder o = SIM.ord[i];
-      bool fill = (o.type == ORDER_TYPE_BUY_LIMIT) ? (b.low <= o.price) : (b.high >= o.price);
+      bool isBuy = (o.type == ORDER_TYPE_BUY_LIMIT || o.type == ORDER_TYPE_BUY_STOP);
+      bool isStop = (o.type == ORDER_TYPE_BUY_STOP || o.type == ORDER_TYPE_SELL_STOP);
+      bool fill = isStop ? (isBuy ? (b.high >= o.price) : (b.low <= o.price))
+                         : (isBuy ? (b.low <= o.price) : (b.high >= o.price));
       if(!fill) { i++; continue; }
       SIM.ord.erase(SIM.ord.begin() + (long)i);
-      simOpenPos(o.sym, o.type == ORDER_TYPE_BUY_LIMIT ? POSITION_TYPE_BUY : POSITION_TYPE_SELL, o.vol, o.price, o.sl,
-                 o.tp, o.magic, o.comment, "limit");
+      simOpenPos(o.sym, isBuy ? POSITION_TYPE_BUY : POSITION_TYPE_SELL, o.vol, o.price, o.sl,
+                 o.tp, o.magic, o.comment, isStop ? "stop" : "limit");
    }
    for(size_t i = 0; i < SIM.pos.size();)
    {

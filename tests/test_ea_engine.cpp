@@ -592,7 +592,11 @@ int main()
       NqLevels L;
       std::vector<NqBreak> brk;
       int nb = 0;
-      NqRunLevels(s, 60, 600, 600, 990, 0, 990, 1380, L, brk, nb);
+      std::vector<double> ra, sb;
+      NqRunLevels(s, 60, 600, 600, 990, 0, 990, 1380, L, brk, nb, ra, sb);
+      // nearest active level above / below each close, causal
+      CHECK(near(ra[(size_t)(288 + 12 * 20)], 106.0) && near(sb[(size_t)(288 + 12 * 20)], 105.0), "at 20:00 (close 105.5) the nearest active levels are London high 106 above and Asia high 105 below");
+      CHECK(near(ra[(size_t)(288 + 12 * 11)], 101.0), "at 11:00 (Asia active, London still building) the nearest resistance above 100 is PD HIGH 101");
       CHECK(L.day == NqDayOf(v.back().t), "levels are for the last day");
       CHECK(L.ok[NQ_LV_PDH] && near(L.px[NQ_LV_PDH], 101) && near(L.px[NQ_LV_PDL], 99) && L.act[NQ_LV_PDH], "previous day high/low active all day");
       CHECK(L.ok[NQ_LV_ASH] && near(L.px[NQ_LV_ASH], 105) && near(L.px[NQ_LV_ASL], 95) && L.act[NQ_LV_ASH], "Asia high/low active after 10:00");
@@ -622,6 +626,100 @@ int main()
       CHECK(okV && near(vw[287], 100.0), "day VWAP = running mean of typical price (constant volume), reset at midnight");
    }
    end("E11");
+
+   begin("E12 impulse radar: pressure scored under a level, BUY STOP armed only when READY, fill -> TP1, false break");
+   {
+      // day 1 flat 99..101 (PD HIGH 101). Day 2: efficient rise to just under 101,
+      // then 4 compressing bars testing the level, then the break.
+      auto mk = [&](std::vector<SBar> &v, double o, double h, double l, double c) {
+         v.push_back({T0 + (long long)v.size() * 300, o, h, l, c});
+      };
+      std::vector<SBar> v;
+      for(int i = 0; i < 288; i++) mk(v, 100, 101, 99, 100);
+      double c = 95.0;
+      for(int i = 0; i < 22; i++) { double nc = c + 0.25; mk(v, c, nc + 0.03, c - 0.03, nc); c = nc; }   // 95 -> 100.5
+      double cl[4] = {100.62, 100.72, 100.80, 100.86};
+      for(int i = 0; i < 4; i++) { mk(v, c, cl[i] + 0.09, c - 0.02, cl[i]); c = cl[i]; }                 // tests under 101
+      int readyBar = (int)v.size() - 1;
+      NqParams Pr = params(0.01, 2);
+      auto build = [&](const std::vector<SBar> &bars, NqSeries &s, std::vector<NqPivot> &piv, std::vector<NqPlan> &plans, int &np,
+                       NqRadar &up, NqRadar &dn) {
+         NqSeries ctx;
+         NqSeriesResize(ctx, 0);
+         ctx.sec = 900;
+         fill(s, bars, 300);
+         for(int i = 0; i < s.n; i++) s.v[i] = 100.0;
+         NqRunRegime(s, piv, ctx, Pr);
+         for(int i = 0; i < s.n; i++) s.hi[i] = 1;   // M15 boss agrees (context vote)
+         NqLevels L;
+         std::vector<NqBreak> brk;
+         int nb = 0;
+         std::vector<double> ra, sb;
+         NqRunLevels(s, 60, 600, 600, 990, 0, 990, 1380, L, brk, nb, ra, sb);
+         NqRunRadar(s, piv, s.np, ra, sb, Pr, 0.15, plans, np, up, dn);
+      };
+      NqSeries s;
+      std::vector<NqPivot> piv;
+      std::vector<NqPlan> plans;
+      int np = 0;
+      NqRadar up, dn;
+      build(v, s, piv, plans, np, up, dn);
+      std::printf("    radar up: level %.2f dist %.2f score %d (struct %d compr %d prox %d eff %d mom %d m15 %d) state %s\n",
+                  up.level, up.dist, up.score, up.sStruct, up.sComp, up.sProx, up.sEff, up.sMom, up.sM15, NqRadarStateText(up.state).c_str());
+      CHECK(near(up.level, 101.0), "upside level = previous-day high");
+      CHECK(up.sComp == 2 && up.sProx == 2 && up.sMom == 1 && up.sM15 == 1 && up.sEff >= 1, "compression, proximity, momentum, M15 and efficiency all measured");
+      CHECK(up.state == NQ_RD_READY && up.score >= 7, "READY: score >= 7 within 1 ATR");
+      // on the way up the radar first armed at the previous-day LOW (99, a level above a
+      // price of 95) and dropped it when the price crawled through: that is expected
+      int last = NqLatestPlanDir(plans, np, NQ_PLAN_RADAR, NQ_BUY);
+      CHECK(last >= 0 && plans[(size_t)last].dir == NQ_BUY && plans[(size_t)last].idx == readyBar, "a BUY STOP plan armed on the READY bar");
+      double e = 0.0;
+      if(last >= 0)
+      {
+         const NqPlan &pl = plans[(size_t)last];
+         e = pl.entry;
+         CHECK(near(pl.entry, NqRoundTick(101.0 + 0.15 * s.atr[readyBar], 0.01, 2, 1)) && pl.entry > s.c[readyBar], "entry = level + 0.15 ATR, above the close");
+         CHECK(pl.sl < pl.entry && pl.tp1 > pl.entry && near(pl.lvlA, 101.0), "SL below, TP1 above, level recorded");
+      }
+      bool earlierDropped = true;
+      for(int k = 0; k < np; k++)
+         if(k != last && plans[(size_t)k].status == NQ_PL_ACTIVE) earlierDropped = false;
+      CHECK(earlierDropped, "no older plan stays armed once its level is passed");
+      // a rise still 2+ ATR away is not READY: the prefix ending at 99.0 is FAR
+      std::vector<SBar> vFar(v.begin(), v.begin() + 288 + 16);
+      NqSeries s2; std::vector<NqPivot> piv2; std::vector<NqPlan> pl2; int np2 = 0; NqRadar up2, dn2;
+      build(vFar, s2, piv2, pl2, np2, up2, dn2);
+      CHECK(up2.state == NQ_RD_FAR, "2+ ATR from the level: FAR");
+      // breakout: the stop fills, the bar closes above the level, later bars reach TP1
+      std::vector<SBar> vB = v;
+      mk(vB, c, e + 0.30, c - 0.02, e + 0.25);
+      for(int i = 0; i < 4; i++) { double o = vB.back().c; mk(vB, o, o + 0.30, o - 0.02, o + 0.25); }
+      NqSeries s3; std::vector<NqPivot> piv3; std::vector<NqPlan> pl3; int np3 = 0; NqRadar up3, dn3;
+      build(vB, s3, piv3, pl3, np3, up3, dn3);
+      int k3 = -1;
+      for(int k = 0; k < np3; k++) if(pl3[(size_t)k].idx == readyBar) k3 = k;
+      CHECK(k3 >= 0 && pl3[(size_t)k3].fillIdx == readyBar + 1 && pl3[(size_t)k3].status == NQ_PL_TP1, "stop filled on the break bar and reached TP1");
+      // false break: the break bar spikes through the stop and CLOSES back below the level
+      std::vector<SBar> vF = v;
+      mk(vF, c, e + 0.20, c - 0.05, 100.60);
+      for(int i = 0; i < 3; i++) mk(vF, 100.60, 100.70, 100.50, 100.60);
+      NqSeries s4; std::vector<NqPivot> piv4; std::vector<NqPlan> pl4; int np4 = 0; NqRadar up4, dn4;
+      build(vF, s4, piv4, pl4, np4, up4, dn4);
+      int k4 = -1;
+      for(int k = 0; k < np4; k++) if(pl4[(size_t)k].idx == readyBar) k4 = k;
+      CHECK(k4 >= 0 && pl4[(size_t)k4].fillIdx == readyBar + 1 && pl4[(size_t)k4].status == NQ_PL_FALSE && pl4[(size_t)k4].statusIdx == readyBar + 1,
+            "spike through and close back below = FALSE BREAK");
+      // pressure fails before the break: closes fall away, score drops -> plan cancelled
+      std::vector<SBar> vP = v;
+      double cc = c;
+      for(int i = 0; i < 6; i++) { double nc = cc - 0.30; mk(vP, cc, cc + 0.02, nc - 0.03, nc); cc = nc; }
+      NqSeries s5; std::vector<NqPivot> piv5; std::vector<NqPlan> pl5; int np5 = 0; NqRadar up5, dn5;
+      build(vP, s5, piv5, pl5, np5, up5, dn5);
+      int k5 = -1;
+      for(int k = 0; k < np5; k++) if(pl5[(size_t)k].idx == readyBar) k5 = k;
+      CHECK(k5 >= 0 && pl5[(size_t)k5].status == NQ_PL_INVALID && pl5[(size_t)k5].fillIdx < 0, "pressure failed (score < 5) cancels the unfilled plan");
+   }
+   end("E12");
 
    std::printf("\nEA ENGINE TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
