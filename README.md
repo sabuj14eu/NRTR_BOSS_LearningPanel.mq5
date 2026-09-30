@@ -401,7 +401,7 @@ in the SignalMesh repo) reads these into a per-kind performance matrix.
 ## SignalMesh telemetry (ANALYSIS ONLY - the METAL ANALYSIS page)
 
 Since 1.6.0 the EA can also act as a **data witness**: when `InpTelemetryUrl` is set (e.g.
-`https://status.signalmesh.dev/webhooks/metal/telemetry`, allowed under Tools → Options →
+`https://app.signalmesh.dev/webhooks/metal/telemetry`, allowed under Tools → Options →
 Expert Advisors → WebRequest) it POSTs one JSON **snapshot of what the panel shows** on every
 closed M1 candle and at least every `InpTelemetrySec` seconds (default 60), with the same
 `X-Brain-Secret` header as the journal. SignalMesh stores the snapshot verbatim and renders it
