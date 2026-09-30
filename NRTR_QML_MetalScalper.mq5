@@ -2531,6 +2531,10 @@ input group "SignalMesh journal (every plan event, append-only)"
 input bool           InpJournalToFile    = true;        // Append every event to MQL5/Files/NQ_events_<symbol>.jsonl
 input string         InpSignalMeshUrl    = "";          // POST events here (e.g. https://status.signalmesh.dev/webhooks/brain/signal); empty = off
 input string         InpSignalMeshSecret = "";          // X-Brain-Secret for that URL (never printed). Allow the URL in Tools > Options > Expert Advisors
+input group "SignalMesh telemetry (ANALYSIS ONLY - a data witness for the METAL ANALYSIS page, never a signal)"
+input string         InpTelemetryUrl     = "";          // POST a state snapshot here (e.g. https://status.signalmesh.dev/webhooks/metal/telemetry); empty = off
+input int            InpTelemetrySec     = 60;          // Heartbeat every N seconds, and on every closed M1 candle (min 5)
+input bool           InpTelemetryDemoOnly = true;       // Send telemetry from a DEMO account only: a REAL account is never the witness
 input group "Forecast arrows"
 input int            InpForecastMinScore = 3;           // Votes needed for a bias arrow (1-5); 3 = strong, one-sided
 input int            InpArrowBars        = 300;         // Arrows drawn on the last N candles
@@ -2589,7 +2593,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.5.0"
+#define NQ_EA_VERSION "1.6.0"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -2601,6 +2605,16 @@ int      g_webN;
 datetime g_webLast;
 int      g_webFails;
 bool     g_jrFileWarned;
+// telemetry (ANALYSIS ONLY): a heartbeat snapshot of the panel's state for the
+// SignalMesh METAL ANALYSIS page. It reads state and sends it; it never
+// changes a decision, a level or an order, and a failed POST is a Print.
+string   g_telUrl;
+int      g_telSec;
+bool     g_telDemoOnly;
+datetime g_telLast;
+int      g_telFails;
+int      g_telSent;
+bool     g_telWarned;
 datetime g_labelT;     // where level labels are drawn: the latest closed M1 bar (always on screen)
 // the verdict for the human, recomputed every second
 string   g_verdict;
@@ -2674,6 +2688,9 @@ bool   NqIsOurs(long magic, string sym);
 string NqMoney(double v);
 void   NqEmitBroker(string comment, string event, string extra);
 void   NqWebDrain();
+void   NqTelemetry();
+string NqTelemetryJson();
+void   NqScalpAsPlan(int k, NqPlan &p);
 void   NqJournalScan();
 bool   NqPlanByComment(string cmt, NqPlan &out);
 string NqJsonS(string key, string val);
@@ -2775,6 +2792,13 @@ int OnInit()
    g_webLast = 0;
    g_webFails = 0;
    g_jrFileWarned = false;
+   g_telUrl = InpTelemetryUrl;
+   g_telSec = (InpTelemetrySec < 5) ? 5 : InpTelemetrySec;
+   g_telDemoOnly = InpTelemetryDemoOnly;
+   g_telLast = 0;
+   g_telFails = 0;
+   g_telSent = 0;
+   g_telWarned = false;
    g_labelT = 0;
    g_verdict = "";
    g_verdictClr = 0;
@@ -2866,6 +2890,7 @@ void NqUpdate()
    NqVerdict();
    NqDrawNear();
    NqWebDrain();
+   NqTelemetry();
    NqDrawPanel();
    ChartRedraw(0);
 }
@@ -3800,9 +3825,9 @@ void NqJournalWrite(string line)
 
 // one POST; true when the platform answered 2xx. The secret travels in a
 // header and never reaches the log.
-bool NqPost(string json)
+bool NqPost(string url, string json)
 {
-   if(g_webUrl == "")
+   if(url == "")
       return true;
    char data[];
    StringToCharArray(json, data, 0, StringLen(json), CP_UTF8);
@@ -3811,7 +3836,7 @@ bool NqPost(string json)
    string headers = "Content-Type: application/json\r\n";
    if(g_webSecret != "")
       headers = headers + "X-Brain-Secret: " + g_webSecret + "\r\n";
-   int code = WebRequest("POST", g_webUrl, headers, 3000, data, result, resultHeaders);
+   int code = WebRequest("POST", url, headers, 3000, data, result, resultHeaders);
    return (code >= 200 && code < 300);
 }
 
@@ -3824,7 +3849,7 @@ void NqEmit(const NqPlan &p, string event, string extra)
       Print("NQ journal: " + event + " " + NqSignalIdOf(p));
       return;
    }
-   bool okPost = (g_webN == 0) && NqPost(json);   // keep order: never jump the queue
+   bool okPost = (g_webN == 0) && NqPost(g_webUrl, json);   // keep order: never jump the queue
    if(okPost)
    {
       g_webFails = 0;
@@ -3850,7 +3875,7 @@ void NqWebDrain()
    if(now - g_webLast < 5)
       return;
    g_webLast = now;
-   if(!NqPost(g_webQ[0]))
+   if(!NqPost(g_webUrl, g_webQ[0]))
    {
       g_webFails++;
       return;
@@ -3860,6 +3885,278 @@ void NqWebDrain()
    g_webN--;
    ArrayResize(g_webQ, g_webN);
    g_webFails = 0;
+}
+
+//+------------------------------------------------------------------+
+//| TELEMETRY (ANALYSIS ONLY). A snapshot of what the panel shows,   |
+//| POSTed to SignalMesh's /webhooks/metal/telemetry so the METAL     |
+//| ANALYSIS page can display it. It is a DATA WITNESS: every field   |
+//| is the EA's own observed state, labelled as such; SignalMesh      |
+//| stores it verbatim and derives nothing from it. Nothing here can  |
+//| block or alter trading: it runs after NqTrade, a failed POST is a |
+//| Print, and there is no queue - the next heartbeat replaces it.    |
+//+------------------------------------------------------------------+
+string NqJsonB(string key, bool val)
+{
+   return "\"" + key + "\":" + (val ? "true" : "false");
+}
+
+// a reason / gate bit-set as a JSON array of the panel's own words
+string NqJsonNames(string key, int bits, bool gate)
+{
+   string out = "\"" + key + "\":[";
+   for(int nth = 0; nth < 16; nth++)
+   {
+      string nm = gate ? NqGateAt(bits, nth) : NqReasonAt(bits, nth);
+      if(nm == "")
+         break;
+      out = out + ((nth > 0) ? "," : "") + "\"" + NqJsonEsc(nm) + "\"";
+   }
+   return out + "]";
+}
+
+string NqTelemetryPlan(const NqPlan &p, string slot)
+{
+   return "{" + NqJsonS("slot", slot) + "," + NqJsonS("kind", NqPlanKindText(p.kind)) + "," +
+          NqJsonS("tf", (p.tf == 900) ? "M15" : ((p.tf == 60) ? "M1" : "M5")) + "," +
+          NqJsonS("side", (p.dir > 0) ? "BUY" : "SELL") + "," +
+          NqJsonS("order", NqPlanIsStop(p) ? "STOP" : ((p.kind == NQ_PLAN_SCALP) ? "MARKET" : "LIMIT")) + "," +
+          NqJsonS("status", (p.kind == NQ_PLAN_SCALP) ? NqSignalStatusText(p.status) : NqPlanStatusText(p.status)) + "," +
+          NqJsonN("entry", p.entry, g_digits) + "," + NqJsonN("sl", p.sl, g_digits) + "," +
+          NqJsonN("tp1", p.tp1, g_digits) + "," + NqJsonN("tp2", p.tp2, g_digits) + "," +
+          NqJsonN("level", p.lvlA, g_digits) + "," + NqJsonN("level2", p.lvlB, g_digits) + "," +
+          NqJsonI("made_at_server", (long)p.madeAt) + "," + NqJsonS("signal_id", NqSignalIdOf(p)) + "," +
+          NqJsonB("placed", (p.kind != NQ_PLAN_SCALP) && (NqFindPlanOrder(p) != 0)) + "}";
+}
+
+string NqTelemetryRecord(string key, int done, int won, int lost)
+{
+   return "\"" + key + "\":{" + NqJsonI("done", done) + "," + NqJsonI("won", won) + "," + NqJsonI("lost", lost) + "," +
+          NqJsonS("evidence", NqEvidenceText(done)) + "}";
+}
+
+string NqTelemetryJson()
+{
+   datetime nowS = TimeTradeServer();
+   datetime nowG = TimeGMT();
+   int n1 = g_s1.n;
+   int n5 = g_s5.n;
+   int n15 = g_s15.n;
+   bool ok = (g_metal != NQ_METAL_NONE && g_ready && n1 > 0 && n5 > 0 && n15 > 0);
+   string metal = (g_metal == NQ_METAL_GOLD) ? "GOLD" : ((g_metal == NQ_METAL_SILVER) ? "SILVER" : "NONE");
+   string dataReason = "";
+   if(!ok)
+      dataReason = NqReasonAt(g_finalR, 0);
+   else if(!g_fresh)
+      dataReason = NqReasonName(NQ_R_STALE);
+   string j = "{" + NqJsonS("system", "NQ-EA") + "," + NqJsonS("kind", "telemetry") + "," +
+              NqJsonS("mode", "ANALYSIS_ONLY") + "," + NqJsonS("label", "ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL") + "," +
+              NqJsonS("source", "NRTR_QML_MetalScalper") + "," + NqJsonS("ea_version", NQ_EA_VERSION) + "," +
+              NqJsonS("symbol", g_sym) + "," + NqJsonS("metal", metal) + "," +
+              NqJsonS("account_mode", g_isDemo ? "demo" : "real") + "," + NqJsonI("magic", InpMagic) + "," +
+              NqJsonI("ts_server", (long)nowS) + "," + NqJsonI("ts_gmt", (long)nowG) + "," +
+              NqJsonI("server_offset_sec", (long)nowS - (long)nowG) + "," + NqJsonI("heartbeat_sec", g_telSec) + "," +
+              NqJsonB("ready", g_ready) + "," + NqJsonB("fresh", ok && g_fresh) + "," + NqJsonS("data_reason", dataReason) + ",";
+
+   // candles / feed
+   j = j + "\"candles\":{";
+   if(ok)
+   {
+      datetime t1 = g_s1.t[n1 - 1];
+      datetime t5 = g_s5.t[n5 - 1];
+      datetime t15 = g_s15.t[n15 - 1];
+      int k5 = g_s1.map[n1 - 1];
+      double atr5 = (k5 >= 0) ? g_s5.atr[k5] : g_s5.atr[n5 - 1];
+      j = j + NqJsonS("state", g_fresh ? "CLOSED FRESH" : "STALE") + "," +
+          NqJsonI("m1_closed_server", (long)t1) + "," + NqJsonI("m1_age_sec", (long)nowS - (long)(t1 + g_s1.sec)) + "," +
+          NqJsonI("m5_closed_server", (long)t5) + "," + NqJsonI("m5_age_sec", (long)nowS - (long)(t5 + g_s5.sec)) + "," +
+          NqJsonI("m15_closed_server", (long)t15) + "," + NqJsonI("m15_age_sec", (long)nowS - (long)(t15 + g_s15.sec)) + "," +
+          NqJsonN("atr5", atr5, g_digits) + "," + NqJsonN("atr1", g_s1.atr[n1 - 1], g_digits) + "," +
+          NqJsonN("atr15", g_s15.atr[n15 - 1], g_digits) + "," + NqJsonI("atr_period", InpNrtrAtrPeriod) + "," +
+          NqJsonN("bid", SymbolInfoDouble(g_sym, SYMBOL_BID), g_digits) + "," +
+          NqJsonN("ask", SymbolInfoDouble(g_sym, SYMBOL_ASK), g_digits) + "," + NqJsonI("spread_pts", g_spreadPts);
+   }
+   else
+      j = j + NqJsonS("state", "UNKNOWN");
+   j = j + "},";
+
+   // M15 context (never gates - the EA's own word)
+   j = j + "\"m15\":{";
+   if(ok)
+      j = j + NqJsonS("context", NqContextText(g_s15.ctx[n15 - 1])) + "," + NqJsonS("nrtr_dir", NqDirText(g_s15.dir[n15 - 1])) + "," +
+          NqJsonN("nrtr_level", g_s15.stop[n15 - 1], g_digits) + "," + NqJsonN("ema_slow", g_s15.emaS[n15 - 1], g_digits) + "," +
+          NqJsonI("ema_slow_period", InpEmaSlow) + "," + NqJsonN("close", g_s15.c[n15 - 1], g_digits) + "," +
+          NqJsonI("closed_server", (long)g_s15.t[n15 - 1]);
+   else
+      j = j + NqJsonS("context", "UNKNOWN");
+   j = j + "},";
+
+   // M5 regime + structure
+   j = j + "\"m5\":{";
+   if(ok)
+   {
+      int st = g_s5.st[n5 - 1];
+      string stS = (st == NQ_ST_BULL) ? "BULL" : ((st == NQ_ST_BEAR) ? "BEAR" : ((st == NQ_ST_MIXED) ? "MIXED" : "NOT CONFIRMED"));
+      j = j + NqJsonS("regime", NqRegimeText(g_s5.regime[n5 - 1])) + "," + NqJsonS("nrtr_dir", NqDirText(g_s5.dir[n5 - 1])) + "," +
+          NqJsonN("nrtr_level", g_s5.stop[n5 - 1], g_digits) + "," +
+          NqJsonS("structure", NqStructText(st, g_s5.hl[n5 - 1], g_s5.ll[n5 - 1], g_s5.lk[n5 - 1])) + "," +
+          NqJsonS("structure_state", stS) + "," + NqJsonI("lookback", InpSwingStrength) + "," +
+          NqJsonNames("reasons", g_s5.regR[n5 - 1], false) + "," +
+          NqJsonN("close", g_s5.c[n5 - 1], g_digits) + "," + NqJsonI("closed_server", (long)g_s5.t[n5 - 1]);
+      if(ArraySize(g_resAbove) >= n5 && ArraySize(g_supBelow) >= n5)
+         j = j + "," + NqJsonN("res_above", g_resAbove[n5 - 1], g_digits) + "," + NqJsonN("sup_below", g_supBelow[n5 - 1], g_digits);
+   }
+   else
+      j = j + NqJsonS("regime", "UNKNOWN");
+   j = j + "},";
+
+   // M1 trigger + forecast
+   j = j + "\"m1\":{";
+   if(ok)
+   {
+      int st1 = g_s1.state[n1 - 1];
+      int fc = g_s1.fc[n1 - 1];
+      int cnt = 0;
+      int hits = 0;
+      NqForecastStats(g_s1, 0, cnt, hits);
+      j = j + NqJsonS("nrtr_dir", NqDirText(g_s1.dir[n1 - 1])) + "," + NqJsonN("nrtr_level", g_s1.stop[n1 - 1], g_digits) + "," +
+          NqJsonS("trigger", (st1 == NQ_BUY) ? "BUY" : ((st1 == NQ_SELL) ? "SELL" : "WAIT")) + "," +
+          NqJsonNames("reasons", g_s1.reasons[n1 - 1], false) + "," +
+          NqJsonS("forecast_next", (fc > 0) ? "UP" : ((fc < 0) ? "DOWN" : "NONE")) + "," + NqJsonI("forecast_score", g_s1.fcScore[n1 - 1]) + "," +
+          NqJsonI("forecast_resolved", cnt) + "," + NqJsonI("forecast_hits", hits) + "," + NqJsonS("forecast_evidence", NqEvidenceText(cnt)) + "," +
+          NqJsonN("ema_fast", g_s1.emaF[n1 - 1], g_digits) + "," + NqJsonI("ema_fast_period", InpEmaFast) + "," +
+          NqJsonN("close", g_s1.c[n1 - 1], g_digits) + "," + NqJsonI("closed_server", (long)g_s1.t[n1 - 1]);
+   }
+   else
+      j = j + NqJsonS("trigger", "UNKNOWN");
+   j = j + "},";
+
+   // OBSERVED EA STATE: the verdict the panel shows a human, and the gates
+   j = j + "\"observed\":{" + NqJsonS("label", "OBSERVED EA STATE - not a SignalMesh recommendation") + "," +
+       NqJsonS("verdict", g_verdict) + "," + NqJsonS("near", g_nearText) + "," +
+       NqJsonS("final", (g_final == NQ_BUY) ? "BUY" : ((g_final == NQ_SELL) ? "SELL" : "WAIT")) + "," +
+       NqJsonS("final_reason", NqReasonAt(g_finalR, 0)) + "," + NqJsonNames("gate", g_gate, true) + "," +
+       NqJsonB("algo_trading", (g_gate & NQ_K_TRADE_DISABLED) == 0) + "," + NqJsonB("auto_scalp", InpScalpAuto) + "," +
+       NqJsonB("pending_auto", InpPendingAuto) + "," + NqJsonB("allow_real", InpAllowRealAccount) + "},";
+
+   // the SCALP M1 row exactly as the board shows it
+   j = j + "\"scalp_row\":{";
+   if(ok)
+   {
+      int reg = g_s5.regime[n5 - 1];
+      int k5 = g_s1.map[n1 - 1];
+      double atr5 = (k5 >= 0) ? g_s5.atr[k5] : g_s5.atr[n5 - 1];
+      double bid = SymbolInfoDouble(g_sym, SYMBOL_BID);
+      double ask = SymbolInfoDouble(g_sym, SYMBOL_ASK);
+      double slD = NormalizeDouble(InpScalpSlAtr * atr5, g_digits);
+      double tpD = NormalizeDouble(InpScalpTpAtr * atr5, g_digits);
+      int st1 = g_s1.state[n1 - 1];
+      string side = (reg == NQ_REG_BULL) ? "BUY MKT" : ((reg == NQ_REG_BEAR) ? "SELL MKT" : "NONE");
+      string stT = "WAIT: M5 CHOP - no direction";
+      double entry = bid;
+      double sl = 0.0;
+      double tp = 0.0;
+      if(atr5 > 0.0 && (reg == NQ_REG_BULL || reg == NQ_REG_BEAR))
+      {
+         entry = (reg > 0) ? ask : bid;
+         sl = (reg > 0) ? NqRoundTick(entry - slD, g_tick, g_digits, -1) : NqRoundTick(entry + slD, g_tick, g_digits, 1);
+         tp = (reg > 0) ? NqRoundTick(entry + tpD, g_tick, g_digits, 1) : NqRoundTick(entry - tpD, g_tick, g_digits, -1);
+         if(st1 == NQ_BUY || st1 == NQ_SELL)
+            stT = "TRIGGER NOW" + (InpScalpAuto ? ((g_gate == 0) ? " - auto" : (" - " + NqGateAt(g_gate, 0))) : " - manual");
+         else
+            stT = "WAIT: " + NqReasonAt(g_s1.reasons[n1 - 1], 0);
+      }
+      else if(atr5 <= 0.0)
+         stT = "ATR not ready";
+      j = j + NqJsonS("side", side) + "," + NqJsonN("entry", entry, g_digits) + "," + NqJsonN("sl", sl, g_digits) + "," +
+          NqJsonN("tp", tp, g_digits) + "," + NqJsonN("lot", g_lotNext, 2) + "," + NqJsonN("loss_at_sl", g_lossNext, 2) + "," +
+          NqJsonN("sl_atr", InpScalpSlAtr, 2) + "," + NqJsonN("tp_atr", InpScalpTpAtr, 2) + "," + NqJsonI("time_stop_bars", InpScalpTimeStop) + "," +
+          NqJsonS("state", stT);
+   }
+   else
+      j = j + NqJsonS("state", "UNKNOWN");
+   j = j + "},";
+
+   // impulse radar and NY trap state, as the board shows them
+   j = j + "\"radar\":{\"up\":{" + NqJsonS("state", NqRadarStateText(g_rdUp.state)) + "," + NqJsonI("score", g_rdUp.score) + "," +
+       NqJsonS("pressure", NqPressureText(g_rdUp.score)) + "," + NqJsonN("level", g_rdUp.level, g_digits) + "," + NqJsonN("dist_atr", g_rdUp.dist, 2) + "}," +
+       "\"down\":{" + NqJsonS("state", NqRadarStateText(g_rdDn.state)) + "," + NqJsonI("score", g_rdDn.score) + "," +
+       NqJsonS("pressure", NqPressureText(g_rdDn.score)) + "," + NqJsonN("level", g_rdDn.level, g_digits) + "," + NqJsonN("dist_atr", g_rdDn.dist, 2) + "}},";
+   j = j + "\"ny\":{" + NqJsonS("high_side", NqNyStateText(g_nyState.stBull)) + "," + NqJsonS("low_side", NqNyStateText(g_nyState.stBear)) + "," +
+       NqJsonB("in_session", g_nyState.inSession) + "," + NqJsonB("pre_range_ok", g_nyState.preOk) + "," +
+       NqJsonN("pre_hi", g_nyState.preHi, g_digits) + "," + NqJsonN("pre_lo", g_nyState.preLo, g_digits) + "},";
+
+   // every plan slot the board shows (latest per slot, whatever its status) + the latest scalp record
+   j = j + "\"plans\":[";
+   int shown = 0;
+   for(int q = 0; q < NQ_PLAN_SLOTS; q++)
+   {
+      NqPlan pl;
+      if(!NqSlotPlan(q, pl))
+         continue;
+      string slot = (q == 0) ? "QML M5" : ((q == 1) ? "PULLBACK M5" : ((q == 2) ? "NY TRAP" : ((q == 3) ? "QML M15" :
+                    ((q == 4) ? "PULLBACK M15" : ((q == 5) ? "RADAR UP" : "RADAR DOWN")))));
+      j = j + ((shown > 0) ? "," : "") + NqTelemetryPlan(pl, slot);
+      shown++;
+   }
+   if(g_nSig > 0)
+   {
+      NqPlan sp;
+      NqScalpAsPlan(g_nSig - 1, sp);
+      j = j + ((shown > 0) ? "," : "") + NqTelemetryPlan(sp, "SCALP M1");
+   }
+   j = j + "],";
+
+   // the account as the EA sees it (this magic, this symbol) - no identity, no credentials
+   j = j + "\"account\":{" + NqJsonN("balance", g_balance, 2) + "," + NqJsonN("floating", g_floating, 2) + "," +
+       NqJsonN("day_pnl", g_dayPnl, 2) + "," + NqJsonI("open_positions", g_openCount) + "," + NqJsonI("pending_orders", g_pendCount) + "," +
+       NqJsonI("manual_positions", g_manualPos) + "," + NqJsonI("manual_orders", g_manualOrd) + "," + NqJsonI("trades_today", g_tradesToday) + "," +
+       NqJsonN("risk_pct", InpRiskPct, 2) + "," + NqJsonN("risk_money", g_riskMoney, 2) + "," + NqJsonS("last_trade", g_lastTrade) + "},";
+
+   // the RECORD rows: what the loaded history says happened to each engine
+   int done = 0;
+   int won = 0;
+   int lost = 0;
+   NqSignalStats(g_sigs, g_nSig, done, won, lost);
+   j = j + "\"record\":{" + NqTelemetryRecord("scalp", done, won, lost);
+   NqPlanStats(g_plans, g_nPlans, NQ_PLAN_QML, done, won, lost);
+   j = j + "," + NqTelemetryRecord("qml", done, won, lost);
+   NqPlanStats(g_plans, g_nPlans, NQ_PLAN_PB, done, won, lost);
+   j = j + "," + NqTelemetryRecord("pullback", done, won, lost);
+   NqPlanStats(g_ny, g_nNy, NQ_PLAN_NY, done, won, lost);
+   j = j + "," + NqTelemetryRecord("ny_trap", done, won, lost);
+   NqPlanStats(g_radar, g_nRadar, NQ_PLAN_RADAR, done, won, lost);
+   j = j + "," + NqTelemetryRecord("radar", done, won, lost) + "}";
+   return j + "}";
+}
+
+// one heartbeat: on every closed M1 candle and at least every g_telSec seconds
+void NqTelemetry()
+{
+   if(g_telUrl == "")
+      return;
+   if(g_telDemoOnly && !g_isDemo)
+   {
+      if(!g_telWarned)
+         Print("NQ telemetry: REAL account and demo-only is on - nothing is sent (the witness must be a DEMO account)");
+      g_telWarned = true;
+      return;
+   }
+   datetime now = TimeTradeServer();
+   if(!g_newBar1 && g_telLast != 0 && now - g_telLast < g_telSec)
+      return;
+   g_telLast = now;
+   if(NqPost(g_telUrl, NqTelemetryJson()))
+   {
+      if(g_telSent == 0 || g_telFails > 0)
+         Print("NQ telemetry: snapshot accepted by SignalMesh (ANALYSIS ONLY)");
+      g_telSent++;
+      g_telFails = 0;
+      return;
+   }
+   g_telFails++;
+   if(g_telFails == 1 || g_telFails == 10 || g_telFails % 100 == 0)
+      Print("NQ telemetry: POST failed (" + IntegerToString(g_telFails) + " in a row) - the page shows STALE; trading is unaffected");
 }
 
 int NqJrFind(string cmt)

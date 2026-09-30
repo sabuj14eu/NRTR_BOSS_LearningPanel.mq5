@@ -1,8 +1,9 @@
 # NRTR QML Metal Scalper (MT5, Gold & Silver)
 
 One standalone Expert Advisor, `NRTR_QML_MetalScalper.mq5`, for **XAUUSD / Gold** and
-**XAGUSD / Silver** only. Nothing else. No SignalMesh, no Telegram, no network, no DLLs, no
-files. It replaces the earlier learning-panel indicator (removed from this repository; git
+**XAGUSD / Silver** only. Nothing else. No Telegram, no DLLs. The only network use is two
+outbound POSTs to SignalMesh, both optional and both off by default: the append-only event
+journal and the ANALYSIS ONLY telemetry heartbeat (see the two SignalMesh sections). It replaces the earlier learning-panel indicator (removed from this repository; git
 history keeps it). **Remove the old indicator from your chart.**
 
 ```
@@ -358,6 +359,7 @@ Every order is printed to the **Experts** log, e.g.
 | Draw levels | on | session highs/lows, previous day, S/R swings, VWAP, confirmed break marks |
 | Plan close on regime flip | off | scalps always close on a flip; plans say EXIT and wait for you |
 | Journal to file / SignalMesh URL / secret | on / empty / empty | see the journal section |
+| Telemetry URL / every N s / demo only | empty / 60 / on | see the telemetry section; empty = off |
 | Pullback retrace / min impulse / SL buffer | 50 % / 2 × ATR5 / 0.2 × ATR5 | |
 | Plan TP1 / TP2 | 1R / 2R | |
 | Bias arrow: votes needed / arrows drawn | 3 / last 300 candles | strong, one-sided votes only |
@@ -395,6 +397,49 @@ creation) and `ts` (event time), plus `plan_status`, `level`, `level2`, `risk`, 
 `magic`, `regime5`, `ctx15`, `risk_pct`, and `radar_score` for radar plans. The contract is
 APPEND-ONLY: fields are added, never renamed or removed. The platform side (`docs/EA_EVENTS.md`
 in the SignalMesh repo) reads these into a per-kind performance matrix.
+
+## SignalMesh telemetry (ANALYSIS ONLY - the METAL ANALYSIS page)
+
+Since 1.6.0 the EA can also act as a **data witness**: when `InpTelemetryUrl` is set (e.g.
+`https://status.signalmesh.dev/webhooks/metal/telemetry`, allowed under Tools → Options →
+Expert Advisors → WebRequest) it POSTs one JSON **snapshot of what the panel shows** on every
+closed M1 candle and at least every `InpTelemetrySec` seconds (default 60), with the same
+`X-Brain-Secret` header as the journal. SignalMesh stores the snapshot verbatim and renders it
+on its **METAL ANALYSIS** page under the fixed label
+`ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL`. Nothing flows back: the platform never sends
+anything to the EA, and the EA never reads anything from the platform.
+
+What a snapshot carries, every field the EA's own observed state and labelled as such:
+
+| section | fields |
+|---|---|
+| identity | `system: NQ-EA`, `kind: telemetry`, `mode: ANALYSIS_ONLY`, `label`, `source`, `ea_version`, `symbol`, `metal`, `account_mode` (demo / real), `magic` |
+| clocks | `ts_server` (broker clock), `ts_gmt` (the PC's GMT clock), `server_offset_sec` - two witnesses, so the platform can measure skew instead of assuming an offset; bar stamps stay in **server time, never converted** |
+| `candles` | state (`CLOSED FRESH` / `STALE` / `UNKNOWN`), closed M1 / M5 / M15 server stamps **with their ages in seconds on the EA's own clock**, ATR1 / ATR5 / ATR15, bid, ask, spread |
+| `m15` | context (`BULLISH` / `BEARISH` / `NEUTRAL`), NRTR direction and level, EMA200, close, closed stamp |
+| `m5` | regime (`BULLISH` / `BEARISH` / `CHOP / UNKNOWN`), NRTR direction and level, structure text and state, lookback, the regime's own reason words, nearest active resistance above / support below |
+| `m1` | NRTR direction and level, trigger (`BUY` / `SELL` / `WAIT`) with its reason words, next-bar forecast, score, resolved count, hits and the evidence label |
+| `observed` | the banner verdict, the NEAR text, the final state and reason, the gate words, whether Algo Trading / auto scalp / pending auto / allow-real are on - labelled `OBSERVED EA STATE - not a SignalMesh recommendation` |
+| `scalp_row`, `radar`, `ny` | the board's SCALP M1 row (side, live entry, SL, TP, lot, state), both radar sides (state, score, pressure, level, distance), both NY trap sides |
+| `plans` | the latest plan per board slot (QML M5, PULLBACK M5, NY TRAP, QML M15, PULLBACK M15, RADAR UP / DOWN) and the latest scalp record: kind, tf, side, order type, status, entry / SL / TP1 / TP2, levels, `signal_id`, whether a broker order is placed |
+| `account` | balance, floating, day P/L, open / pending counts, manual counts, trades today, risk % and money, last trade - no login, no server name, no credentials |
+| `record` | done / won / lost and the evidence label per engine (scalp, QML, pullback, NY trap, radar) |
+
+Ages are computed by the EA on its own clock before they leave the terminal, so the platform
+never has to subtract a broker stamp from its own clock. When the EA's data is stale the
+snapshot says `fresh: false` with the reason; when the platform stops receiving snapshots its
+page shows STALE; when it never received one it shows UNKNOWN. **A missing snapshot is never
+a neutral reading.**
+
+**Demo only by default.** `InpTelemetryDemoOnly` (default on) means a REAL account never sends
+telemetry: the witness for the analysis page is a separate DEMO account. To stand one up on the
+Windows server: log a second MT5 terminal into a DEMO account, open XAUUSD M1 and XAGUSD M1, drop
+the EA on each chart with `InpTelemetryUrl` and `InpSignalMeshSecret` set, `InpAllowRealAccount =
+false` for good measure, and leave the **Algo Trading button OFF** so the EA is a pure witness
+(everything is computed and reported; nothing is sent to the broker). The Experts log prints
+`NQ telemetry: snapshot accepted by SignalMesh (ANALYSIS ONLY)` once, and a failure count if the
+platform stops answering. Telemetry runs after `NqTrade()` and has no queue; it can never block
+or alter a decision, and a failed POST costs one `Print`.
 
 ## Live account and the on/off switch
 
