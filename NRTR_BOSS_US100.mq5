@@ -1,141 +1,40 @@
 //+------------------------------------------------------------------+
-//|                                       NRTR_BOSS_Crypto_NYTrap.mq5 |
-//|      Crypto / Forex learning panel with the NY-open trap module   |
+//|                                               NRTR_BOSS_US100.mq5 |
+//|      US INDEX learning panel (US100 / USTEC) - v1.11              |
 //|                                                                  |
+//|  MARKET DATA -> DIRECTION -> LEVELS -> REACTION -> CONFIRMATION  |
+//|  -> RISK / R:R -> WAIT or SETUP                                  |
 //|  15M = BOSS / DIRECTION   (NRTR + EMA200 + confirmed structure)  |
-//|   5M = ENTRY TRIGGER      (NRTR + CLOSED confirmation candle)    |
-//|  NY  = THE WILDLIFE       (pre-NY range, sweep, reclaim = trap)  |
+//|   5M = TIMING             (CLOSED candles only; forming = never) |
+//|  US SESSION MAP = reference levels in NEW YORK time: previous    |
+//|  regular session H/L/close, overnight and PRE-MARKET H/L (kept   |
+//|  apart from the regular session), the 09:30 open, opening range  |
+//|  5/15/30, regular session so far, the GAP (filled / open).       |
+//|  Sessions (open, first 5/15/30 min, lunch, final hour, close)    |
+//|  are CONTEXT LABELS: they change no rule. A level is never a     |
+//|  BUY or SELL by itself. News (MT5 calendar) is a label whose     |
+//|  direction is always UNKNOWN; an empty calendar is UNKNOWN.      |
 //|                                                                  |
-//|  Outside the NY window the panel follows structure: the 15M     |
-//|  boss decides the side, a closed 5M candle times the entry.      |
-//|  Inside the NY window (default: first 90 min after the New York  |
-//|  open) structure signals are PAUSED and only one setup exists:   |
-//|  price takes out the pre-NY range and a 5M candle CLOSES back    |
-//|  inside against the sweep. That is the "everything looked        |
-//|  bullish at the open and then it sold" pattern, defined as a     |
-//|  rule so it can be counted instead of remembered.                |
+//|  Built from NRTR_BOSS_Crypto_NYTrap.mq5 by tests/make_us100.py:  |
+//|  the engine, the bridge and the shared blocks are the same text; |
+//|  the differences are declared there. The NY TRAP module is OFF   |
+//|  here (the US levels replace it). The 5-question plan uses PDH / |
+//|  PDL = previous regular session, PRE-MARKET H/L and the opening  |
+//|  range, and a level the price GAPPED over is never a sweep or a  |
+//|  breakout. Starting values = the crypto file's, NOT validated    |
+//|  for US100: READ-ONLY -> RECORD -> SHADOW -> TEST -> VALIDATE.   |
 //|                                                                  |
 //|  VISUAL ONLY. This indicator never sends, modifies or closes an  |
-//|  order or position. It may READ open positions on this symbol to |
-//|  show EXIT / PROTECT advice; it never changes the account.       |
-//|  (MT5 also blocks trade functions inside indicators by design.)  |
-//|                                                                  |
-//|  "CLICK BUY" means: the defined conditions are currently aligned |
-//|  for the educational setup. It is NOT a profit guarantee.        |
-//|                                                                  |
-//|  The market this file accepts is fixed by NB_MARKET below. The   |
-//|  crypto twin and the forex twin are otherwise the same text.     |
-//|                                                                  |
-//|  Personal tool. No network, no external executor. (v1.07: it    |
-//|  writes a data file that a separate script may post to Telegram.)|
-//|                                                                  |
-//|  FROZEN DEFINITIONS (v1.01, audit of blob f95f970). Changing any |
-//|  of these is a NEW versioned behaviour, never a silent edit:     |
-//|  * NRTR = CUSTOM ATR-NRTR on CLOSES: extreme = highest (lowest)  |
-//|    close since the flip, stop = extreme -/+ mult*ATR(Wilder),    |
-//|    ratchets only, flips on a CLOSE beyond the stop. This is NOT  |
-//|    guaranteed to match any MT5 CodeBase "NRTR" bar for bar; the  |
-//|    panel is labelled CUSTOM ATR-NRTR for that reason.            |
-//|  * EXIT / PROTECT uses the COMPLETE 15M BOSS mode (NRTR + EMA200 |
-//|    + confirmed structure), never the NRTR direction alone:       |
-//|      BUY  + BOSS BUY  = HOLD      SELL + BOSS SELL = HOLD        |
-//|      BUY  + BOSS SELL = EXIT      SELL + BOSS BUY  = EXIT        |
-//|      any  + BOSS WAIT = UNKNOWN / PROTECT (no automatic EXIT)    |
-//|      stale or missing 15M data = UNKNOWN                         |
-//|  * SAME-CANDLE RULE: if one closed 5M candle after the entry     |
-//|    touches both the SL and TP1, the SL wins (tick order is not   |
-//|    available). Conservative by design.                           |
-//|  * TP invariant: TP2 R-multiple is strictly greater than TP1's.  |
-//|                                                                  |
-//|  v1.02 DISPLAY additions (no new decision rule, still read-only):|
-//|  * an UP / DOWN arrow on EVERY closed candle = NRTR direction of  |
-//|    the chart's own timeframe class (5M on M1-M5 charts, 15M      |
-//|    above). Bright = agrees with the 15M boss mode, dim = not.    |
-//|  * the CLICK BUY / CLICK SELL banner blinks (a light, not a      |
-//|    button - the click is still yours on the broker's panel).    |
-//|  * SWING TP = entry +/- a distance (typed, or automatic = N x    |
-//|    15M ATR in the twins) and pending-order REFERENCE prices      |
-//|    (pullback limit at the 5M NRTR stop, breakout stop at the 15M |
-//|    NRTR channel edge). Reference only, nothing is sent.          |
-//|  * NEW YORK OPEN: one MT5 pop-up + sound at the open the SESSION |
-//|    CLOCK computes (twins), and the NY window on the panel.       |
-//|  * ZigZag: confirmed 15M swings are joined by a line.            |
-//|  v1.03: arrows only on NRTR FLIP candles (every-candle = option),|
-//|    a yellow PREVIEW on the forming candle (what would happen if  |
-//|    it closed now - never stored, never a decision input), and a  |
-//|    two-column LIVE BOX (BUY | SELL plan + GATE) from the same    |
-//|    engine functions. Still display only, still read-only.        |
-//|  v1.04 FRESHNESS (found live on XAGUSD, Asia open): the old rule  |
-//|    "last closed 15M bar <= 30 min old" is false for the first 15  |
-//|    minutes after the broker's 00:00-01:00 metals break although   |
-//|    fresh 5M candles print. Freshness is now judged by WITNESSES:  |
-//|    (1) the broker's last tick is recent, (2) the FORMING 5M and   |
-//|    15M bars are current, (3) tick clock and server clock agree,   |
-//|    (4) the closed bars are the newest ones MT5 has closed. Any    |
-//|    failing witness = STALE / UNKNOWN (fail closed). A DATA CLOCK   |
-//|    block on the panel shows every witness. Gate policy unchanged. |
-//|  * LOTS FOR x% RISK: balance (read only) x risk% / money per lot |
-//|    at the SL, rounded DOWN to the volume step. A suggestion you  |
-//|    type yourself; the panel never sizes or sends anything.       |
-//|  TWINS (this file): the NY-open trap module (session clock from  |
-//|    two witnesses, pre-NY range, sweep + reclaim = trap, flow     |
-//|    paused in the window) and a LAST 5 CANDLES strip per TF.      |
-//|  v1.05 FIVE-QUESTION PLAN: a NEW table at the bottom middle of   |
-//|    the chart (the main panel is unchanged). TREND = 15M HH/HL or |
-//|    LH/LL; LOCATION = at a mapped level (prev day H/L, Asia H/L,  |
-//|    London H/L, confirmed 15M swings); LIQUIDITY = swept, or      |
-//|    broken by a 5M close; CONFIRMATION = 5M close beyond the      |
-//|    sweep candle (or the breakout close); REWARD = next level     |
-//|    >= 1.5R. All five = READY: a PENDING LIMIT at the level, SL   |
-//|    beyond the structure, TP1/TP2 = the next levels. Big support  |
-//|    / resistance lines + zones run into the future (drawn BEFORE  |
-//|    price gets there) and say BREAKOUT / BREAKDOWN / possible BUY |
-//|    or SELL in words. With the 15M trend only, closed bars only,  |
-//|    stale data = NO TRADE, every plan is recorded with its        |
-//|    outcome. Nothing is sent. See CHANGELOG.md for every line.    |
-//|  v1.06 (after the first MT5 screenshot): MT5 cuts object text at |
-//|    63 characters, so every table / chart label now stays within  |
-//|    63 (long rows are two labels); chart markers are drawn behind |
-//|    the candles so they never cover a panel; the table is redrawn |
-//|    after the markers; NET R in the history row; the shared code  |
-//|    blocks NB_FQ / NB_FQT are identical in all three files.       |
-//|  v1.07 DATA BRIDGE + COUNTER-TREND WATCH:                        |
-//|  * The indicator WRITES one JSON file per symbol, Files\Common\  |
-//|    NRTR_BRIDGE\<SYMBOL>.json: RAW (last 18 closed M5 + M15       |
-//|    candles and the forming candle), INDICATORS (NRTR, ATR, EMA200 |
-//|    on 15M), STRUCTURE, and - kept separate - the MT5 CONCLUSION   |
-//|    (boss, timing, action, prices, NY, 5-question plan). A         |
-//|    separate script (bridge/nrtr_telegram_sender.py) posts it to   |
-//|    Telegram when the conclusion changes. MT5 itself sends         |
-//|    nothing: indicators cannot use the network. No order, ever.    |
-//|  * COUNTER-TREND WATCH: 15M boss in full mode + a 5M NRTR flip    |
-//|    against it = a recorded WATCH with ref SL / TP1 and its count. |
-//|    NEVER a signal (counter-trend is the #1 documented loss        |
-//|    driver): no CLICK, no alert, no READY. Evidence decides.       |
-//|  v1.08 bridge schema completed (identical in all three files):   |
-//|    forming / confirmed on every candle, real_volume, ask, spread  |
-//|    (null when MT5 has none), fresh, mt5_order_action = NONE,     |
-//|    market_state / regime_pullback = null here (metals only).     |
-//|    The panel is unchanged.                                       |
-//|  v1.09: three bridge adapters so the shared bridge block stays   |
-//|    identical to the metals file (this file's output unchanged).  |
-//|  v1.10 SAME AS THE METALS PANEL ("give me final crypto"):        |
-//|  * CLICK GUARD: READY - CLICK only while the live price is       |
-//|    within InpClickBandR (0.5) x risk of the entry reference;     |
-//|    else BUY / SELL SETUP - PRICE TOO FAR, WAIT FOR RE-ENTRY. The |
-//|    ENTRY row shows the signal's age and distance.                |
-//|  * Lots: the broker's volume-step decimals, loss tick value.     |
-//|  * No FLIP arrow on the first NRTR-ready bar; "5M AGAINST - WAIT |
-//|    FOR 5M RE-ALIGNMENT" instead of a "---" pending line.         |
-//|  * MARKET chip (symbol line) and the REGIME PULLBACK WATCH (4H / |
-//|    1H / 15M direction, 5M location; shadow only) on the watch    |
-//|    strip and in the bridge. The version shows top right.         |
-//|  The engine, the NY trap and every signal are unchanged.         |
+//|  order or position (MT5 also blocks trade functions inside       |
+//|  indicators). It writes a data file a separate script may post   |
+//|  to Telegram; MT5 itself uses no network. No self-modification.  |
+//|  "READY - CLICK" means the defined conditions are aligned for    |
+//|  the educational setup. It is NOT a profit guarantee.            |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - learning tool"
-#property version     "1.10"
-#property description "Crypto NRTR BOSS learning panel: 15M direction, 5M timing, NY-open trap. CUSTOM ATR-NRTR."
-#property description "BTC ETH SOL LTC XRP BNB ADA DOGE AVAX DOT LINK BCH vs USD/USDT/USDC."
+#property version     "1.11"
+#property description "US100 / USTEC NRTR BOSS learning panel: 15M direction, 5M timing, US session map. CUSTOM ATR-NRTR."
+#property description "USTEC US100 NAS100 NDX (individual stocks: phase 2, after US100 is validated)."
 #property description "Visual decision support only - never places, modifies or closes orders."
 #property indicator_chart_window
 #property indicator_buffers 10
@@ -183,9 +82,10 @@
 // markets a twin file can be built for
 #define NB_MKT_CRYPTO 1
 #define NB_MKT_FOREX  2
+#define NB_MKT_US     3   // v1.11: the US index file (NRTR_BOSS_US100.mq5)
 // THE ONLY CODE LINE THAT DIFFERS BETWEEN THE TWO TWIN FILES
-#define NB_MARKET NB_MKT_CRYPTO
-#define NB_BR_VERSION "1.10"   // written into the data-bridge file
+#define NB_MARKET NB_MKT_US
+#define NB_BR_VERSION "1.11"   // written into the data-bridge file
 
 // decision / trade direction
 #define NB_WAIT   0
@@ -1533,6 +1433,17 @@ bool NbIsCryptoQuote(string q)
    return (q == "USD" || q == "USDT" || q == "USDC");
 }
 
+//--- US100: the broker names of the Nasdaq-100 CFD. US500 / US30 / stocks
+//    are rejected (stocks: phase 2, own parameters and earnings rules).
+string NbUsLabel(string u)
+{
+   if(StringFind(u, "USTEC") == 0 || StringFind(u, "US100") == 0 || StringFind(u, "NAS100") == 0 ||
+      StringFind(u, "NASDAQ") == 0 || StringFind(u, "NDX") == 0 || StringFind(u, "NQ100") == 0 ||
+      StringFind(u, "USTECH") == 0)
+      return "US100";
+   return "";
+}
+
 //--- Accepted symbol -> short label ("BTC", "EURUSD"); "" = rejected.
 //    Broker prefixes/suffixes are fine (BTCUSD.m, #ETHUSD, EURUSD.r).
 string NbMarketLabel(string name, string base, string profitCcy)
@@ -1542,6 +1453,8 @@ string NbMarketLabel(string name, string base, string profitCcy)
    StringToUpper(b);
    string q = profitCcy;
    StringToUpper(q);
+   if(NB_MARKET == NB_MKT_US)
+      return NbUsLabel(u);
    if(NB_MARKET == NB_MKT_CRYPTO)
    {
       if(q != "" && !NbIsCryptoQuote(q))
@@ -1628,6 +1541,8 @@ string NbStructText(int st, int hl, int ll, int lk)
 
 string NbMarketOnlyText()
 {
+   if(NB_MARKET == NB_MKT_US)
+      return "US100 ONLY (USTEC US100 NAS100)";
    if(NB_MARKET == NB_MKT_CRYPTO)
       return "CRYPTO ONLY (BTC ETH SOL LTC ...)";
    return "FOREX ONLY (EURUSD USDJPY ...)";
@@ -1733,6 +1648,467 @@ string NbPhaseText(int p)
    return "OUTSIDE NY - STRUCTURE FLOW";
 }
 
+//=== NB_US_BEGIN === (US100 only: the US session calendar + the US level map - never a signal)
+//+------------------------------------------------------------------+
+//| US SESSION + LEVEL MAP (v1.11 US100)                             |
+//| Every bar's time is converted to NEW YORK wall-clock time PER    |
+//| BAR (US DST calendar), never with one scalar offset. Sessions    |
+//| (context labels only - they change no rule):                     |
+//|   OVERNIGHT 18:00-04:00  PRE-MARKET 04:00-09:30                  |
+//|   OPEN 0-5 / 5-15 / 15-30 min  MORNING 10:00-11:30               |
+//|   LUNCH 11:30-13:30  AFTERNOON 13:30-15:00  FINAL HOUR 15-16     |
+//|   AFTER-HOURS 16:00-18:00  CLOSED (Fri 17:00 - Sun 18:00)        |
+//| A trading day starts at 18:00 NY the evening before.             |
+//| Levels are REFERENCE levels (battlefield), never a BUY / SELL:   |
+//|   PDH / PDL / PREV CLOSE = the last REGULAR session (09:30-16:00)|
+//|   with >= NB_US_RTH_MIN_BARS closed 5M bars - not the broker day |
+//|   ON H/L (overnight) and PM H/L (pre-market): published when the |
+//|   window has ENDED; pre-market never mixes with the regular      |
+//|   session and vice versa                                         |
+//|   OPEN = the 09:30 bar's open (unknown if that bar is missing)   |
+//|   OR5 / OR15 / OR30: published at 09:35 / 09:45 / 10:00, only    |
+//|   when every bar of the window exists                            |
+//|   RTH H/L so far, GAP = OPEN - PREV CLOSE (x 15M ATR), FILLED    |
+//|   when the regular session trades back to the previous close     |
+//| Causal: bar i uses bars <= i; an unfinished bar is never used.   |
+//+------------------------------------------------------------------+
+#define NB_US_UNKNOWN   0   // no clock: never guessed
+#define NB_US_CLOSED    1   // weekend
+#define NB_US_OVERNIGHT 2
+#define NB_US_PRE       3
+#define NB_US_OPEN5     4
+#define NB_US_OPEN15    5
+#define NB_US_OPEN30    6
+#define NB_US_MORNING   7
+#define NB_US_LUNCH     8
+#define NB_US_AFTERNOON 9
+#define NB_US_FINAL     10
+#define NB_US_AFTER     11
+
+#define NB_US_RTH_MIN_BARS 36   // a regular session needs >= 36 closed 5M bars (3 h) to be "the previous day"
+#define NB_US_WIN_MIN_BARS 12   // overnight / pre-market ranges need >= 12 closed 5M bars
+
+struct NbUsBar
+{
+   long     et;            // bar start in NY wall-clock seconds (0 = clock unknown)
+   int      sess;          // NB_US_*
+   long     tday;          // trading day (NY date the session belongs to), -1 = unknown
+   double   pdh;           // previous regular session high / low / close (0 = not known)
+   double   pdl;
+   double   pcl;
+   double   onh;           // overnight high / low (published at 04:00 NY)
+   double   onl;
+   double   pmh;           // pre-market high / low (published at 09:30 NY)
+   double   pml;
+   double   open;          // regular-session open (the 09:30 bar), 0 = not known yet / missing
+   double   or5h;
+   double   or5l;
+   double   or15h;
+   double   or15l;
+   double   or30h;
+   double   or30l;
+   double   rthH;          // regular session so far (0 before the open)
+   double   rthL;
+   double   gap;           // open - previous close (0 = not known)
+   double   gapAtr;        // gap in 15M ATR
+   int      gapDir;        // +1 up, -1 down, 0 none (below the threshold) or unknown
+   bool     gapFilled;     // the regular session traded back to the previous close
+};
+
+void NbUsReset(NbUsBar &b)
+{
+   b.et = 0;
+   b.sess = NB_US_UNKNOWN;
+   b.tday = -1;
+   b.pdh = 0.0;
+   b.pdl = 0.0;
+   b.pcl = 0.0;
+   b.onh = 0.0;
+   b.onl = 0.0;
+   b.pmh = 0.0;
+   b.pml = 0.0;
+   b.open = 0.0;
+   b.or5h = 0.0;
+   b.or5l = 0.0;
+   b.or15h = 0.0;
+   b.or15l = 0.0;
+   b.or30h = 0.0;
+   b.or30l = 0.0;
+   b.rthH = 0.0;
+   b.rthL = 0.0;
+   b.gap = 0.0;
+   b.gapAtr = 0.0;
+   b.gapDir = 0;
+   b.gapFilled = false;
+}
+
+void NbUsCopy(NbUsBar &d, const NbUsBar &s)
+{
+   d.et = s.et;
+   d.sess = s.sess;
+   d.tday = s.tday;
+   d.pdh = s.pdh;
+   d.pdl = s.pdl;
+   d.pcl = s.pcl;
+   d.onh = s.onh;
+   d.onl = s.onl;
+   d.pmh = s.pmh;
+   d.pml = s.pml;
+   d.open = s.open;
+   d.or5h = s.or5h;
+   d.or5l = s.or5l;
+   d.or15h = s.or15h;
+   d.or15l = s.or15l;
+   d.or30h = s.or30h;
+   d.or30l = s.or30l;
+   d.rthH = s.rthH;
+   d.rthL = s.rthL;
+   d.gap = s.gap;
+   d.gapAtr = s.gapAtr;
+   d.gapDir = s.gapDir;
+   d.gapFilled = s.gapFilled;
+}
+
+// the broker server clock's own DST rule (it moves the server time, not NY's)
+#define NB_SRVDST_US   0   // server offset changes with US DST (the usual NY-close UTC+2/+3 MT5 broker)
+#define NB_SRVDST_EU   1   // server offset changes with EU DST (last Sunday March / October, 01:00 UTC)
+#define NB_SRVDST_NONE 2   // server offset never changes
+
+//--- is the server's summer hour in force at this UTC time?
+bool NbSrvDstOn(int rule, long utc)
+{
+   if(rule == NB_SRVDST_NONE)
+      return false;
+   long day = utc / 86400;
+   if(rule == NB_SRVDST_US)
+      return NbUsDst(day);
+   int y = 0;
+   int m = 0;
+   int d = 0;
+   NbCivil(day, y, m, d);
+   if(m < 3 || m > 10)
+      return false;
+   if(m > 3 && m < 10)
+      return true;
+   int dow = (int)((day + 4) % 7);            // 0 = Sunday
+   int dow31 = (dow + (31 - d)) % 7;          // weekday of the 31st (March and October have 31 days)
+   int lastSun = 31 - dow31;
+   int hr = (int)((utc % 86400) / 3600);
+   if(m == 3)
+      return (d > lastSun) || (d == lastSun && hr >= 1);
+   return (d < lastSun) || (d == lastSun && hr < 1);
+}
+
+//--- the server's WINTER offset from today's two-witness offset: history
+//    is converted PER BAR through the server's DST rule, never with one
+//    scalar (a 10-day history can cross a switch)
+long NbSrvBase(long offsetNow, long nowUtc, int rule)
+{
+   return offsetNow - (NbSrvDstOn(rule, nowUtc) ? 3600 : 0);
+}
+
+//--- server time -> NY wall-clock seconds, PER BAR. AUTO: server -> UTC
+//    through the server's DST rule, UTC -> NY through the US DST rule.
+//    MANUAL: the typed 09:30 NY in server time (fixed - the user retypes
+//    it when a clock changes). Unknown clock = 0 (never guessed).
+long NbUsEt(datetime t, bool clockOk, int mode, long offBase, int srvRule, int manualOpenSec)
+{
+   if(!clockOk)
+      return 0;
+   if(mode == NB_CLK_MANUAL)
+      return (long)t + (9 * 3600 + 1800) - manualOpenSec;
+   long utc = (long)t - offBase - 3600;      // try the summer hour first
+   if(!NbSrvDstOn(srvRule, utc))
+      utc = (long)t - offBase;
+   return utc - (NbUsDst(utc / 86400) ? 4 : 5) * 3600;
+}
+
+int NbUsSessOf(long et)
+{
+   if(et <= 0)
+      return NB_US_UNKNOWN;
+   long day = et / 86400;
+   int mn = (int)((et % 86400) / 60);
+   int dow = (int)((day + 4) % 7);   // 0 = Sunday
+   if(dow == 6 || (dow == 0 && mn < 18 * 60) || (dow == 5 && mn >= 17 * 60))
+      return NB_US_CLOSED;
+   if(mn >= 18 * 60 || mn < 4 * 60)
+      return NB_US_OVERNIGHT;
+   if(mn < 9 * 60 + 30)
+      return NB_US_PRE;
+   if(mn < 9 * 60 + 35)
+      return NB_US_OPEN5;
+   if(mn < 9 * 60 + 45)
+      return NB_US_OPEN15;
+   if(mn < 10 * 60)
+      return NB_US_OPEN30;
+   if(mn < 11 * 60 + 30)
+      return NB_US_MORNING;
+   if(mn < 13 * 60 + 30)
+      return NB_US_LUNCH;
+   if(mn < 15 * 60)
+      return NB_US_AFTERNOON;
+   if(mn < 16 * 60)
+      return NB_US_FINAL;
+   return NB_US_AFTER;
+}
+
+string NbUsSessText(int s)
+{
+   switch(s)
+   {
+      case NB_US_CLOSED:    return "CLOSED (WEEKEND)";
+      case NB_US_OVERNIGHT: return "OVERNIGHT (FUTURES HOURS)";
+      case NB_US_PRE:       return "PRE-MARKET";
+      case NB_US_OPEN5:     return "OPEN - FIRST 5 MIN";
+      case NB_US_OPEN15:    return "OPEN - 5 TO 15 MIN";
+      case NB_US_OPEN30:    return "OPEN - 15 TO 30 MIN";
+      case NB_US_MORNING:   return "MORNING";
+      case NB_US_LUNCH:     return "LUNCH - LOW LIQUIDITY";
+      case NB_US_AFTERNOON: return "AFTERNOON";
+      case NB_US_FINAL:     return "FINAL HOUR";
+      case NB_US_AFTER:     return "AFTER-HOURS / CLOSE";
+   }
+   return "UNKNOWN - NO CLOCK";
+}
+
+bool NbUsIsRth(int s)
+{
+   return (s >= NB_US_OPEN5 && s <= NB_US_FINAL);
+}
+
+//--- a level lies strictly between the previous close and this bar's
+//    open: nothing traded at it (a GAP), so crossing it is neither a
+//    sweep nor a breakout
+bool NbUsGapped(double prevClose, double open, double lvl)
+{
+   return (prevClose < lvl && open > lvl) || (prevClose > lvl && open < lvl);
+}
+
+//--- the US map for every 5M bar. s5.map must align s5 to s15 (NbRun5).
+//    lastClosed = false: the last bar is still forming and is NOT used.
+void NbRunUs(const NbSeries &s5, const NbSeries &s15, bool lastClosed, bool clockOk, int mode, long offBase,
+             int srvRule, int manualOpenSec, double gapMinAtr, NbUsBar &us[])
+{
+   int n = s5.n;
+   ArrayResize(us, n);
+   int nEval = lastClosed ? n : n - 1;
+   long curDay = -1;
+   // the last complete regular session
+   double pdh = 0.0;
+   double pdl = 0.0;
+   double pcl = 0.0;
+   // today's windows
+   double onH = 0.0;
+   double onL = 0.0;
+   int onN = 0;
+   bool onPub = false;
+   double pmH = 0.0;
+   double pmL = 0.0;
+   int pmN = 0;
+   bool pmPub = false;
+   double rH = 0.0;
+   double rL = 0.0;
+   int rN = 0;
+   double rC = 0.0;
+   double op = 0.0;
+   bool opSeen = false;
+   double oH[3];
+   double oL[3];
+   int oN[3];
+   bool oPub[3];
+   double kH[3];
+   double kL[3];
+   int orMin[3];
+   orMin[0] = 5;
+   orMin[1] = 15;
+   orMin[2] = 30;
+   for(int q = 0; q < 3; q++)
+   {
+      oH[q] = 0.0;
+      oL[q] = 0.0;
+      oN[q] = 0;
+      oPub[q] = false;
+      kH[q] = 0.0;
+      kL[q] = 0.0;
+   }
+   double gap = 0.0;
+   double gapAtr = 0.0;
+   int gapDir = 0;
+   bool gapFilled = false;
+   double onKH = 0.0;
+   double onKL = 0.0;
+   double pmKH = 0.0;
+   double pmKL = 0.0;
+   for(int i = 0; i < n; i++)
+   {
+      NbUsReset(us[i]);
+      if(i >= nEval)
+      {
+         // unfinished candle: carry the last CLOSED answer, never use it
+         if(i > 0)
+            NbUsCopy(us[i], us[i - 1]);
+         continue;
+      }
+      long et = NbUsEt(s5.t[i], clockOk, mode, offBase, srvRule, manualOpenSec);
+      int ss = NbUsSessOf(et);
+      us[i].et = et;
+      us[i].sess = ss;
+      if(et <= 0)
+         continue;
+      long day = et / 86400;
+      int mn = (int)((et % 86400) / 60);
+      long tday = (mn >= 18 * 60) ? day + 1 : day;
+      us[i].tday = tday;
+      if(tday != curDay)
+      {
+         // a new trading day: the finished regular session becomes "the previous day"
+         if(curDay >= 0 && rN >= NB_US_RTH_MIN_BARS)
+         {
+            pdh = rH;
+            pdl = rL;
+            pcl = rC;
+         }
+         curDay = tday;
+         onH = 0.0;
+         onL = 0.0;
+         onN = 0;
+         onPub = false;
+         onKH = 0.0;
+         onKL = 0.0;
+         pmH = 0.0;
+         pmL = 0.0;
+         pmN = 0;
+         pmPub = false;
+         pmKH = 0.0;
+         pmKL = 0.0;
+         rH = 0.0;
+         rL = 0.0;
+         rN = 0;
+         rC = 0.0;
+         op = 0.0;
+         opSeen = false;
+         for(int q = 0; q < 3; q++)
+         {
+            oH[q] = 0.0;
+            oL[q] = 0.0;
+            oN[q] = 0;
+            oPub[q] = false;
+            kH[q] = 0.0;
+            kL[q] = 0.0;
+         }
+         gap = 0.0;
+         gapAtr = 0.0;
+         gapDir = 0;
+         gapFilled = false;
+      }
+      long base = tday * 86400;
+      long endEt = et + s5.sec;
+      double hi = s5.h[i];
+      double lo = s5.l[i];
+      if(ss == NB_US_OVERNIGHT)
+      {
+         onH = (onN == 0) ? hi : MathMax(onH, hi);
+         onL = (onN == 0) ? lo : MathMin(onL, lo);
+         onN++;
+      }
+      if(ss == NB_US_PRE)
+      {
+         pmH = (pmN == 0) ? hi : MathMax(pmH, hi);
+         pmL = (pmN == 0) ? lo : MathMin(pmL, lo);
+         pmN++;
+      }
+      if(!onPub && endEt >= base + 4 * 3600)
+      {
+         onPub = true;
+         if(onN >= NB_US_WIN_MIN_BARS)
+         {
+            onKH = onH;
+            onKL = onL;
+         }
+      }
+      if(!pmPub && endEt >= base + 9 * 3600 + 1800)
+      {
+         pmPub = true;
+         if(pmN >= NB_US_WIN_MIN_BARS)
+         {
+            pmKH = pmH;
+            pmKL = pmL;
+         }
+      }
+      if(NbUsIsRth(ss))
+      {
+         if(!opSeen)
+         {
+            opSeen = true;
+            // the open is the 09:30 bar's open; a later first bar = open unknown
+            if(et == base + 9 * 3600 + 1800)
+               op = s5.o[i];
+         }
+         rH = (rN == 0) ? hi : MathMax(rH, hi);
+         rL = (rN == 0) ? lo : MathMin(rL, lo);
+         rC = s5.c[i];
+         rN++;
+         for(int q = 0; q < 3; q++)
+         {
+            if(et < base + 9 * 3600 + 1800 + orMin[q] * 60)
+            {
+               oH[q] = (oN[q] == 0) ? hi : MathMax(oH[q], hi);
+               oL[q] = (oN[q] == 0) ? lo : MathMin(oL[q], lo);
+               oN[q]++;
+            }
+         }
+         if(op > 0.0 && pcl > 0.0 && gap == 0.0 && gapDir == 0 && !gapFilled)
+         {
+            gap = op - pcl;
+            int k15 = s5.map[i];
+            double a15 = (k15 >= 0) ? s15.atr[k15] : 0.0;
+            gapAtr = (a15 > 0.0) ? gap / a15 : 0.0;
+            if(a15 > 0.0 && MathAbs(gap) >= gapMinAtr * a15)
+               gapDir = (gap > 0.0) ? 1 : -1;
+         }
+         if(gapDir > 0 && lo <= pcl)
+            gapFilled = true;
+         if(gapDir < 0 && hi >= pcl)
+            gapFilled = true;
+      }
+      for(int q = 0; q < 3; q++)
+      {
+         if(!oPub[q] && endEt >= base + 9 * 3600 + 1800 + orMin[q] * 60)
+         {
+            oPub[q] = true;
+            if(op > 0.0 && oN[q] == orMin[q] / 5)
+            {
+               kH[q] = oH[q];
+               kL[q] = oL[q];
+            }
+         }
+      }
+      us[i].pdh = pdh;
+      us[i].pdl = pdl;
+      us[i].pcl = pcl;
+      us[i].onh = onKH;
+      us[i].onl = onKL;
+      us[i].pmh = pmKH;
+      us[i].pml = pmKL;
+      us[i].open = op;
+      us[i].or5h = kH[0];
+      us[i].or5l = kL[0];
+      us[i].or15h = kH[1];
+      us[i].or15l = kL[1];
+      us[i].or30h = kH[2];
+      us[i].or30l = kL[2];
+      us[i].rthH = (rN > 0) ? rH : 0.0;
+      us[i].rthL = (rN > 0) ? rL : 0.0;
+      us[i].gap = gap;
+      us[i].gapAtr = gapAtr;
+      us[i].gapDir = gapDir;
+      us[i].gapFilled = gapFilled;
+   }
+}
+
+//=== NB_US_END ===
+
 //=== NB_FQ_BEGIN === (identical text in all three files - tests/check_fq_blocks.py)
 //+------------------------------------------------------------------+
 //| v1.05 FIVE-QUESTION PLAN (the bottom-middle table)               |
@@ -1827,6 +2203,12 @@ struct NbFqCfg
    long     offset;        // broker server time - UTC, seconds
    double   slBufMult;     // v1.06: SL buffer multiplier (1.0; silver: wider stops)
    double   confirmAtr;    // v1.06: the confirmation close must pass by this x 5M ATR (0; silver: stronger)
+   int      usMode;        // US100: NB_CLK_AUTO / NB_CLK_MANUAL (the NY clock)
+   int      usOpenSec;     // US100 MANUAL: 09:30 NY as seconds of the server day
+   double   usGapAtr;      // US100: |open - previous close| below this x 15M ATR = NO GAP
+   int      usOrMin;       // US100: the opening range the map uses (5 / 15 / 30)
+   long     usOffBase;     // US100: the server's WINTER offset (witnesses now, less its DST hour)
+   int      usSrvDst;      // US100: the server clock's DST rule (NB_SRVDST_*)
 };
 
 struct NbLv
@@ -2340,7 +2722,20 @@ void NbRunFq(const NbSeries &s5, const NbSeries &s15, const NbPivot &piv15[], in
    ArrayResize(fq, n);
    ArrayResize(pl, 0);
    nPl = 0;
-   NbFqSessions(s5.t, s5.h, s5.l, n, s5.sec, C, fq);
+   // US100 (v1.11): the map runs on US levels - PDH / PDL = the previous
+   // regular session, the Asia slot = PRE-MARKET H/L, the London slot =
+   // the chosen opening range. Same causality as the session levels.
+   NbUsBar usm[];
+   NbRunUs(s5, s15, lastClosed, C.clockOk, C.usMode, C.usOffBase, C.usSrvDst, C.usOpenSec, C.usGapAtr, usm);
+   for(int u = 0; u < n; u++)
+   {
+      fq[u].pdh = usm[u].pdh;
+      fq[u].pdl = usm[u].pdl;
+      fq[u].ash = usm[u].pmh;
+      fq[u].asl = usm[u].pml;
+      fq[u].loh = (C.usOrMin == 5) ? usm[u].or5h : ((C.usOrMin == 30) ? usm[u].or30h : usm[u].or15h);
+      fq[u].lol = (C.usOrMin == 5) ? usm[u].or5l : ((C.usOrMin == 30) ? usm[u].or30l : usm[u].or15l);
+   }
    int nEvalFq = lastClosed ? n : n - 1;
    int cur = -1;       // live plan (pending or filled)
    int latest = -1;    // latest plan of any outcome
@@ -2443,6 +2838,8 @@ void NbRunFq(const NbSeries &s5, const NbSeries &s15, const NbPivot &piv15[], in
          for(int j = j0; j <= i; j++)
          {
             bool pierce = (tr > 0) ? (s5.l[j] < L && s5.c[j - 1] > L) : (s5.h[j] > L && s5.c[j - 1] < L);
+            if(pierce && NbUsGapped(s5.c[j - 1], s5.o[j], L))
+               pierce = false;   // US100: the price GAPPED over the level - nothing traded there, not a sweep
             if(pierce)
             {
                ev = j;
@@ -2458,6 +2855,8 @@ void NbRunFq(const NbSeries &s5, const NbSeries &s15, const NbPivot &piv15[], in
                bool cross = (tr > 0) ? (s5.c[j] > L && s5.c[j - 1] <= L) : (s5.c[j] < L && s5.c[j - 1] >= L);
                if(!cross)
                   continue;
+               if(NbUsGapped(s5.c[j - 1], s5.o[j], L))
+                  continue;   // US100: a gap over the level is not a breakout close
                double need = C.confirmAtr * s5.atr[j];
                bool body = (tr > 0) ? (s5.c[j] > s5.o[j] && s5.c[j] > L + need) : (s5.c[j] < s5.o[j] && s5.c[j] < L - need);
                bool held = true;
@@ -2680,13 +3079,13 @@ string NbLvSrcText(int src)
    if((src & NB_LV_PDL) != 0)
       t = t + ((t == "") ? "" : " + ") + "PREV DAY LOW";
    if((src & NB_LV_LOH) != 0)
-      t = t + ((t == "") ? "" : " + ") + "LONDON HIGH";
+      t = t + ((t == "") ? "" : " + ") + "OPENING RANGE HIGH";
    if((src & NB_LV_LOL) != 0)
-      t = t + ((t == "") ? "" : " + ") + "LONDON LOW";
+      t = t + ((t == "") ? "" : " + ") + "OPENING RANGE LOW";
    if((src & NB_LV_ASH) != 0)
-      t = t + ((t == "") ? "" : " + ") + "ASIA HIGH";
+      t = t + ((t == "") ? "" : " + ") + "PRE-MARKET HIGH";
    if((src & NB_LV_ASL) != 0)
-      t = t + ((t == "") ? "" : " + ") + "ASIA LOW";
+      t = t + ((t == "") ? "" : " + ") + "PRE-MARKET LOW";
    if((src & NB_LV_SWH) != 0)
       t = t + ((t == "") ? "" : " + ") + "15M SWING HIGH";
    if((src & NB_LV_SWL) != 0)
@@ -2704,13 +3103,13 @@ string NbLvSrcShort(int src)
    if((src & NB_LV_PDL) != 0)
       t = t + ((t == "") ? "" : "+") + "PDL";
    if((src & NB_LV_LOH) != 0)
-      t = t + ((t == "") ? "" : "+") + "LDN H";
+      t = t + ((t == "") ? "" : "+") + "ORH";
    if((src & NB_LV_LOL) != 0)
-      t = t + ((t == "") ? "" : "+") + "LDN L";
+      t = t + ((t == "") ? "" : "+") + "ORL";
    if((src & NB_LV_ASH) != 0)
-      t = t + ((t == "") ? "" : "+") + "ASIA H";
+      t = t + ((t == "") ? "" : "+") + "PMH";
    if((src & NB_LV_ASL) != 0)
-      t = t + ((t == "") ? "" : "+") + "ASIA L";
+      t = t + ((t == "") ? "" : "+") + "PML";
    if((src & NB_LV_SWH) != 0)
       t = t + ((t == "") ? "" : "+") + "SWING H";
    if((src & NB_LV_SWL) != 0)
@@ -3586,15 +3985,27 @@ input double         InpSwingAtrMult    = 3.0;         // Automatic swing TP dis
 input group "Data clock (freshness witnesses)"
 input int            InpMaxTickAgeSec   = 120;         // Last broker tick older than this = STALE
 input int            InpMaxClockSkewSec = 300;         // Tick clock ahead of server clock by more = STALE
-input group "NY session - the wildlife"
+enum ENUM_NB_US_SRVDST
+{
+   NB_US_SRVDST_US = 0,   // US DST (server = NY close, UTC+2 / +3)
+   NB_US_SRVDST_EU = 1,   // EU DST (last Sunday of March / October)
+   NB_US_SRVDST_NONE = 2  // never (fixed server offset)
+};
+
+input group "US SESSION CLOCK (NY time, converted per bar)"
 input ENUM_NB_CLOCK  InpSessionClock    = NB_CLOCK_AUTO; // Session clock
-input int            InpNyOpenHour      = 16;          // MANUAL only: NY open hour (broker server time)
+input int            InpNyOpenHour      = 16;          // MANUAL only: 09:30 NY in broker server time (hour)
 input int            InpNyOpenMinute    = 30;          // MANUAL only: NY open minute
-input int            InpPreNyRangeHours = 4;           // Pre-NY range: hours before the open
-input int            InpNyWindowMinutes = 90;          // NY window: minutes after the open
-input int            InpMinRangeBars    = 12;          // Pre-NY range needs at least this many closed 5M bars
-input bool           InpNyPauseFlow     = true;        // Pause structure-flow signals inside the NY window
-input bool           InpNyAlert         = true;        // MT5 pop-up + sound at the NY open (local only)
+const int            InpPreNyRangeHours = 4;  // (US100: the NY trap is OFF)           // Pre-NY range: hours before the open
+const int            InpNyWindowMinutes = 90;          // NY window: minutes after the open
+const int            InpMinRangeBars    = 12;          // Pre-NY range needs at least this many closed 5M bars
+const bool           InpNyPauseFlow     = false;        // Pause structure-flow signals inside the NY window
+input bool           InpNyAlert         = true;        // MT5 pop-up + sound at the 09:30 NY open (local only)
+input ENUM_NB_US_SRVDST InpUsServerDst  = NB_US_SRVDST_US; // Broker server clock changes with (MT5 NY-close brokers: US)
+input int            InpUsOrMinutes     = 15;          // Opening range the 5-question map uses (5 / 15 / 30 min)
+input double         InpUsGapAtr        = 0.3;         // Open vs previous close below this x 15M ATR = NO GAP
+input bool           InpUsNews          = true;        // Read MT5 economic calendar (USD high impact) - a label, never a direction
+input int            InpUsNewsMinutes   = 30;          // News window: minutes before / after the event
 input group "Display"
 input double         InpPanelScale      = 0.9;         // Panel size (0.7 - 1.6)
 input ENUM_NB_CORNER InpPanelCorner     = NB_TOP_LEFT; // Panel position
@@ -3612,10 +4023,10 @@ input double         InpFqZoneAtr       = 0.25;        // Level zone and merge w
 input int            InpFqWindowBars    = 12;          // Sweep / breakout must be within this many closed 5M bars
 input double         InpFqMinRR         = 1.5;         // Minimum reward to TP1 (R) - less = SKIP
 input int            InpFqValidBars     = 12;          // Pending limit valid for (closed 5M bars)
-input int            InpFqAsiaStartUtc  = 0;           // Asia range start (UTC hour)
-input int            InpFqAsiaEndUtc    = 7;           // Asia range end (UTC hour)
-input int            InpFqLondonStartUtc = 7;          // London range start (UTC hour)
-input int            InpFqLondonEndUtc  = 12;          // London range end (UTC hour)
+const int            InpFqAsiaStartUtc  = 0;           // Asia range start (UTC hour)
+const int            InpFqAsiaEndUtc    = 7;           // Asia range end (UTC hour)
+const int            InpFqLondonStartUtc = 7;          // London range start (UTC hour)
+const int            InpFqLondonEndUtc  = 12;          // London range end (UTC hour)
 input int            InpFqBottomY       = 16;          // Table distance from the chart bottom (px)
 input group "DATA BRIDGE + COUNTER-TREND WATCH (v1.07 - MT5 sends nothing; a separate sender reads the file)"
 input bool           InpBridgeOn        = true;        // Write Files\Common\NRTR_BRIDGE\<SYMBOL>.json (data only)
@@ -3657,6 +4068,18 @@ string   g_accCcy;
 // engine state
 NbParams  g_P;
 NbSessCfg g_S;
+NbSessCfg g_Seng;       // US100: the engine's copy with the NY trap OFF
+NbUsBar   g_us[];       // US100: the US map, one per closed 5M bar
+#define NB_NEWS_UNKNOWN 0   // calendar off / unavailable / empty: UNKNOWN, never "no news"
+#define NB_NEWS_CLEAR   1   // calendar read: no high-impact USD event inside the window
+#define NB_NEWS_WINDOW  2   // a high-impact USD event inside the window
+
+int      g_usNewsState = NB_NEWS_UNKNOWN;
+string   g_usNewsTxt = "UNKNOWN - CALENDAR NOT READ YET";
+string   g_usNewsName = "";
+datetime g_usNewsTime = 0;
+datetime g_usNewsAt = 0;
+
 datetime  g_anchor;
 NbSeries  g_s15;
 NbSeries  g_s5;
@@ -3747,6 +4170,12 @@ string NbPx(double v);
 color  NbDirColor(int d);
 string NbMmSs(long secs);
 string NbClockText();
+// US100 prototypes (defined with the bridge adapters)
+string NbUsClockText();
+string NbUsNowText();
+void   NbUsNewsRead(datetime now);
+string NbUsHL(double h, double l);
+string NbUsGapText(const NbUsBar &b);
 string NbCandleStrip(const NbSeries &s, int i, color &clr);
 string NbHms(long secs);
 void   NbPreview(bool ok, int i5, int d5, double bid, string &line1, string &line2, color &clr);
@@ -3820,7 +4249,9 @@ int OnInit()
    if(InpFqZoneAtr <= 0.0 || InpFqZoneAtr > 2.0 || InpFqWindowBars < 2 || InpFqWindowBars > 96 || InpFqMinRR < 0.5 ||
       InpFqMinRR > 10.0 || InpFqValidBars < 1 || InpFqValidBars > 288 || InpFqAsiaStartUtc < 0 ||
       InpFqAsiaStartUtc >= InpFqAsiaEndUtc || InpFqAsiaEndUtc > 24 || InpFqLondonStartUtc < 0 ||
-      InpFqLondonStartUtc >= InpFqLondonEndUtc || InpFqLondonEndUtc > 24 || InpFqBottomY < 0)
+      InpFqLondonStartUtc >= InpFqLondonEndUtc || InpFqLondonEndUtc > 24 || InpFqBottomY < 0 ||
+      (InpUsOrMinutes != 5 && InpUsOrMinutes != 15 && InpUsOrMinutes != 30) || InpUsGapAtr < 0.0 || InpUsGapAtr > 5.0 ||
+      InpUsNewsMinutes < 5 || InpUsNewsMinutes > 240)
    {
       Print("NRTR BOSS: invalid inputs - 5-question plan settings out of range");
       return INIT_PARAMETERS_INCORRECT;
@@ -3893,6 +4324,10 @@ int OnInit()
    g_advDir = 0;
    g_blink = false;
    g_nyAlertDay = -1;
+   g_usNewsAt = 0;          // US100: read the calendar afresh after a restart
+   g_usNewsState = NB_NEWS_UNKNOWN;
+   g_usNewsTxt = "UNKNOWN - CALENDAR NOT READ YET";
+   ArrayResize(g_us, 0);
    g_swingDist = (InpSwingDist > 0.0) ? InpSwingDist : 0.0;   // automatic value arrives with the first recompute
    ArrayResize(g_fq, 0);
    ArrayResize(g_fqPlans, 0);
@@ -4010,8 +4445,8 @@ void NbNyCheck(datetime now)
    if(g_nyAlertDay == id)
       return;
    g_nyAlertDay = id;
-   string msg = "NRTR BOSS " + g_sym + ": NEW YORK OPEN (" + TimeToString(open, TIME_MINUTES) + " broker time). Next " +
-                IntegerToString(g_S.winMin) + " min: structure flow paused, watching the pre-NY range for a sweep. You decide.";
+   string msg = "NRTR BOSS " + g_sym + ": US REGULAR SESSION OPEN 09:30 NY (" + TimeToString(open, TIME_MINUTES) +
+                " broker time). Opening range builds 5 / 15 / 30 min. Levels are reference only. You decide.";
    Alert(msg);
    PlaySound("alert.wav");
    Print(msg);
@@ -4156,10 +4591,13 @@ void NbRecompute()
       ArrayResize(g_rpRec, 0);
       g_nRp = 0;
       g_rpInv = 0;
+      ArrayResize(g_us, 0);
       return;
    }
    NbRun15(g_s15, g_piv15, g_P);
-   NbRun5(g_s5, g_piv5, g_s15, true, g_P, g_S, g_sigs, g_nSig);
+   g_Seng = g_S;              // US100: the NY-trap module is OFF (the US map replaces it)
+   g_Seng.clockOk = false;
+   NbRun5(g_s5, g_piv5, g_s15, true, g_P, g_Seng, g_sigs, g_nSig);
    g_ready = true;
    // swing TP distance: typed, or automatic from the last CLOSED 15M ATR
    g_swingDist = InpSwingDist;
@@ -4167,6 +4605,7 @@ void NbRecompute()
       g_swingDist = NbRoundTick(InpSwingAtrMult * g_s15.atr[g_s15.n - 1], g_tick, g_digits, 0);
    NbDrawChart();
    NbFqRecompute();
+   NbRunUs(g_s5, g_s15, true, g_C.clockOk, g_C.usMode, g_C.usOffBase, g_C.usSrvDst, g_C.usOpenSec, g_C.usGapAtr, g_us);
    NbFqDrawChart();
    NbPwRecompute();
    NbRpRecompute();
@@ -4757,7 +5196,7 @@ void NbDrawPanel()
    int kx = pad;
    int vx = pad + (int)MathRound(150 * sc);
    int bannerH = (int)MathRound(40 * sc);
-   int rows = 70;
+   int rows = 74;   // US100: the US map has 4 more rows than the NY trap block
    int H = pad * 2 + bannerH + rows * rh;
 
    int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0);
@@ -4770,7 +5209,7 @@ void NbDrawPanel()
       oy = (int)MathMax(0, ch - H - InpPanelY);
 
    color cBg = NB_RGB(16, 20, 28);
-   color cMkt = (NB_MARKET == NB_MKT_CRYPTO) ? NB_RGB(247, 147, 26) : NB_RGB(52, 152, 219);
+   color cMkt = NB_RGB(0, 188, 212);   // US100 accent
    color cKey = NB_RGB(140, 150, 165);
    color cVal = NB_RGB(235, 238, 242);
    color cSec = cMkt;
@@ -4786,7 +5225,7 @@ void NbDrawPanel()
    // title
    int y = oy + pad;
    string title = (g_label == "") ? "NRTR BOSS" : (g_label + " NRTR BOSS");
-   title = title + ((NB_MARKET == NB_MKT_CRYPTO) ? "  (CRYPTO + NY TRAP)" : "  (FOREX + NY TRAP)");
+   title = title + "  (US INDEX)";
    NbLabel("title", ox + kx, y, title, cMkt, fsT, "Arial Black", ANCHOR_LEFT_UPPER);
    // v1.10: the version, small, so a compiled update is visible at a glance
    string verTxt = NB_BR_VERSION;
@@ -4886,11 +5325,12 @@ void NbDrawPanel()
    y += rh;
    NbLabel("r2", ox + kx, y, (r2 == "") ? " " : ("            " + r2), cVal, fs, "Arial", ANCHOR_LEFT_UPPER);
    y += rh;
-   string nyTxt = (g_label == "") ? "---" : NbNyText(TimeTradeServer());
+   string nyTxt = (g_label == "") ? "---" : NbUsNowText();
    color nyC = cVal;
-   if(StringFind(nyTxt, "NY OPEN - WINDOW") == 0)
+   if(StringFind(nyTxt, "OPEN - ") == 0)
       nyC = cNy;
-   NbRow("ks", "vs", ox + kx, ox + vx, y, "NEW YORK OPEN", nyTxt, nyC, cKey, fs);
+   NbUsNewsRead(TimeTradeServer());
+   NbRow("ks", "vs", ox + kx, ox + vx, y, "US SESSION (CONTEXT)", nyTxt, nyC, cKey, fs);
    y += rh;
 
    // 15M boss
@@ -5001,79 +5441,50 @@ void NbDrawPanel()
    NbRow("kc15", "vc15", ox + kx, ox + vx, y, "LAST 5 x 15M CLOSED", c15s, c15c, cKey, fs);
    y += rh;
 
-   // NY session
-   NbLabel("hny", ox + kx, y + (int)MathRound(3 * sc), "NY SESSION  -  THE WILDLIFE", cNy, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
+   // US SESSION MAP (v1.11 US100): reference levels and context, NY time -
+   // never a BUY / SELL. Stale data = nothing shown as live (Freshness Law).
+   NbLabel("hny", ox + kx, y + (int)MathRound(3 * sc), "US SESSION MAP  -  NY TIME, LEVELS = REFERENCE ONLY", cNy, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
    y += rh + (int)MathRound(3 * sc);
-   NbRow("kn1", "vn1", ox + kx, ox + vx, y, "SESSION CLOCK", NbClockText(), g_S.clockOk ? cVal : cWait, cKey, fs);
+   NbRow("kn1", "vn1", ox + kx, ox + vx, y, "SESSION CLOCK", NbUsClockText(), g_S.clockOk ? cVal : cWait, cKey, fs);
    y += rh;
-   string phase = "---";
-   color phaseC = cDim;
-   string range = "---";
-   string trap = "---";
-   color trapC = cDim;
-   if(ok && g_S.clockOk)
+   string u2 = "---";
+   string u3 = "---";
+   string u4 = "---";
+   string u5 = "---";
+   string u6 = "---";
+   string u7 = "---";
+   color u4c = cVal;
+   bool uok = (ok && ArraySize(g_us) == g_s5.n && g_us[i5].et > 0);
+   if(ok && !g_fresh)
+      u2 = "DATA STALE - NOT SHOWN AS LIVE";
+   else if(ok && !uok)
+      u2 = "NY CLOCK UNKNOWN - NO US LEVELS (never guessed)";
+   else if(uok)
    {
-      int p = g_s5.ph[i5];
-      long sidNow = 0;
-      datetime open = NbNyOpenOf(g_s5.t[i5], g_S, sidNow);
-      datetime nyEnd = open + (datetime)(g_S.winMin * 60);
-      phase = NbPhaseText(p);
-      if(p == NB_PH_PRE)
-         phase = phase + "  (open " + TimeToString(open, TIME_MINUTES) + ")";
-      else if(p == NB_PH_NY)
-         phase = phase + "  (until " + TimeToString(nyEnd, TIME_MINUTES) + ")";
-      else
-         phase = phase + "  (next NY " + TimeToString(open, TIME_MINUTES) + ")";
-      phaseC = (p == NB_PH_NY) ? cNy : ((p == NB_PH_PRE) ? cVal : cDim);
-      if(p != NB_PH_OUT && g_s5.rn[i5] > 0)
-      {
-         range = "H " + NbPx(g_s5.rh[i5]) + "  /  L " + NbPx(g_s5.rl[i5]) + "   (" + IntegerToString(g_s5.rn[i5]) + " bars";
-         range = range + ((g_s5.rn[i5] >= g_S.minRangeBars) ? ")" : (", need " + IntegerToString(g_S.minRangeBars) + ")"));
-      }
-      if(p == NB_PH_NY)
-      {
-         if(cur >= 0 && g_sigs[cur].kind == NB_K_TRAP)
-         {
-            string ts = ((g_sigs[cur].dir > 0) ? "BUY" : "SELL");
-            trap = ts + " TRAP @ " + TimeToString(g_s5.t[g_sigs[cur].idx] + g_s5.sec, TIME_MINUTES) + " - " +
-                   NbSignalStatusText(g_sigs[cur].status);
-            trapC = (g_sigs[cur].status == NB_SIG_ACTIVE) ? cNy : cWait;
-         }
-         else if(g_s5.rn[i5] < g_S.minRangeBars)
-         {
-            trap = "NO RANGE - NOTHING TO SWEEP";
-            trapC = cWait;
-         }
-         else if(g_s5.swH[i5] > 0.0)
-         {
-            trap = "HIGH SWEPT TO " + NbPx(g_s5.swH[i5]) + " - WAIT BEARISH 5M CLOSE INSIDE";
-            trapC = cNy;
-         }
-         else if(g_s5.swL[i5] > 0.0)
-         {
-            trap = "LOW SWEPT TO " + NbPx(g_s5.swL[i5]) + " - WAIT BULLISH 5M CLOSE INSIDE";
-            trapC = cNy;
-         }
-         else
-         {
-            trap = "WATCHING - RANGE NOT SWEPT YET";
-            trapC = cVal;
-         }
-      }
-      else if(cur >= 0 && g_sigs[cur].kind == NB_K_TRAP)
-      {
-         string ls = (g_sigs[cur].dir > 0) ? "BUY" : "SELL";
-         trap = "LAST TRAP " + ls + " - " + NbSignalStatusText(g_sigs[cur].status);
-         trapC = (g_sigs[cur].status == NB_SIG_ACTIVE) ? cNy : cDim;
-      }
-      else
-         trap = "ARMED AT THE NEXT NY OPEN";
+      NbUsBar ub;
+      NbUsCopy(ub, g_us[i5]);
+      u2 = (ub.pdh > 0.0) ? ("H " + NbPx(ub.pdh) + "  L " + NbPx(ub.pdl) + "  CLOSE " + NbPx(ub.pcl)) : "NOT KNOWN YET (needs one full session)";
+      u3 = "ONH/ONL " + NbUsHL(ub.onh, ub.onl) + "  PMH/PML " + NbUsHL(ub.pmh, ub.pml);
+      u4 = NbUsGapText(ub);
+      u4c = (ub.gapDir != 0 && !ub.gapFilled) ? cWait : cVal;
+      u5 = "5m " + NbUsHL(ub.or5h, ub.or5l) + "  15m " + NbUsHL(ub.or15h, ub.or15l);
+      u6 = "30m " + NbUsHL(ub.or30h, ub.or30l) + "   (map uses " + IntegerToString(InpUsOrMinutes) + "m)";
+      u7 = (ub.rthH > 0.0) ? ("H " + NbPx(ub.rthH) + "  L " + NbPx(ub.rthL) + "  (so far)") : "NOT OPEN YET";
    }
-   NbRow("kn2", "vn2", ox + kx, ox + vx, y, "PHASE", phase, phaseC, cKey, fs);
+   NbRow("kn2", "vn2", ox + kx, ox + vx, y, "PREV DAY (09:30-16:00)", u2, cVal, cKey, fs);
    y += rh;
-   NbRow("kn3", "vn3", ox + kx, ox + vx, y, "PRE-NY RANGE", range, cVal, cKey, fs);
+   NbRow("kn3", "vn3", ox + kx, ox + vx, y, "ONH/ONL  PMH/PML", u3, cVal, cKey, fs);
    y += rh;
-   NbRow("kn4", "vn4", ox + kx, ox + vx, y, "NY TRAP", trap, trapC, cKey, fs);
+   NbRow("kn4", "vn4", ox + kx, ox + vx, y, "OPEN / GAP", u4, u4c, cKey, fs);
+   y += rh;
+   NbRow("kn5", "vn5", ox + kx, ox + vx, y, "OPENING RANGE H/L", u5, cVal, cKey, fs);
+   y += rh;
+   NbRow("kn6", "vn6", ox + kx, ox + vx, y, " ", u6, cVal, cKey, fs);
+   y += rh;
+   NbRow("kn7", "vn7", ox + kx, ox + vx, y, "REGULAR SESSION", u7, cVal, cKey, fs);
+   y += rh;
+   NbRow("kn8", "vn8", ox + kx, ox + vx, y, "NEWS (DIR. UNKNOWN)", ok ? g_usNewsTxt : "---",
+         (g_usNewsState == NB_NEWS_WINDOW) ? cWait : ((g_usNewsState == NB_NEWS_UNKNOWN) ? cDim : cVal), cKey, fs);
    y += rh;
 
    // learning levels
@@ -5168,7 +5579,7 @@ void NbDrawPanel()
    y += rh;
 
    // LIVE BOX: both sides from the same engine rules; the GATE decides
-   NbLabel("hb", ox + kx, y + (int)MathRound(3 * sc), "LIVE BOX  -  BOTH SIDES FROM THE SAME RULES  -  THE GATE DECIDES", cSec, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
+   NbLabel("hb", ox + kx, y + (int)MathRound(3 * sc), "LIVE BOX  -  BOTH SIDES, SAME RULES  -  THE GATE DECIDES", cSec, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
    y += rh + (int)MathRound(3 * sc);
    int cxB = ox + vx;
    int cxS = ox + vx + (int)MathRound(135 * sc);
@@ -5367,7 +5778,7 @@ void NbDrawPanel()
    string f15 = (g_diagBar015 > 0) ? (TimeToString(g_diagBar015, TIME_MINUTES) + "   age " + NbHms((long)g_diagTick - (long)g_diagBar015)) : "---";
    NbRow("kd5", "vd5", ox + kx, ox + vx, y, "FORMING M5 / M15", f5 + "  /  " + f15, cVal, cKey, fs);
    y += rh;
-   NbRow("kd6", "vd6", ox + kx, ox + vx, y, "STALE THRESHOLD", "tick > " + IntegerToString(InpMaxTickAgeSec) + "s  or  forming bar > 2 bars old  or  clock skew > " + IntegerToString(InpMaxClockSkewSec) + "s", cVal, cKey, fs);
+   NbRow("kd6", "vd6", ox + kx, ox + vx, y, "STALE THRESHOLD", "tick > " + IntegerToString(InpMaxTickAgeSec) + "s or bar > 2 bars old or skew > " + IntegerToString(InpMaxClockSkewSec) + "s", cVal, cKey, fs);
    y += rh;
    string dStatus = (g_label == "") ? "---" : NbFreshText(g_freshCode);
    NbRow("kd7", "vd7", ox + kx, ox + vx, y, "DATA STATUS", dStatus, g_fresh ? cUp : cDn, cKey, fs);
@@ -5376,18 +5787,18 @@ void NbDrawPanel()
    // how to read the chart (the three tools, in one line each)
    NbLabel("hg", ox + kx, y + (int)MathRound(3 * sc), "HOW TO READ THE CHART", cSec, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
    y += rh + (int)MathRound(3 * sc);
-   NbLabel("g1", ox + kx, y, "NRTR CHANNEL: thick stop line. Green under price = BULLISH, red over = BEARISH.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
+   NbLabel("g1", ox + kx, y, "NRTR: stop line. Green under = BULLISH, red over = BEARISH.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
    y += rh;
-   NbLabel("g2", ox + kx, y, "ZIGZAG (blue): confirmed swings. HH+HL = up, LH+LL = down. Shown " + IntegerToString(InpSwingStrength) + " bars late, never moves.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
+   NbLabel("g2", ox + kx, y, "ZIGZAG: confirmed swings, HH+HL up, LH+LL down, " + IntegerToString(InpSwingStrength) + " bars late.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
    y += rh;
-   NbLabel("g3", ox + kx, y, "EMA200 (blue line): filter. Close above = BUY side only, below = SELL side only.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
+   NbLabel("g3", ox + kx, y, "EMA200 (blue): close above = BUY side only, below = SELL only.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
    y += rh;
-   NbLabel("g4", ox + kx, y, "ARROW = NRTR flip on a CLOSED candle (bright = with 15M boss). Yellow ? = preview only.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
+   NbLabel("g4", ox + kx, y, "ARROW = NRTR flip on a CLOSED candle. Yellow ? = preview only.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
    y += rh;
-   NbLabel("g5", ox + kx, y, "NY TRAP (purple): pre-NY range (dashed) swept, then a 5M close back inside. Purple marker = trap.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
+   NbLabel("g5", ox + kx, y, "US MAP: PDH/PDL, PRE-MARKET, OPENING RANGE lines = reference.", cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
    y += rh + (int)MathRound(4 * sc);
 
-   NbLabel("f1", ox + kx, y, "Learning tool. Aligned conditions, not a profit promise. Count the markers.", cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
+   NbLabel("f1", ox + kx, y, "Learning tool. Aligned conditions, not a profit promise.", cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
    y += rh;
    NbLabel("f2", ox + kx, y, "It never places, changes or closes an order. You decide.", cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
 }
@@ -5416,14 +5827,21 @@ string NbFqOnlyText()
 
 color NbFqAccent()
 {
-   return (NB_MARKET == NB_MKT_CRYPTO) ? NB_RGB(247, 147, 26) : NB_RGB(52, 152, 219);
+   return NB_RGB(0, 188, 212);
 }
 
-//--- Asia / London hours need UTC: the twins' two-witness session clock
+//--- US100: the US map needs the NY clock (AUTO two witnesses, or the
+//    typed 09:30 NY). It also hands the US settings to the map config.
 void NbFqClock(bool &ok, long &offset)
 {
-   ok = (g_S.clockMode == NB_CLK_AUTO && g_S.clockOk);
-   offset = ok ? g_S.offset : 0;
+   ok = g_S.clockOk;
+   offset = (g_S.clockMode == NB_CLK_AUTO && g_S.clockOk) ? g_S.offset : 0;
+   g_C.usMode = g_S.clockMode;
+   g_C.usOpenSec = g_S.manualOpenSec;
+   g_C.usGapAtr = InpUsGapAtr;
+   g_C.usOrMin = InpUsOrMinutes;
+   g_C.usSrvDst = (int)InpUsServerDst;
+   g_C.usOffBase = NbSrvBase(g_S.offset, (long)TimeTradeServer() - g_S.offset, g_C.usSrvDst);
 }
 
 //--- per-asset settings: the twins use the plain rules
@@ -6046,9 +6464,10 @@ void NbFqDrawTable()
          lvR = lvR + "  " + DoubleToString((g_fq[i].res - g_s5.c[i]) / atr15, 1) + " ATR above";
       mapL = "15M MAP   PDH " + NbPx(g_fq[i].pdh) + "  PDL " + NbPx(g_fq[i].pdl);
       if(g_C.clockOk)
-         mapR = "ASIA " + NbPx(g_fq[i].ash) + " / " + NbPx(g_fq[i].asl) + "   LDN " + NbPx(g_fq[i].loh) + " / " + NbPx(g_fq[i].lol);
+         mapR = "PMH " + NbPx(g_fq[i].ash) + " PML " + NbPx(g_fq[i].asl) + "  OR" + IntegerToString(InpUsOrMinutes) + " " + NbPx(g_fq[i].loh) +
+                "/" + NbPx(g_fq[i].lol);
       else
-         mapR = "ASIA / LONDON: UTC offset unknown - not shown";
+         mapR = "PRE-MARKET / OR: NY clock unknown - not shown";
    }
    NbQLabel("lvL", ox + pad, y, lvL, cVal, fsS, "Arial", ANCHOR_LEFT_UPPER);
    NbQLabel("lvR", xr, y, lvR, cVal, fsS, "Arial", ANCHOR_LEFT_UPPER);
@@ -6665,39 +7084,224 @@ void NbPwDrawStrip()
    NbWLabel("br", xr, y, g_brStatus, g_brOk ? cKey : NB_RGB(230, 126, 34), fsS, "Arial");
 }
 
-//--- per-file bridge adapters (the twins: identical text, NB_MARKET decides)
+//+------------------------------------------------------------------+
+//| US100 terminal side (v1.11): the NY-time session row, the US map |
+//| text, the news label and the bridge adapters. Context only:      |
+//| nothing here reaches g_final, a signal, a plan or a record.      |
+//+------------------------------------------------------------------+
+//--- MT5's economic calendar, read at most once a minute. The result is
+//    a LABEL: its direction is always UNKNOWN and no rule reads it.
+void NbUsNewsRead(datetime now)
+{
+   if(!InpUsNews)
+   {
+      g_usNewsState = NB_NEWS_UNKNOWN;
+      g_usNewsTxt = "UNKNOWN - CALENDAR OFF (input)";
+      g_usNewsName = "";
+      g_usNewsTime = 0;
+      return;
+   }
+   if(g_usNewsAt > 0 && now >= g_usNewsAt && now - g_usNewsAt < 60)
+      return;
+   g_usNewsAt = now;
+   g_usNewsName = "";
+   g_usNewsTime = 0;
+   MqlCalendarValue v[];
+   if(!CalendarValueHistory(v, now - 7 * 86400, now + 7 * 86400, "US", "USD"))
+   {
+      g_usNewsState = NB_NEWS_UNKNOWN;
+      g_usNewsTxt = "UNKNOWN - CALENDAR NOT AVAILABLE";
+      return;
+   }
+   int n = ArraySize(v);
+   int hi = 0;
+   long best = -1;
+   long win = (long)InpUsNewsMinutes * 60;
+   string nextName = "";
+   datetime nextTime = 0;
+   for(int k = 0; k < n; k++)
+   {
+      MqlCalendarEvent e;
+      if(!CalendarEventById(v[k].event_id, e))
+         continue;
+      if(e.importance != CALENDAR_IMPORTANCE_HIGH)
+         continue;
+      hi++;
+      long d = (long)v[k].time - (long)now;
+      long ad = (d < 0) ? -d : d;
+      if(ad <= win && (best < 0 || ad < best))
+      {
+         best = ad;
+         g_usNewsName = e.name;
+         g_usNewsTime = v[k].time;
+      }
+      if(d > win && (nextTime == 0 || v[k].time < nextTime))
+      {
+         nextTime = v[k].time;
+         nextName = e.name;
+      }
+   }
+   if(hi == 0)
+   {
+      g_usNewsState = NB_NEWS_UNKNOWN;
+      g_usNewsTxt = "UNKNOWN - NO HIGH-IMPACT USD EVENT LISTED";
+      return;
+   }
+   if(best >= 0)
+   {
+      g_usNewsState = NB_NEWS_WINDOW;
+      g_usNewsTxt = "WINDOW: " + StringSubstr(g_usNewsName, 0, 22) + " " + TimeToString(g_usNewsTime, TIME_MINUTES) +
+                    " - DIRECTION UNKNOWN";
+      return;
+   }
+   g_usNewsState = NB_NEWS_CLEAR;
+   g_usNewsTxt = "NONE +/-" + IntegerToString(InpUsNewsMinutes) + " MIN" +
+                 ((nextTime > 0) ? ("  (next " + StringSubstr(nextName, 0, 18) + " " + TimeToString(nextTime, TIME_DATE | TIME_MINUTES) + ")") : "");
+   g_usNewsTxt = StringSubstr(g_usNewsTxt, 0, 60);
+}
+
+string NbUsNewsStateText(int s)
+{
+   if(s == NB_NEWS_WINDOW)
+      return "EVENT WINDOW";
+   if(s == NB_NEWS_CLEAR)
+      return "NO HIGH-IMPACT USD EVENT IN WINDOW";
+   return "UNKNOWN";
+}
+
+string NbUsHL(double h, double l)
+{
+   if(h <= 0.0 || l <= 0.0)
+      return "---";
+   return NbPx(h) + "/" + NbPx(l);
+}
+
+//--- the NY wall clock now (live), for the session row
+long NbUsEtNow()
+{
+   return NbUsEt(TimeTradeServer(), g_C.clockOk, g_C.usMode, g_C.usOffBase, g_C.usSrvDst, g_C.usOpenSec);
+}
+
+string NbUsSrvDstText(int r)
+{
+   if(r == NB_SRVDST_EU)
+      return "EU";
+   if(r == NB_SRVDST_NONE)
+      return "NONE";
+   return "US";
+}
+
+//--- the clock row: the witnesses' offset now and the server's DST rule
+string NbUsClockText()
+{
+   if(g_S.clockMode == NB_CLK_MANUAL)
+      return "MANUAL: 09:30 NY = " + IntegerToString(InpNyOpenHour, 2, '0') + ":" + IntegerToString(InpNyOpenMinute, 2, '0') + " SERVER (fixed)";
+   if(!g_S.clockOk)
+      return "UNKNOWN - BROKER vs PC CLOCK DISAGREE, SET MANUAL";
+   long h = g_S.offset / 3600;
+   string sgn = (g_S.offset >= 0) ? "+" : "-";
+   return "AUTO: SERVER = UTC" + sgn + IntegerToString(MathAbs(h)) + " now, server DST " + NbUsSrvDstText(InpUsServerDst) + " (per bar)";
+}
+
+string NbUsNowText()
+{
+   long et = NbUsEtNow();
+   if(et <= 0)
+      return "UNKNOWN - SESSION CLOCK NOT PROVEN";
+   int s = NbUsSessOf(et);
+   string t = NbUsSessText(s) + "  (NY " + TimeToString((datetime)et, TIME_MINUTES) + ")";
+   if(s == NB_US_PRE || s == NB_US_OVERNIGHT)
+   {
+      long mn = (et % 86400) / 60;
+      long left = (mn < 9 * 60 + 30) ? (9 * 60 + 30 - mn) : (24 * 60 - mn + 9 * 60 + 30);
+      t = t + "  open in " + IntegerToString((int)(left / 60)) + "h" + IntegerToString((int)(left % 60)) + "m";
+   }
+   return t;
+}
+
+string NbUsGapText(const NbUsBar &b)
+{
+   if(b.pcl <= 0.0)
+      return "--- (no previous regular close yet)";
+   if(b.open <= 0.0)
+      return "prev close " + NbPx(b.pcl) + "  -  open not yet";
+   string sg = (b.gap >= 0.0) ? "+" : "";
+   string pct = DoubleToString(100.0 * b.gap / b.pcl, 2);
+   string sz = sg + NbPx(b.gap) + " (" + sg + pct + "%, " + DoubleToString(MathAbs(b.gapAtr), 1) + " ATR)";
+   if(b.gapDir == 0)
+      return "open " + NbPx(b.open) + "  NO GAP " + sz;
+   return ((b.gapDir > 0) ? "GAP UP " : "GAP DOWN ") + sz + (b.gapFilled ? "  FILLED" : "  OPEN");
+}
+
+//--- which previous levels the regular-session open jumped over (nothing traded there)
+string NbUsGappedList(const NbUsBar &b)
+{
+   if(b.open <= 0.0 || b.pcl <= 0.0 || b.gapDir == 0)
+      return "";
+   string t = "";
+   if(b.pdh > 0.0 && NbUsGapped(b.pcl, b.open, b.pdh))
+      t = t + ((t == "") ? "" : ",") + "PDH";
+   if(b.pdl > 0.0 && NbUsGapped(b.pcl, b.open, b.pdl))
+      t = t + ((t == "") ? "" : ",") + "PDL";
+   if(b.pmh > 0.0 && NbUsGapped(b.pcl, b.open, b.pmh))
+      t = t + ((t == "") ? "" : ",") + "PMH";
+   if(b.pml > 0.0 && NbUsGapped(b.pcl, b.open, b.pml))
+      t = t + ((t == "") ? "" : ",") + "PML";
+   return t;
+}
+
+//--- per-file bridge adapters (US100)
 string NbBrSource()
 {
-   return (NB_MARKET == NB_MKT_CRYPTO) ? "NRTR_BOSS_Crypto_NYTrap" : "NRTR_BOSS_Forex_NYTrap";
+   return "NRTR_BOSS_US100";
 }
 
 string NbBrMarket()
 {
-   return (NB_MARKET == NB_MKT_CRYPTO) ? "CRYPTO" : "FOREX";
+   return "US_INDEX";
 }
 
-//--- the twins' own NY-open module: session phase, pre-NY range, sweep
+//--- the US module lives under "ny" (the New York session): session,
+//    levels, gap, news. Reference levels and context, never a signal.
 string NbBrNy()
 {
-   if(!g_ready || g_s5.n < 1)
+   if(!g_ready || g_s5.n < 1 || ArraySize(g_us) != g_s5.n)
       return "null";
    int i = g_s5.n - 1;
-   string j = "{" + NbJk("clock_ok") + (g_S.clockOk ? "true" : "false");
-   j = j + "," + NbJk("session") + NbJs(NbNyText(TimeTradeServer()));
-   j = j + "," + NbJk("phase") + NbJs(NbPhaseText(g_s5.ph[i]));
-   j = j + "," + NbJk("pre_ny_high") + NbJp(g_s5.rh[i]) + "," + NbJk("pre_ny_low") + NbJp(g_s5.rl[i]);
-   j = j + "," + NbJk("pre_ny_bars") + IntegerToString(g_s5.rn[i]);
-   j = j + "," + NbJk("swept_above_to") + NbJp(g_s5.swH[i]) + "," + NbJk("swept_below_to") + NbJp(g_s5.swL[i]);
-   j = j + "," + NbJk("trap_rule") + NbJs("NY window: sweep of the pre-NY range + 5M close back inside = NY TRAP signal (in mt5_signal.signal)");
+   NbUsBar b;
+   NbUsCopy(b, g_us[i]);
+   string j = "{" + NbJk("module") + "\"US SESSION MAP\"," + NbJk("not_a_signal") + "true," + NbJk("clock_ok") + (g_S.clockOk ? "true" : "false");
+   if(!g_fresh)
+      return j + "," + NbJk("state") + "\"SUPPRESSED - DATA STALE\"}";
+   j = j + "," + NbJk("session_now") + NbJs(NbUsNowText());
+   j = j + "," + NbJk("session_last_closed_bar") + NbJs(NbUsSessText(b.sess));
+   j = j + "," + NbJk("ny_time_last_closed_bar") + ((b.et > 0) ? NbJs(TimeToString((datetime)b.et, TIME_DATE | TIME_MINUTES)) : "null");
+   j = j + "," + NbJk("levels") + "{" + NbJk("prev_day_high") + NbJp(b.pdh) + "," + NbJk("prev_day_low") + NbJp(b.pdl) + "," + NbJk("prev_close") +
+       NbJp(b.pcl) + "," + NbJk("overnight_high") + NbJp(b.onh) + "," + NbJk("overnight_low") + NbJp(b.onl) + "," + NbJk("premarket_high") + NbJp(b.pmh) +
+       "," + NbJk("premarket_low") + NbJp(b.pml) + "," + NbJk("open") + NbJp(b.open) + "," + NbJk("or5_high") + NbJp(b.or5h) + "," + NbJk("or5_low") +
+       NbJp(b.or5l) + "," + NbJk("or15_high") + NbJp(b.or15h) + "," + NbJk("or15_low") + NbJp(b.or15l) + "," + NbJk("or30_high") + NbJp(b.or30h) + "," +
+       NbJk("or30_low") + NbJp(b.or30l) + "," + NbJk("rth_high_so_far") + NbJp(b.rthH) + "," + NbJk("rth_low_so_far") + NbJp(b.rthL) + "," +
+       NbJk("vwap") + "null," + NbJk("vwap_note") + NbJs("off: an index CFD has tick volume only") + "," + NbJk("note") +
+       NbJs("reference levels (battlefield), never a BUY or SELL; 0 = not known yet") + "}";
+   string gd = (b.gapDir > 0) ? "\"UP\"" : ((b.gapDir < 0) ? "\"DOWN\"" : ((b.open > 0.0 && b.pcl > 0.0) ? "\"NONE\"" : "null"));
+   j = j + "," + NbJk("gap") + "{" + NbJk("direction") + gd + "," + NbJk("points") + ((b.open > 0.0 && b.pcl > 0.0) ? NbJd(b.gap, g_digits) : "null") + "," +
+       NbJk("atr15") + ((b.open > 0.0 && b.pcl > 0.0) ? NbJd(b.gapAtr, 2) : "null") + "," + NbJk("filled") + (b.gapFilled ? "true" : "false") + "," +
+       NbJk("gapped_through") + NbJs(NbUsGappedList(b)) + "," + NbJk("rule") +
+       NbJs("a level the gap jumped over is neither a sweep nor a breakout") + "}";
+   j = j + "," + NbJk("news") + "{" + NbJk("state") + NbJs(NbUsNewsStateText(g_usNewsState)) + "," + NbJk("text") + NbJs(g_usNewsTxt) + "," +
+       NbJk("event") + ((g_usNewsName != "") ? NbJs(g_usNewsName) : "null") + "," + NbJk("direction") + "\"UNKNOWN\"," + NbJk("rule") +
+       NbJs("news is a label, never a direction; an empty calendar is UNKNOWN") + "}";
+   j = j + "," + NbJk("context") + "null," + NbJk("context_rule") + NbJs("correlation is not a signal (peers: phase 2)");
    return j + "}";
 }
 
-//--- a short key per state the sender compares (a change = one Telegram message)
 string NbBrNyKey()
 {
-   if(!g_ready || g_s5.n < 1)
+   if(!g_ready || g_s5.n < 1 || ArraySize(g_us) != g_s5.n)
       return "-";
-   return IntegerToString(g_s5.ph[g_s5.n - 1]);
+   int i = g_s5.n - 1;
+   return IntegerToString(g_us[i].sess) + "." + IntegerToString(g_us[i].gapDir) + "." + (g_us[i].gapFilled ? "F" : "O") + "." +
+          IntegerToString(g_usNewsState);
 }
 
 //--- v1.09 bridge adapters (twins): the same schema as the metals file;

@@ -270,6 +270,233 @@ the session engine tests (two of them by the indicator tests as well):
 | Clock accepted whatever the PC said (no half-hour check) | yes |
 | The forming 5M bar evaluated for a trap | yes |
 
+## Results (2026-09-27, v1.10 crypto / forex parity + v1.11 US100)
+
+```
+SESSION INDICATOR (crypto / forex):  151 / 150 passed  (I20: click guard flow + trap, lots, loss tick value, MARKET chip, pullback watch, version)
+EXISTING PANEL UNCHANGED:            gold / crypto / forex PASS (v1.04 baseline + declared fixes)
+BRIDGE BLOCK CHECK:                  NB_PW NB_BR NB_MK NB_RP NB_SH identical in all 4 files
+MAKE US100 --check:                  PASS (crypto + 59 declared patches, no drift)
+US100 TESTS:                         112 passed  (U0 sessions/symbols, U15 DST per bar all of 2026, U1-U3 map vs reference,
+                                     U4 gap, U5/U6/U12 plans, U7 causal, U8 stale, U9 too far, U10 forming, U11 lots,
+                                     U13 own symbol only, U14 news UNKNOWN, U16 no execution / no NY trap)
+BRIDGE PYTHON TESTS:                 12 of 12 (incl. the US100 message)
+ALL SUITES PASSED
+MUTATION TESTS:  89 planted, 89 caught (full run: 81 earlier + 82-89 twins v1.10)
+                 US100 90-105: first run 14 of 16 - M92 and M98 ESCAPED (real test gaps, closed: 09:25-missing PMH
+                 check, every-bar-gapped fixture); re-run of all 16 on the final tests: 16 of 16 CAUGHT
+MetaEditor F7:   NOT RUN HERE - twins v1.10 and NRTR_BOSS_US100.mq5 v1.11
+```
+
+**Manual check (US100):** F7 `NRTR_BOSS_US100.mq5`, drop it on USTEC M5. The top right shows
+`v1.11`, the title says `(US INDEX)`, and the US SESSION MAP rows show PDH / PDL, ONH/ONL PMH/PML,
+the open / gap and the opening range in New York time. If the session row's NY time is one hour off,
+set `InpUsServerDst` to EU (or NONE) for your broker.
+
+## Results (2026-09-27, v1.10 metals: audit fixes)
+
+```
+NY TRAP + STRIP + PULLBACK + v1.10 (metals):  184 passed, 0 failed  (V1 lots, V2 click guard gold/silver, V3 pending wording, V4 loss tick value)
+INDICATOR TESTS (metals):                     124 passed (I2 / I6 / I9 updated to the v1.10 rules)
+EXISTING PANEL UNCHANGED (gold):              PASS vs the v1.04 baseline + 4 declared fixes (tests/baseline_patches.py)
+ALL OTHER SUITES:                             PASS
+MUTATION TESTS:  8 new (73-80) + re-anchored 45: all caught
+MetaEditor F7:   metals v1.10 NOT YET - look for the small "v1.10" at the top right of the left box
+```
+
+## Results (2026-09-27, v1.09 metals / v1.08 twins: regime pullback + completed bridge schema)
+
+```
+NY TRAP + NY STRIP + REGIME PULLBACK (metals):  146 passed, 0 failed  (R1-R7 engine by hand, Y7 vs an independent 1H/4H run)
+BRIDGE + WATCH TESTS:  gold 70 / silver 70 / crypto 67 / forex 67 passed  (B8 forming spike, B9 nulls, B10 atomic write)
+BRIDGE PYTHON TESTS:   11 of 11  (same schema in all four files, forming flags, FULL DATA label)
+BRIDGE BLOCK CHECK:    NB_PW and NB_BR identical in all three files
+EXISTING PANELS:       unchanged (gold / crypto / forex)
+MUTATION TESTS:  73 planted, 73 caught in one full run (12 new)
+MetaEditor F7:   metals v1.09 and twins v1.08 NOT YET
+```
+
+**Manual check:**
+1. F7 all three files.
+2. On XAUUSD / XAGUSD M5, the NY strip has two PULLBACK WATCH rows. With MT5's 1H / 4H history
+   loaded they show the regime; without it they say "1H / 4H data missing".
+3. Open the JSON: every candle has `forming` and `confirmed`, `real_volume` is null on a CFD
+   broker, and `mt5_order_action` is `"NONE"`.
+4. The Telegram dry run shows the `FULL DATA:` line.
+
+## Results (2026-09-27, v1.08 metals: NY clock, market state, data bridge)
+
+```
+NY TRAP + NY STRIP TESTS (metals):   99 passed, 0 failed  (step 5d: + N8 AUTO clock, N9 market state, Y5 chip, Y6 clock on the indicator)
+BRIDGE + WATCH TESTS:                gold 50 / silver 50 passed (step 5f)
+BRIDGE PYTHON TESTS:                 10 of 10 (gold, silver, crypto, forex)
+BRIDGE BLOCK CHECK:                  PASS (step 6d)
+EXISTING PANEL UNCHANGED (gold):     PASS - only the two new MARKET labels differ from v1.04
+CRYPTO / FOREX FILES:                not changed
+MUTATION TESTS:  61 planted, 61 caught (9 new; M39/M40 re-anchored, M54 made buildable, re-run: CAUGHT)
+MetaEditor F7:   metals v1.08 NOT YET
+```
+
+**Manual check (gold / silver):**
+1. F7, then attach to XAUUSD M5 and XAGUSD M5.
+2. The top line of the left box shows MARKET: ... in colour.
+3. The NY rows show `NY TRAP 16:30-18:00 (PC 15:30-17:00)` in summer time.
+4. `XAUUSD.json` and `XAGUSD.json` appear in the NRTR_BRIDGE folder.
+5. `python bridge\nrtr_telegram_sender.py --dry-run --once` prints a MARKET line and the NY trap
+   lines for both.
+
+## Results (2026-09-27, v1.07 twins: data bridge + counter-trend watch)
+
+```
+SAFETY SCAN (twins):             PASS - file writes only in the bridge block (write-only, NRTR_BRIDGE folder)
+SAFETY SCAN NEGATIVE CHECKS:     7 of 7 planted violations rejected   (step 6c)
+BRIDGE + WATCH TESTS:            crypto 48 / forex 48 passed, 0 failed (step 14)
+BRIDGE PYTHON TESTS:             9 of 9 passed (step 15: JSON vs raw history + independent engine; sender, no network)
+EXISTING PANEL UNCHANGED:        PASS gold / crypto / forex (bridge running)
+ALL EARLIER SUITES:              PASS
+MUTATION TESTS:  52 planted, 52 caught (10 new; 2 real gaps found and closed; M11 anchor fixed + re-run)
+MetaEditor F7:   twins v1.07 NOT YET
+```
+
+**Manual check (crypto first):**
+1. F7 the crypto file, then attach it to BTCUSD M5.
+2. After a few seconds, open `%APPDATA%\MetaQuotes\Terminal\Common\Files\NRTR_BRIDGE\` in
+   Explorer. `BTCUSD.json` should be there and should change every 10 s.
+3. The strip on top of the table should say `BRIDGE: NRTR_BRIDGE\BTCUSD.json <time>`.
+4. Run `python bridge\nrtr_telegram_sender.py --dry-run --once` and read the message.
+5. Then set the token and chat id, run `--test-message`, and then run it normally.
+
+## Results (2026-09-27, v1.07 metals: NY trap on the table, clean top right)
+
+```
+NY TRAP + NY STRIP TESTS (metals):   69 passed, 0 failed   (step 5d, default view: N1-N7, Y1-Y4 x XAUUSD / XAGUSD)
+DECISION LADDER TESTS (metals):      77 passed, 0 failed   (step 5d2, InpLadderShow = true: L1-L10)
+SIMPLE VIEW TESTS (metals):          14 passed, 0 failed   (step 5e)
+EXISTING PANEL UNCHANGED:            PASS gold / crypto / forex (53 scenarios each)
+ALL EARLIER SUITES:                  PASS
+MUTATION TESTS:  42 planted, 42 caught (full run 40/42; M22 + M36 were harness anchor issues, fixed, re-run: CAUGHT)
+MetaEditor F7:   metals v1.06 compiled and ran in the user's MT5 (screenshot, 2026-09-27); v1.07 NOT YET
+```
+
+* **Y1**: nothing of this indicator in the top-right 300 x 300 px, where MT5 shows the price. The NY
+  rows share the table's x and width, and their bottom edge equals its top edge.
+* **Y2**: every 5th bar of 5 days per metal. The rows equal the engine's state, why and exact
+  prices. PRE-NY H/L lines carry the trap state. NY H/L equal the closed NY-window bars (computed
+  here from the raw bars). SL / TP lines appear only while swept or in play, ENTRY only in play.
+* **Y3**: the verdict row for all 12 swept / in-play x side x boss combinations, plus nothing in play.
+* **Y4**: the 01:00 reopen is not stale; with a dead feed there is no state and no price.
+* **N7** (new): a close back inside with the wrong body, or a doji, is not a trigger. This closes
+  the gap mutation M23 found.
+
+**Manual check:** F7. XAUUSD M5 and XAGUSD M5: the top-right corner is empty and the price scale
+readable. The NY rows sit directly on the table. During the NY window, the PRE-NY and NY lines
+match the rows.
+
+## Results (2026-09-27, v1.06 metals: NY trap + decision ladder)
+
+```
+NY TRAP + LADDER TESTS (metals): 105 passed, 0 failed    (./run_tests.sh step 5d, tests/test_nyt.cpp)
+SIMPLE VIEW TESTS (metals):       12 passed, 0 failed    (step 5e: the same test built with InpSimpleView = true)
+EXISTING GOLD PANEL UNCHANGED:    PASS (v1.04 baseline, 53 scenarios; the new NBLP_N_ / NBLP_L_ objects excluded)
+ALL EARLIER SUITES:               PASS
+MUTATION TESTS:  35 planted (13 new for v1.06): 33 caught; M23 ESCAPED (fixed by N7 in v1.07), M35 did not build (replaced)
+MetaEditor F7:   metals v1.05 compiled in the user's MT5 with no error (2026-09-27); metals v1.06 NOT YET
+```
+
+* **N1-N6** check the NY trap engine on hand-built candles with prices worked out by hand: SELL and
+  BUY trap exact entry / SL / TP1 / TP2, a one-candle trap, a bearish close still above the level
+  (not a trigger), SL beats TP1 in one candle, expiry, no range, silver settings, weekend, no NY
+  time, one trap per side per day, and the forming candle.
+* **L1-L9** run the whole indicator **separately on XAUUSD (tick 0.01) and XAGUSD (tick 0.001,
+  tick value 5, contract 5000)**: layout, the 15M boss over 120 moments, CLICK prices, trap lines vs
+  the engine, CONFLICT / AGREE / NOT IN MODE (injected, all six combinations), the forming-candle
+  preview, a read-only open position with money distances, own parameters, and the 01:00 reopen.
+  **L10**: an unsupported symbol draws nothing.
+* The mapping to the ten points Shyam asked for is in CHANGELOG.md ("The ten verification
+  points"). Point 10 (MetaEditor) cannot run here.
+
+**Manual check:** F7. Attach to XAUUSD M5 and XAGUSD M5. The ladder is at the top right, clear of
+both panels, and no text ends in the middle of a word. During the NY window, the NY TRAP lines
+match the ladder's prices. At 01:00-01:15 broker time the ladder must not say DATA STALE.
+
+## Results (2026-09-27, v1.06 twins + v1.05 metals)
+
+```
+FQ BLOCK CHECK:  PASS  (NB_FQ 1150 lines, NB_FQT 692 lines, identical in all three files)
+FIVE-QUESTION ENGINE TESTS:    metals 106 / crypto 106 / forex 106 passed, 0 failed
+FIVE-QUESTION INDICATOR TESTS: metals 122 / crypto 115 / forex 115 passed, 0 failed
+EXISTING PANEL UNCHANGED:      gold 16431 / crypto 17596 / forex 17382 object records, 53 scenarios each
+MUTATION TESTS:  python3 tests/mutate_fq.py -> 22 planted (17 crypto, 5 metals), 22 caught
+MetaEditor F7:   v1.05 twins compiled and ran in the user's MT5 (2026-09-27); v1.06 and metals v1.05 NOT YET
+```
+
+New: **Q9** (7000+ texts on 78 chart moments: none over MT5's 63-character label limit; chart texts
+in the background; the table is created after the main panel's markers, checked after the next
+closed candle), **Q10** (silver on the metals panel: the wider stop is in the SL, and the footer names
+the settings), **Q3** (the map row equals the engine's PDH / Asia / London values), and **F19** (silver
+options, NET R, witness clock, level tags). The first mutation run found a weak test (M17 escaped
+because Q9 only looked at startup). Q9 was strengthened, and M17 is now caught. Details and the list
+of existing main-panel labels that MT5 already cuts are in [CHANGELOG.md](CHANGELOG.md).
+
+**Manual check:** F7 all three files. Attach the metals file to XAUUSD M5 and XAGUSD M5. On
+silver the table's footer must read `SILVER: stop x2.0, confirm +0.25 ATR`. No chart marker may
+cover either table. Nothing on the table may end in the middle of a word.
+
+## Results (2026-09-26, v1.05 five-question table)
+
+```
+TWIN CHECK:      PASS  (5058 lines, 4 differ: header, 2 descriptions, NB_MARKET)
+SAFETY SCAN:     PASS  (both files)
+FULL FILE crypto / forex (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
+EXISTING SUITES: all unchanged and passing (gold 145 + 124, crypto 106 + 104, forex 104 + 103)
+FIVE-QUESTION ENGINE TESTS:    crypto 96 / forex 96 passed, 0 failed
+FIVE-QUESTION INDICATOR TESTS: crypto 106 / forex 106 passed, 0 failed
+EXISTING PANEL UNCHANGED:      53 scenarios per twin, every object, buffer, alert and log line
+                               byte-identical to the v1.04 file from git (3f046ef)
+MUTATION TESTS:  python3 tests/mutate_fq.py -> 14 planted, 14 caught, 0 escaped
+MetaEditor F7:   NOT RUN (not available in the build environment)
+Visual MT5 test: NOT RUN
+```
+
+| # | Case | Result |
+|---|---|---|
+| F1 | BUY sweep of support, hand-computed: SETUP until the close above the sweep candle high, READY at exactly that close; entry 100.00, SL 99.56, TP1 103.00 = 6.82R, TP2 104.50; a re-dip keeps the sweep low; fill, then TP1 recorded | PASS |
+| F2 | no confirmation close -> never READY | PASS |
+| F3 | next resistance 1.36R away -> SKIP with that R; the same candles with a 1.3R minimum -> READY | PASS |
+| F4 | no level mapped beyond -> reward UNKNOWN -> SKIP, never READY | PASS |
+| F5 | 15M structure MIXED / NOT CONFIRMED -> NO TRADE on every bar, even on a textbook sweep | PASS |
+| F6 | with the trend only: a BUY sweep in a bearish 15M and a breakdown in a bullish 15M make no plan | PASS |
+| F7 | BUY breakout: READY on the breakout close, limit at the level, SL beyond the confirmed 5M swing | PASS |
+| F8 | breakout without a structural stop -> SKIP; a close back below kills the breakout | PASS |
+| F9 | SELL sweep of resistance (mirror), exact levels, TP2 < TP1 < ENTRY < SL | PASS |
+| F10 | outcomes: fill + SL same candle = SL; fill + TP1 same candle = filled only; TP1 before fill = MISSED; 12 bars = EXPIRED; SL + TP1 same candle = SL; 144 bars = TIMED OUT; SELL mirror | PASS |
+| F11 | pending plan CANCELLED when the 15M structure turns | PASS |
+| F12 | the forming candle is never evaluated | PASS |
+| F13 | level merge (stronger source wins, group width = zone), last 4 swings per side, unconfirmed swings excluded | PASS |
+| F14 | PDH / PDL of the previous COMPLETE broker day; Asia / London known only when the window ends; no clock -> Asia / London unknown | PASS |
+| F15 | 16 synthetic days (crypto: 53 plans, both sides, both kinds): level order, >= 1.5R, tick grid, with the trend, event inside the window, one plan at a time | PASS |
+| F16 | session levels equal an independent brute-force oracle on every bar | PASS |
+| F17 | the levels drawn equal the levels the engine used | PASS |
+| F18 | no repaint: 31 cut points plus a different future -> every earlier answer bit-identical | PASS |
+| Q1 | table at the bottom middle (exactly centred on a 1920 px chart), steps aside for the main panel on 1400 px, every label inside it | PASS |
+| Q2 | READY BUY and SELL rendered with the engine's exact order, SL, TP1, TP2, R:R, NEXT line, plan lines, plan marker, tally | PASS |
+| Q3 | big S/R lines (width 3, running right) at the engine's prices, filled zones reaching into the future, BREAKOUT / BREAKDOWN / possible BUY / SELL words per trend, BREAKOUT tag on the exact candle | PASS |
+| Q4 | SETTING UP, WATCH (middle) and SKIP (low R) render their own words; no plan lines before READY | PASS |
+| Q5 | the engine's last closed bar IS READY and the feed stops -> NO TRADE - DATA STALE, no answers, no plan lines | PASS |
+| Q6 | unsupported symbol / missing history -> no plan, nothing drawn; recovery | PASS |
+| Q7 | restart identical; a forming crash candle changes nothing in the table or the drawing | PASS |
+| Q8 | the MAIN PANEL row repeats the main panel's own answer (CLICK BUY / WAIT + reason) | PASS |
+| dump | the v1.04 file from git and this file, 53 scenarios: every existing object, buffer hash, alert and log line identical | PASS |
+
+The mutation list, the hand arithmetic and every changed line are in [CHANGELOG.md](CHANGELOG.md).
+The synthetic market is a random walk, so its plan outcomes (crypto: TP1 6, SL 14, not filled 32)
+test the mechanics only and say nothing about an edge.
+
+**Manual check for v1.05:** F7 both files; attach the crypto file to BTCUSD M5. The table must sit
+at the bottom middle (or just right of the main panel on a narrow chart). The two thick lines must
+be the nearest level above and below price. With a live feed the status must never read READY
+while the DATA CLOCK says STALE.
+
 ## Manual checks in MT5 (twins)
 
 1. **Compile both files** with F7. Expect `0 errors`.

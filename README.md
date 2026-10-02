@@ -1,13 +1,14 @@
 # NRTR BOSS Learning Panels (MT5)
 
-Three standalone MT5 **indicators**, one per market. Each one is a single `.mq5` file: copy,
+Four standalone MT5 **indicators**, one per market. Each one is a single `.mq5` file: copy,
 compile with F7, drag onto the chart. None of them ever places, modifies or closes an order.
 
 | File | Market | Extra |
 |---|---|---|
-| `NRTR_BOSS_LearningPanel.mq5` | Gold, Silver | the original 15M-boss / 5M-trigger panel |
-| `NRTR_BOSS_Crypto_NYTrap.mq5` | BTC ETH SOL LTC XRP BNB ADA DOGE AVAX DOT LINK BCH (USD, USDT, USDC) | **+ NY-open trap module** |
-| `NRTR_BOSS_Forex_NYTrap.mq5` | EURUSD USDJPY GBPUSD and every pair of USD EUR GBP JPY CHF AUD NZD CAD SGD NOK SEK DKK PLN ZAR MXN HKD CNH | **+ NY-open trap module** |
+| `NRTR_BOSS_LearningPanel.mq5` | Gold, Silver | the original 15M-boss / 5M-trigger panel **+ 5-question table (v1.05) + NY trap rows and lines (v1.06/v1.07)** |
+| `NRTR_BOSS_Crypto_NYTrap.mq5` | BTC ETH SOL LTC XRP BNB ADA DOGE AVAX DOT LINK BCH (USD, USDT, USDC) | **+ NY-open trap module + 5-question table (v1.05)** |
+| `NRTR_BOSS_Forex_NYTrap.mq5` | EURUSD USDJPY GBPUSD and every pair of USD EUR GBP JPY CHF AUD NZD CAD SGD NOK SEK DKK PLN ZAR MXN HKD CNH | **+ NY-open trap module + 5-question table (v1.05)** |
+| `NRTR_BOSS_US100.mq5` (v1.11) | USTEC / US100 / NAS100 (stocks: phase 2) | **+ US session map in NY time (PDH/PDL, ONH/ONL, PMH/PML, open, OR 5/15/30, gap), news label; the NY trap is OFF** |
 
 The crypto and forex files are twins: the same text except one `#define` (the market filter)
 and the description lines. `tests/check_twins.py` enforces that. The NY-trap module is
@@ -34,6 +35,129 @@ symbol only to show EXIT / PROTECT. You click, or you don't. "CLICK BUY" means *
 conditions are aligned for the educational setup*. It is **not** a profit signal.
 
 Personal tool. No SignalMesh, no Telegram, no network, no DLLs, no files.
+
+## v1.11: US100 / USTEC (new file, `NRTR_BOSS_US100.mq5`)
+
+Built from the crypto file by `tests/make_us100.py` (every difference is declared there), so the
+engine, the click guard, lots, MARKET chip, pullback watch and bridge are the same text. What is
+different:
+
+* **US SESSION MAP** (left box, where the NY trap rows were), all in **New York time**:
+  * **PDH / PDL / close** of the previous **regular** session (09:30-16:00), not the broker day.
+  * **ONH / ONL** (overnight 18:00-04:00) and **PMH / PML** (pre-market 04:00-09:30). They are
+    shown only after their window has ended and never mix with the regular session.
+  * The **09:30 open**, the opening range **OR 5 / 15 / 30** (each shown only once its window is
+    complete), and the regular-session high / low so far.
+  * **GAP** = open - previous close, in points, % and 15M ATR: UP / DOWN / NONE, FILLED / OPEN.
+* **Session labels** (overnight, pre-market, open 0-5 / 5-15 / 15-30 min, morning, lunch, afternoon,
+  final hour, after-hours, closed) are context only. They change no rule.
+* The **5-question table** uses PDH / PDL, PMH / PML and the opening range (input
+  `InpUsOrMinutes`, default 15) plus the 15M swings. **A level the price gapped over is never a
+  sweep and never a breakout**, because nothing traded there.
+* **News**: MT5's economic calendar (USD, high impact), shown as a label.
+  * Its direction is always UNKNOWN.
+  * An empty or unavailable calendar = UNKNOWN, never "no news".
+  * It never changes a signal.
+* **Clock**: every bar is converted to NY time **per bar**, through the broker server's DST rule
+  (input `InpUsServerDst`, default US = the usual NY-close UTC+2/+3 broker; also EU or NONE) and
+  the US DST calendar. It is never one scalar offset for the whole history.
+* The NY trap module is OFF. VWAP is off (a CFD has tick volume only). Peers (NVDA, AMD, ...) and
+  stocks come in phase 2.
+* The starting values are the crypto file's and are **not validated for US100**. The order is
+  read-only, record, shadow, test, validate.
+
+## v1.10 crypto / forex: the same as gold / silver
+
+The crypto and forex files now have everything below: the click guard (also for READY - NY TRAP),
+the lots fix, the MARKET chip on the symbol line, the two PULLBACK WATCH rows on top of the watch
+strip (shadow only, needs MT5's 1H / 4H history) and the `v1.10` label at the top right.
+
+## v1.10: the click guard (gold / silver)
+
+* **READY - CLICK BUY / SELL** only while the live price is within 0.5 x the signal's risk of its
+  entry (`InpClickBandR`). Further away it reads **BUY / SELL SETUP - PRICE TOO FAR - WAIT FOR
+  RE-ENTRY**. The ENTRY row shows the signal's age and distance, e.g.
+  `bar 4/6  now 4320.00  +20.00 (0.8R)`.
+* Lots for x% risk use the broker's own volume step and the larger of MT5's profit / loss tick
+  value.
+* No FLIP arrow on the first NRTR-ready candle. "5M AGAINST - WAIT FOR 5M RE-ALIGNMENT" replaces a
+  pending line with `---`.
+* The version is shown small at the top right of the left box.
+
+## v1.09: REGIME PULLBACK WATCH (gold / silver) - shadow only
+
+**Direction and entry location are separate.**
+
+* **DIRECTION** = the regime: 4H NRTR + 1H NRTR + the 15M boss, all bearish (or all bullish).
+* **LOCATION** = 5M. In a bearish regime, a pull-up is a **WATCH, never a BUY**. The NY strip
+  shows two rows:
+
+```
+PULLBACK WATCH - SHADOW ONLY          PULL-UP 1.3 ATR in BEARISH regime - WATCH, NO BUY
+1 pull 1.3 ATR   2 at 15M high 2560.27: YES      3 sweep no   4 reject YES   5 close no   6 R:R --
+```
+
+When all six checks pass, the rows read **SELL PULLBACK / RE-ENTRY CANDIDATE** with entry, SL,
+target (the leg low) and R:R. The six checks are:
+1. the pull distance / ATR;
+2. price is at the 15M / 1H structure, or
+3. it swept it;
+4. a 5M rejection;
+5. a bearish 5M close below the rejection;
+6. an SL beyond the pull high and R:R >= 1.5.
+
+A 5M close above the structure reads **BEARISH THESIS INVALIDATED - wait for bullish
+confirmation**. Everything here is **shadow**: it never changes CLICK / WAIT, never sends
+anything, and is recorded (target / SL / expired, invalidations) so ~2 days of evidence, then n
+>= 20 / ~100, can judge it. It is in the bridge file as `mt5_signal.regime_pullback`
+(`direction` apart from `location`) and in the Telegram message.
+
+## v1.08: NY clock, MARKET state, data bridge (gold / silver)
+
+* **MARKET chip** at the top of the left box: **SUPER BULLISH / TREND UP / RANGE / CHOP /
+  TRANSITION / TREND DOWN / SUPER BEARISH**, from the last closed 15M bars (boss mode, 5M NRTR,
+  distance from EMA200 in ATRs, NRTR flips and width over 6 h). The line under it shows the
+  numbers, e.g. `6h: 0 flips  width 7.9 ATR  EMA -0.9 ATR`. **A description, never a signal**:
+  it does not change CLICK / WAIT. Stale data = `MARKET ---`.
+* **NY clock AUTO** (`InpNyAutoClock`, on): NY = 09:30 New York with the US daylight-saving
+  calendar, converted with the broker offset that the server and PC clocks agree on. A typed
+  `16:30` is an hour wrong for ~3 weeks a year (late March, late October), because the US and the
+  EU switch on different Sundays. The NY rows also show the window on **your PC's clock**:
+  `NY TRAP 16:30-18:00 (PC 15:30-17:00)`.
+* **NY trap window** = `InpNytWindowMin` (90). In Poland summer time that is 15:30-17:00. If you
+  trade later in the NY morning, set it longer (e.g. 120 = until 17:30 Poland). The default is
+  unchanged.
+* **Data bridge + counter-trend WATCH**: the same as crypto / forex (see section 2), plus the NY
+  trap rows and the market state in the file and in the Telegram message.
+
+## v1.07: the NY trap on the bottom-middle table (gold / silver)
+
+The top-right corner is left free, so MT5's price scale shows the current price. The NY trap sits in
+four rows **on top of the bottom-middle table**:
+
+```
+NY TRAP  16:30-18:00          PRE-NY H ....  L ....     NY H ....  L ....
+SELL  <WAIT / VALID / TRIGGERED / INVALID - why>     ENTRY  SL  TP1  TP2
+BUY   <WAIT / VALID / TRIGGERED / INVALID - why>     ENTRY  SL  TP1  TP2
+<verdict: CLICK only WITH the 15M boss; CONFLICT - NO TRADE against it>
+```
+
+* **Chart lines (as in the crypto file):** PRE-NY HIGH / LOW (dash-dot purple; these ARE the NY
+  TRAP SELL / BUY lines, and the trap state is written on them), NY HIGH / LOW (blue dotted, the
+  closed NY-window bars so far), and a side's SL / TP1 / TP2 only while it is swept or in play,
+  plus a solid ENTRY line once triggered.
+* **NY trap rule:** the range is the 4 hours before `InpNyOpenTime`. In the 90-minute NY window, a
+  wick beyond the range = VALID (swept). A **closed** 5M candle back inside, with a body in the
+  trap's direction = TRIGGERED: entry = that close, SL beyond the sweep, TP1/TP2 = 1R/2R. Silver
+  uses a wider stop and a stronger close back inside (the same inputs as the 5-question table).
+* **The 15M boss always decides.** A trap against it = CONFLICT, NO TRADE. Boss in WAIT = NO TRADE.
+* **Stale data shows no trap at all** ("---").
+* `InpLadderShow = true` brings back the v1.06 DECISION LADDER box (top right: 15M -> 5M -> NY trap
+  -> one action, scalp reference, open position). It is off by default because it covers the price
+  scale.
+* `InpSimpleView = true` hides the main panel and the table; the NY rows move to the bottom.
+* **No evidence yet** for the NY trap rule on real data. Judge it after n >= 20, ~100 to decide.
+  Details: [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -255,6 +379,23 @@ Two things are new on top of the gold panel:
   automatic = `Automatic swing TP distance` x the last closed 15M ATR (default 3.0), because
   there is no fixed dollar distance that fits BTC, LTC, EURUSD and USDJPY at once.
 
+## v1.07: data bridge to Telegram + counter-trend WATCH (crypto and forex; metals next)
+
+* **Data bridge.** The indicator writes `Files\Common\NRTR_BRIDGE\<SYMBOL>.json`: the last 18
+  closed M5 and M15 candles plus the forming candle (RAW), NRTR / ATR / EMA200 per candle
+  (INDICATORS), HH/HL or LH/LL (STRUCTURE), and, **kept separate**, the MT5 CONCLUSION (boss,
+  timing, CLICK / WAIT / NO TRADE, the signal's entry / SL / TP1 / TP2, NY, 5-question plan). A
+  small script, [bridge/nrtr_telegram_sender.py](bridge/README.md), posts it to **your** Telegram
+  chat when the conclusion changes. MT5 itself sends nothing (indicators cannot use the internet),
+  and nothing places an order. Setup: [bridge/README.md](bridge/README.md).
+* **COUNTER-TREND WATCH** (a strip of two rows on top of the bottom-middle table): when the 15M
+  boss is in full SELL MODE and the 5M NRTR flips up on a closed candle, it records a **BUY WATCH**
+  with a ref entry (that close), a ref SL (the 5M NRTR stop + buffer) and a ref TP1 (1R). The
+  mirror is a SELL WATCH in BUY MODE. It is **never a signal**: no CLICK, no alert, no READY.
+  Counter-trend entries are the #1 documented loss driver, so it is counted instead (n, TP1, SL,
+  expired, net R) until n >= 20 / ~100 can say whether those pull-ups pay.
+* Inputs: `InpBridgeOn` (true), `InpBridgeCandles` (18), `InpBridgeEverySec` (10), `InpPwShow` (true).
+
 ## Why a separate NY module
 
 Outside the NY open, price mostly *flows*: the 15M structure is respected and the 5M
@@ -391,3 +532,101 @@ Crypto trades through the weekend, so the freshness gate rarely trips there; for
   anything.**
 
 Tests and exact results: see [TESTING.md](TESTING.md).
+
+---
+
+# 3. v1.05 / v1.06: the FIVE-QUESTION PLAN table (all three files)
+
+**Gold / silver panel (v1.05 of `NRTR_BOSS_LearningPanel.mq5`) has the same table** at the bottom
+middle. The code is the same text in all three files, and a test proves it. It works with pending
+orders (READY = a BUY LIMIT / SELL LIMIT at the level) and scalps on 5M timing with the 15M as the
+map. **Silver** gets a wider stop (SL buffer x 2.0) and a stronger confirmation (the close must pass by
++0.25 x 5M ATR), because silver false-breaks more. Both numbers are inputs and are shown on the
+table. Asia / London levels appear only when the broker clock and your PC clock agree on a
+half-hour offset.
+
+**v1.06 (after the first MT5 screenshot):** MT5 cuts object text at 63 characters, so every label
+now fits (tested). The table's chart markers are drawn behind the candles, so they never cover the
+panels. The history row shows **NET R**. Read that row: on the first BTC screenshot it said
+`TP1 8 / SL 36`, which means **no edge there, do not trade it** until a new count says otherwise.
+
+
+A **new table at the bottom middle of the chart**. The main panel on the left is unchanged: a
+test builds the v1.04 file from git and requires every one of its objects to be identical.
+The table asks five questions on every **closed** 5M candle, using the 15M chart as the map:
+
+| # | Question | YES means |
+|---|---|---|
+| 1 | **TREND** | 15M confirmed structure is HH + HL (BUY side only) or LH + LL (SELL side only). Mixed = NO TRADE. |
+| 2 | **LOCATION** | price is at a mapped level: previous day high / low, Asia high / low, London high / low, or one of the last confirmed 15M swings. Not in the middle. |
+| 3 | **LIQUIDITY** | the level was **swept** (pierced, then back) or **broken by a 5M close** (breakout / breakdown). |
+| 4 | **CONFIRMATION** | after a sweep, a 5M candle **closes** beyond the sweep candle's high (low) with its body. A breakout close counts as its own confirmation. |
+| 5 | **REWARD** | the next mapped level is at least **1.5R** away. |
+
+All five YES = **READY**, and the table prints what to type:
+
+```
+ BTC  -  15M BULLISH                         5-QUESTION PLAN  -  15M MAP + 5M TIMING  -  PENDING ORDERS
+ [            READY  -  BUY LIMIT 63120.00            ]
+  1  TREND          YES  HL -> HH  = BUY SIDE ONLY           ORDER    BUY LIMIT 63120.00
+  2  LOCATION       YES  AT SUPPORT 63120.00 (ASIA L)        SL       63040.00   below sweep low
+  3  LIQUIDITY      YES  SWEPT TO 63050.00, BACK ABOVE       TP1      63580.00   PDH
+  4  CONFIRMATION   YES  5M CLOSED ABOVE 63210.00            TP2      63900.00   SWING H
+  5  REWARD         YES  TP1 = 2.10R   (NEED 1.5R)           R:R      1 : 2.10    /    1 : 3.05
+                                                             LOTS 1.0%  0.05   (risks 98.00 USD)
+                                                             VALID    not filled by 17:35 = cancel it
+ NEXT: type BUY LIMIT 63120.00  SL 63040.00  TP 63580.00  -  not filled in time = cancel, no chasing.
+ SUPPORT 63120.00 (ASIA L)  0.4 ATR below     |     RESISTANCE 63580.00 (PDH)  1.1 ATR above
+ 15M MAP   PDH 63580.00  PDL 62900.00   |   ASIA H 63400.00  L 63120.00   |   LONDON H 63510.00  L 63210.00
+ LAST PLAN: BUY SWEEP @ 14:35   limit 63120.00  -  HIT TP1
+ HISTORY (10 days): 7 plans  -  TP1 3 / SL 2 / not filled 2 / open 0     n<20 = luck, ~100 to judge
+ MAIN PANEL (NRTR rules): WAIT - 5M AGAINST 15M
+```
+
+(The numbers above show the layout. They are not a real signal.)
+
+Other banners: **SETTING UP** (swept, waiting for the confirmation close; the NEXT line names
+the exact price), **WATCH** (trend yes, but price is in the middle, at support with no sweep yet,
+or at the breakout line), **SKIP** (confirmed but only 0.9R to TP1, no stop structure, or no
+target mapped), **FILLED** (the limit was touched; SL / TP running), **NO TRADE** (no 15M
+structure, or **stale data**: when the DATA CLOCK says STALE the table is NO TRADE and the plan
+lines leave the chart).
+
+**On the chart (drawn in advance):** the nearest **RESISTANCE** (red) and **SUPPORT** (green) as
+thick lines with a shaded zone that runs 6 hours past the last candle, labelled with their name
+(`RESISTANCE 64200.00 (PREV DAY HIGH)`) and what they mean right now, in words:
+
+| 15M trend | Resistance says | Support says |
+|---|---|---|
+| bullish | `5M close ABOVE = BREAKOUT -> possible BUY on the retest` | `sweep below + 5M close back ABOVE = possible BUY` (hover: a real BREAKDOWN = against the trend, no trade) |
+| bearish | `sweep above + 5M close back BELOW = possible SELL` (hover: a real BREAKOUT = against the trend, no trade) | `5M close BELOW = BREAKDOWN -> possible SELL on the retest` |
+| unclear | `15M unclear: breakout or rejection - just watch` | `15M unclear: breakdown or bounce - just watch` |
+
+Plus a dashed **MIDDLE - NO ENTRY HERE** line, thin dotted lines for the other mapped levels,
+a **BREAKOUT / BREAKDOWN** tag on the candle that closed through a level (*with 15M* or
+*against 15M - no trade*), a **SWEEP** tag while a sweep waits for confirmation, the live
+plan's LIMIT / SL / TP1 / TP2 lines, and a `PLAN BUY (SWEEP)` marker for every plan in the
+loaded history (hover it: levels and what happened).
+
+"In advance" means the **levels and the pending order** exist before price comes back. It
+does not mean the file guesses the direction. "Possible" is always a condition you can read.
+
+**Settings** (a new group at the bottom of the inputs):
+
+| Input | Default | |
+|---|---|---|
+| Show the 5-question table | on | |
+| Draw big support / resistance lines, zones and the plan | on | |
+| Level zone and merge width | 0.25 | x 15M ATR |
+| Sweep / breakout must be within | 12 | closed 5M bars (1 hour) |
+| Minimum reward to TP1 | 1.5 | R; less = SKIP |
+| Pending limit valid for | 12 | closed 5M bars; then EXPIRED |
+| Asia range | 0 - 7 | UTC hours |
+| London range | 7 - 12 | UTC hours |
+| Table distance from the chart bottom | 16 | px |
+
+**Honest limits:** it is a hypothesis, not a validated edge, so count the plans (n<20 is luck).
+Spread is ignored when judging fills. Asia / London need the AUTO session clock and are not
+shown with MANUAL / UNKNOWN. FVG, order blocks, breakers, PO3 and QML are not in it. Every
+change and every test is listed in [CHANGELOG.md](CHANGELOG.md).
+

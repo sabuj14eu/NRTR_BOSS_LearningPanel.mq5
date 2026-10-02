@@ -21,7 +21,7 @@ struct MqlRates
    long long real_volume;
 };
 
-enum ENUM_TIMEFRAMES { PERIOD_CURRENT = 0, PERIOD_M1 = 1, PERIOD_M5 = 5, PERIOD_M15 = 15, PERIOD_H1 = 16385 };
+enum ENUM_TIMEFRAMES { PERIOD_CURRENT = 0, PERIOD_M1 = 1, PERIOD_M5 = 5, PERIOD_M15 = 15, PERIOD_H1 = 16385, PERIOD_H4 = 16388 };
 inline int PeriodSeconds(ENUM_TIMEFRAMES tf)
 {
    switch(tf)
@@ -30,6 +30,7 @@ inline int PeriodSeconds(ENUM_TIMEFRAMES tf)
       case PERIOD_M5: return 300;
       case PERIOD_M15: return 900;
       case PERIOD_H1: return 3600;
+      case PERIOD_H4: return 14400;
       default: return 900;
    }
 }
@@ -40,18 +41,19 @@ enum { PLOT_EMPTY_VALUE = 1, PLOT_DRAW_TYPE = 2, PLOT_ARROW = 3, PLOT_ARROW_SHIF
 enum { DRAW_NONE = 0, DRAW_LINE = 1, DRAW_COLOR_LINE = 2, DRAW_ARROW = 3, DRAW_COLOR_ARROW = 4 };
 enum { INDICATOR_SHORTNAME = 1, INDICATOR_DIGITS = 2 };
 enum { SYMBOL_TIME = 99, SYMBOL_DIGITS = 1, SYMBOL_TRADE_TICK_SIZE, SYMBOL_POINT, SYMBOL_TRADE_TICK_VALUE, SYMBOL_VOLUME_MIN, SYMBOL_VOLUME_STEP, SYMBOL_VOLUME_MAX,
-       SYMBOL_BID, SYMBOL_CURRENCY_BASE, SYMBOL_CURRENCY_PROFIT };
+       SYMBOL_BID, SYMBOL_CURRENCY_BASE, SYMBOL_CURRENCY_PROFIT, SYMBOL_ASK, SYMBOL_TRADE_CONTRACT_SIZE, SYMBOL_SPREAD,
+       SYMBOL_TRADE_TICK_VALUE_LOSS };
 enum { ACCOUNT_CURRENCY = 1 };
 enum { ACCOUNT_BALANCE = 1, ACCOUNT_EQUITY = 2 };
-enum { POSITION_SYMBOL = 1, POSITION_TYPE, POSITION_VOLUME, POSITION_TIME };
+enum { POSITION_SYMBOL = 1, POSITION_TYPE, POSITION_VOLUME, POSITION_TIME, POSITION_PRICE_OPEN, POSITION_SL, POSITION_TP };
 enum { POSITION_TYPE_BUY = 0, POSITION_TYPE_SELL = 1 };
-enum { OBJ_LABEL = 1, OBJ_RECTANGLE_LABEL, OBJ_TEXT, OBJ_TREND };
+enum { OBJ_LABEL = 1, OBJ_RECTANGLE_LABEL, OBJ_TEXT, OBJ_TREND, OBJ_RECTANGLE };
 enum { OBJPROP_CORNER = 1, OBJPROP_XDISTANCE, OBJPROP_YDISTANCE, OBJPROP_XSIZE, OBJPROP_YSIZE, OBJPROP_BGCOLOR,
        OBJPROP_BORDER_TYPE, OBJPROP_COLOR, OBJPROP_WIDTH, OBJPROP_BACK, OBJPROP_SELECTABLE, OBJPROP_HIDDEN,
        OBJPROP_ZORDER, OBJPROP_ANCHOR, OBJPROP_TEXT, OBJPROP_FONT, OBJPROP_FONTSIZE, OBJPROP_TIME, OBJPROP_PRICE,
-       OBJPROP_TOOLTIP, OBJPROP_STYLE, OBJPROP_RAY_RIGHT };
+       OBJPROP_TOOLTIP, OBJPROP_STYLE, OBJPROP_RAY_RIGHT, OBJPROP_FILL };
 enum { CORNER_LEFT_UPPER = 0 };
-enum { ANCHOR_LEFT_UPPER = 0, ANCHOR_LEFT_LOWER, ANCHOR_CENTER, ANCHOR_UPPER, ANCHOR_LOWER };
+enum { ANCHOR_LEFT_UPPER = 0, ANCHOR_LEFT_LOWER, ANCHOR_CENTER, ANCHOR_UPPER, ANCHOR_LOWER, ANCHOR_RIGHT_LOWER, ANCHOR_RIGHT_UPPER };
 enum { BORDER_FLAT = 0 };
 enum { STYLE_SOLID = 0, STYLE_DASH, STYLE_DOT, STYLE_DASHDOT };
 enum { TIME_DATE = 1, TIME_MINUTES = 2, TIME_SECONDS = 4 };
@@ -72,16 +74,25 @@ struct SimPos
    int type;
    double vol;
    datetime time;
+   double price = 0.0, sl = 0.0, tp = 0.0;   // open price, stop loss, take profit
 };
+// v1.11 US100: MT5's economic calendar (the tester has none: calOk = false = unavailable)
+struct SimCal { datetime time; int importance; std::string name; std::string country; std::string currency; };
 struct SimState
 {
    std::string sym = "XAUUSD", base = "XAU", profit = "USD";
    int digits = 2;
-   double tick = 0.01, tickValue = 1.0, volMin = 0.01, volStep = 0.01, volMax = 100.0, bid = 0.0;
+   double tick = 0.01, tickValue = 1.0, volMin = 0.01, volStep = 0.01, volMax = 100.0, bid = 0.0, ask = 0.0, contract = 100.0;
    double balance = 10000.0, equity = 10000.0;
    std::vector<MqlRates> m1, m5, m15;   // full history, may extend past `now`
+   std::vector<MqlRates> m60, m240;     // v1.09: 1H / 4H (empty = MT5 has none: the indicator must say so, never substitute)
+   bool askMissing = false;             // v1.09: MT5 gives no ask (SYMBOL_ASK = 0)
+   long long spreadPts = 25;            // SYMBOL_SPREAD in points
+   double tickValueLoss = 0.0;          // v1.10: 0 = MT5 gives none (the profit tick value is used)
+   bool moveFail = false;               // v1.09: FileMove fails (the old .json must survive whole)
    datetime now = 0;
    long long gmtOff = 3 * 3600;   // server clock ahead of GMT (EEST); TimeGMT() = now - gmtOff
+   long long localOff = 2 * 3600; // the PC's clock ahead of GMT (Poland, CEST); TimeLocal()
    datetime tickTime = 0;   // 0 = auto: ticks flow while history flows, stop when it stops
    bool copyFail = false;
    std::vector<SimPos> pos;
@@ -91,14 +102,63 @@ struct SimState
    std::vector<std::string> log;
    std::vector<std::string> alerts;
    std::vector<std::string> sounds;
+   int chartW = 1400, chartH = 900;   // chart size in pixels
+   long long seq = 0;                           // object creation counter
+   std::map<std::string, long long> seqOf;      // name -> creation order (MT5 draws later objects on top)
+   // v1.07 data bridge: files the indicator writes (WRITE ONLY; there is no read API here)
+   std::map<std::string, std::string> files;    // name -> content
+   std::map<std::string, int> fileFlags;        // name -> FileOpen flags
+   std::map<int, std::string> openFiles;        // handle -> name
+   int nextHandle = 1;
+   bool fileFail = false;                       // FileOpen refuses (disk full, no rights)
+   int fileWrites = 0;                          // successful FileMove count
+   bool calOk = false;                          // v1.11: CalendarValueHistory succeeds
+   std::vector<SimCal> cal;                     // v1.11: calendar entries (server time)
+   int calCalls = 0;                            // v1.11: how often the calendar was read
 };
 static SimState SIM;
 static std::string _Symbol = "XAUUSD";
 static ENUM_TIMEFRAMES _Period = PERIOD_M15;
 
+enum { FILE_READ = 1, FILE_WRITE = 2, FILE_BIN = 4, FILE_CSV = 8, FILE_TXT = 16, FILE_ANSI = 32, FILE_UNICODE = 64,
+       FILE_REWRITE = 512, FILE_COMMON = 4096 };
+const int INVALID_HANDLE = -1;
+inline int FileOpen(const string &name, int flags, short delim = 0)
+{
+   (void)delim;
+   if(SIM.fileFail || !(flags & FILE_WRITE) || (flags & FILE_READ)) return INVALID_HANDLE;
+   int h = SIM.nextHandle++;
+   SIM.openFiles[h] = name;
+   SIM.files[name] = "";
+   SIM.fileFlags[name] = flags;
+   return h;
+}
+inline uint FileWriteString(int h, const string &txt, int len = -1)
+{
+   (void)len;
+   if(!SIM.openFiles.count(h)) return 0;
+   SIM.files[SIM.openFiles[h]] += txt;
+   return (uint)txt.size();
+}
+inline void FileClose(int h) { SIM.openFiles.erase(h); }
+inline bool FileMove(const string &src, int cf, const string &dst, int mode)
+{
+   if(SIM.moveFail || !SIM.files.count(src)) return false;
+   if(SIM.files.count(dst) && !(mode & FILE_REWRITE)) return false;
+   if(((cf & FILE_COMMON) != 0) != ((mode & FILE_COMMON) != 0)) return false;
+   SIM.files[dst] = SIM.files[src];
+   SIM.fileFlags[dst] = SIM.fileFlags[src];
+   SIM.files.erase(src);
+   SIM.fileFlags.erase(src);
+   SIM.fileWrites++;
+   return true;
+}
+
 inline const std::vector<MqlRates> &simSeries(ENUM_TIMEFRAMES tf)
 {
    if(tf == PERIOD_M1) return SIM.m1;
+   if(tf == PERIOD_H1) return SIM.m60;
+   if(tf == PERIOD_H4) return SIM.m240;
    return tf == PERIOD_M5 ? SIM.m5 : SIM.m15;
 }
 // bars that exist at SIM.now: the last one is the forming bar (series index 0)
@@ -156,6 +216,7 @@ inline long long SymbolInfoInteger(const string &, int prop)
 {
    if(prop == SYMBOL_DIGITS) return SIM.digits;
    if(prop == SYMBOL_TIME) return simTick();
+   if(prop == SYMBOL_SPREAD) return SIM.spreadPts;
    return 0;
 }
 inline double SymbolInfoDouble(const string &, int prop)
@@ -165,10 +226,13 @@ inline double SymbolInfoDouble(const string &, int prop)
       case SYMBOL_TRADE_TICK_SIZE: return SIM.tick;
       case SYMBOL_POINT: return SIM.tick;
       case SYMBOL_TRADE_TICK_VALUE: return SIM.tickValue;
+      case SYMBOL_TRADE_TICK_VALUE_LOSS: return SIM.tickValueLoss;
       case SYMBOL_VOLUME_MIN: return SIM.volMin;
       case SYMBOL_VOLUME_STEP: return SIM.volStep;
       case SYMBOL_VOLUME_MAX: return SIM.volMax;
       case SYMBOL_BID: return SIM.bid;
+      case SYMBOL_ASK: return SIM.askMissing ? 0.0 : (SIM.ask > 0.0 ? SIM.ask : SIM.bid);
+      case SYMBOL_TRADE_CONTRACT_SIZE: return SIM.contract;
    }
    return 0.0;
 }
@@ -183,6 +247,7 @@ inline double AccountInfoDouble(int prop) { return prop == ACCOUNT_BALANCE ? SIM
 inline datetime TimeTradeServer() { return SIM.now; }
 inline datetime TimeCurrent() { return simTick(); }
 inline datetime TimeGMT() { return SIM.now - SIM.gmtOff; }
+inline datetime TimeLocal() { return SIM.now - SIM.gmtOff + SIM.localOff; }   // the PC's clock
 inline string TimeToString(datetime t, int flags)
 {
    time_t tt = (time_t)t;
@@ -213,7 +278,16 @@ inline long long PositionGetInteger(int prop)
    if(prop == POSITION_TIME) return p.time;
    return 0;
 }
-inline double PositionGetDouble(int prop) { return (SIM.selected >= 0 && prop == POSITION_VOLUME) ? SIM.pos[(size_t)SIM.selected].vol : 0.0; }
+inline double PositionGetDouble(int prop)
+{
+   if(SIM.selected < 0) return 0.0;
+   const SimPos &p = SIM.pos[(size_t)SIM.selected];
+   if(prop == POSITION_VOLUME) return p.vol;
+   if(prop == POSITION_PRICE_OPEN) return p.price;
+   if(prop == POSITION_SL) return p.sl;
+   if(prop == POSITION_TP) return p.tp;
+   return 0.0;
+}
 
 inline int ObjectFind(long, const string &name) { return SIM.objs.count(name) ? 0 : -1; }
 inline bool ObjectCreate(long, const string &name, int type, int, datetime t1, double p1, datetime t2 = 0, double p2 = 0)
@@ -221,6 +295,7 @@ inline bool ObjectCreate(long, const string &name, int type, int, datetime t1, d
    (void)t2; (void)p2;
    SimObj o;
    o.type = type;
+   SIM.seqOf[name] = ++SIM.seq;
    o.i[OBJPROP_TIME] = t1;
    o.d[OBJPROP_PRICE] = p1;
    SIM.objs[name] = o;
@@ -241,7 +316,7 @@ inline int ObjectsDeleteAll(long, const string &prefix, int = -1, int = -1)
    return n;
 }
 inline void ChartRedraw(long = 0) {}
-inline long long ChartGetInteger(long, int prop, int = 0) { return prop == CHART_WIDTH_IN_PIXELS ? 1400 : 900; }
+inline long long ChartGetInteger(long, int prop, int = 0) { return prop == CHART_WIDTH_IN_PIXELS ? SIM.chartW : SIM.chartH; }
 inline bool SetIndexBuffer(int idx, std::vector<double> &b, int) { SIM.bufs[idx] = &b; return true; }
 inline bool PlotIndexSetDouble(int, int, double) { return true; }
 inline bool PlotIndexSetInteger(int, int, int) { return true; }
@@ -252,3 +327,30 @@ inline void EventKillTimer() {}
 inline void Print(const string &s) { SIM.log.push_back(s); }
 inline void Alert(const string &s) { SIM.alerts.push_back(s); }
 inline bool PlaySound(const string &s) { SIM.sounds.push_back(s); return true; }
+
+// v1.11 US100: the economic calendar, READ ONLY (same shape as MQL5)
+enum ENUM_CALENDAR_EVENT_IMPORTANCE { CALENDAR_IMPORTANCE_NONE = 0, CALENDAR_IMPORTANCE_LOW = 1, CALENDAR_IMPORTANCE_MODERATE = 2,
+                                      CALENDAR_IMPORTANCE_HIGH = 3 };
+struct MqlCalendarValue { ulong id; ulong event_id; datetime time; };
+struct MqlCalendarEvent { ulong id; int importance; string name; };
+inline bool CalendarValueHistory(std::vector<MqlCalendarValue> &v, datetime from, datetime to, const string &country, const string &ccy)
+{
+   SIM.calCalls++;
+   v.clear();
+   if(!SIM.calOk) return false;
+   for(size_t k = 0; k < SIM.cal.size(); k++)
+   {
+      const SimCal &c = SIM.cal[k];
+      if(c.time < from || c.time > to || c.country != country || c.currency != ccy) continue;
+      v.push_back({(ulong)(k + 1), (ulong)(k + 1), c.time});
+   }
+   return true;
+}
+inline bool CalendarEventById(ulong id, MqlCalendarEvent &e)
+{
+   if(id < 1 || id > SIM.cal.size()) return false;
+   e.id = id;
+   e.importance = SIM.cal[(size_t)(id - 1)].importance;
+   e.name = SIM.cal[(size_t)(id - 1)].name;
+   return true;
+}
