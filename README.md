@@ -1,4 +1,4 @@
-# NRTR QML Metal Scalper (MT5, Gold & Silver)
+# NRTR QML Metal Scalper (MT5, Gold & Silver) + the Crypto twin (BTC, ETH, LTC, altcoins)
 
 One standalone Expert Advisor, `NRTR_QML_MetalScalper.mq5`, for **XAUUSD / Gold** and
 **XAGUSD / Silver** only. Nothing else. No Telegram, no DLLs. The only network use is two
@@ -23,6 +23,30 @@ Decisions on **CLOSED candles only**, never repainted. Tests and exact results a
 [TESTING.md](TESTING.md).
 
 ---
+
+## The CRYPTO twin: `NRTR_QML_CryptoScalper.mq5` (BTC / ETH / LTC / altcoins)
+
+The same bot for crypto. It is **derived mechanically** from the metal EA by
+`tools/derive_crypto_ea.py` (the test runner proves the committed file IS that derivation
+and that the engine block is byte-identical apart from the asset detector), so every rule
+below - the pipeline, the six setups, one slot per asset, the risk gate, the journal, the
+panel, the verdict - is the same text. Only the asset side differs:
+
+| | Metal EA | Crypto EA |
+|---|---|---|
+| Symbols | XAUUSD / XAGUSD | **BTC** (BTCUSD, XBTUSD), **ETH**, **LTC**, any **altcoin** quoted in USD / USDT / USDC / BUSD; any prefix/suffix. A coin AUTO does not know: `InpCoinClass = ALT` |
+| Specialist profile | - | per class, shown on the panel (`COIN PROFILE` row): BTC risk x1.0 / SL buffers x1.0 / spread cap 0.15 ATR; ETH buffers x1.25, cap 0.20; LTC risk x0.75, buffers x1.5, min impulse x1.25, cap 0.25; ALT risk x0.5, buffers x1.5, impulse x1.25, cap 0.30, **radar (breakout STOP) plans off**. Multipliers only ever reduce risk and widen buffers. `InpSpecialist = false` = raw inputs |
+| Spread cap | 50 points | **x ATR(M5)** (`InpMaxSpreadAtr`, 0 = the class value); a BTC spread is hundreds of points and an altcoin's a handful, so a point cap means nothing here. `InpMaxSpreadPoints > 0` overrides |
+| Macro filter (radar only) | DXY, blocks when it points the **same** way | **BTC-lead filter**: the alts follow BTC, so a break that BTC's M15 NRTR points **against** is blocked. The lead is found automatically: this symbol's spelling with BTC in place of the coin (`#ETHUSD.m` -> `#BTCUSD.m`); none for BTC itself; `InpMacroSymbol = "-"` = off; `InpMacroInverse = true` for a DXY-like lead |
+| Sessions | metals break at the rollover | **24/7**: the session clock only shapes the levels (Asia / London / NY, previous day, VWAP), it never stops the bot. The NY trap still uses the NY open on the server clock |
+| Magic | 180915 | 180916 |
+| Journal | `system: NQ-EA` | the same keys plus `engine: NQ-CRYPTO` and `coin: BTC/ETH/LTC/ALT` (append-only) |
+| Telemetry | METAL ANALYSIS page | off by default; sends `asset_class: crypto` + `coin` to a crypto telemetry URL (a CRYPTO ANALYSIS page is a platform follow-up) |
+
+One chart per coin, one EA per chart; the metal and crypto EAs never see each other's orders
+(magic + symbol). Everything else in this README applies to both files. It replaces the
+old crypto learning-panel indicator (`NRTR_BOSS_Crypto_NYTrap.mq5`, which lived on another
+branch): remove that indicator from your charts.
 
 ## Install
 

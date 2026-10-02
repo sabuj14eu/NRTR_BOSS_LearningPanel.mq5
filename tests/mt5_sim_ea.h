@@ -170,7 +170,8 @@ struct SimState
    double contract = 100.0, leverage = 100.0;
    double bid = 0.0;
    std::vector<MqlRates> m1, m5, m15;   // full history, may extend past `now`
-   std::vector<MqlRates> macro15;       // optional M15 series of a second symbol (macro filter)
+   std::vector<MqlRates> macro15;       // optional M15 series of a second symbol (macro / lead filter)
+   std::string macroSym;                // its name ("" = any second symbol answers); SymbolSelect sees it only when macro15 is loaded
    datetime now = 0;
    bool copyFail = false;
    int accountMode = ACCOUNT_TRADE_MODE_DEMO;
@@ -216,6 +217,8 @@ inline int simVisible(ENUM_TIMEFRAMES tf)
    return k;
 }
 inline bool simIsMacro(const string &sym) { return sym != SIM.sym && sym != _Symbol; }
+// Market Watch: this symbol always; a second symbol only while a macro series is loaded (and named, if a name was given)
+inline bool SymbolSelect(const string &sym, bool) { return !simIsMacro(sym) || (!SIM.macro15.empty() && (SIM.macroSym.empty() || SIM.macroSym == sym)); }
 inline int simVisibleMacro()
 {
    int k = 0;
