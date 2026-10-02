@@ -37,7 +37,8 @@ panel, the verdict - is the same text. Only the asset side differs:
 | Symbols | XAUUSD / XAGUSD | **BTC** (BTCUSD, XBTUSD), **ETH**, **LTC**, any **altcoin** quoted in USD / USDT / USDC / BUSD; any prefix/suffix. A coin AUTO does not know: `InpCoinClass = ALT` |
 | Specialist profile | - | per class, shown on the panel (`COIN PROFILE` row): BTC risk x1.0 / SL buffers x1.0 / spread cap 0.15 ATR; ETH buffers x1.25, cap 0.20; LTC risk x0.75, buffers x1.5, min impulse x1.25, cap 0.25; ALT risk x0.5, buffers x1.5, impulse x1.25, cap 0.30, **radar (breakout STOP) plans off**. Multipliers only ever reduce risk and widen buffers. `InpSpecialist = false` = raw inputs |
 | Spread cap | 50 points | **x ATR(M5)** (`InpMaxSpreadAtr`, 0 = the class value); a BTC spread is hundreds of points and an altcoin's a handful, so a point cap means nothing here. `InpMaxSpreadPoints > 0` overrides |
-| Macro filter (radar only) | DXY, blocks when it points the **same** way | **BTC-lead filter**: the alts follow BTC, so a break that BTC's M15 NRTR points **against** is blocked. The lead is found automatically: this symbol's spelling with BTC in place of the coin (`#ETHUSD.m` -> `#BTCUSD.m`); none for BTC itself; `InpMacroSymbol = "-"` = off; `InpMacroInverse = true` for a DXY-like lead |
+| Macro filter (radar only) | DXY, blocks when it points the **same** way | **BTC-lead filter, graded - not a master switch**: the alts follow BTC, so a break that BTC's M15 NRTR points **against** is blocked **unless the coin's OWN structure is A+**: radar score ≥ `InpLeadOverrideScore` (9 of 10) **and** its own M15 context **and** its own M5 regime on the side of the trade (spread, risk and the volatility regime are gated before it regardless; 11 = never override). Weak setups stay blocked. The lead is found automatically: this symbol's spelling with BTC in place of the coin (`#ETHUSD.m` -> `#BTCUSD.m`), so BTCUSD / BTCUSDm / BTCUSD.a are one class under the broker's exact name; none for BTC itself; `InpMacroSymbol = "-"` = off; `InpMacroInverse = true` for a DXY-like lead |
+| Volatility regime + spike guard | same (v1.7, common layer) | same - crypto goes from dead to wild without a session boundary, which is exactly what the regime measures |
 | Sessions | metals break at the rollover | **24/7**: the session clock only shapes the levels (Asia / London / NY, previous day, VWAP), it never stops the bot. The NY trap still uses the NY open on the server clock |
 | Magic | 180915 | 180916 |
 | Journal | `system: NQ-EA` | the same keys plus `engine: NQ-CRYPTO` and `coin: BTC/ETH/LTC/ALT` (append-only) |
@@ -269,6 +270,7 @@ The banner is one line that says **what to do now**, recomputed every second, in
 |---|---|
 | a position of this EA is open and the M5 regime is with it (or CHOP) | `HOLD BUY #ticket (QML) - M5 regime intact  P/L ...  SL ...  TP ...` |
 | a position is open and the M5 regime has flipped against it | `EXIT BUY #ticket - M5 REGIME FLIPPED BEARISH  (you decide)` (or `bot closes at the next M1 close` when `InpScalpCloseOnFlip` / `InpPlanCloseOnFlip` applies) |
+| a position is open in the direction of a **spike** that has given back `InpSpikeRetrace` (50 %) of itself | **`EXIT WARNING BUY #ticket - SPIKE REVERSAL: the 15.2 ATR up-spike (3.1x a normal hour) gave back 60% (news?)  - you decide`**, flashing orange / white every second, with a flashing `EXIT WARNING - SPIKE REVERSAL` label on the chart. Nothing is closed by this |
 | a waiting order or armed plan is within `InpNearAtr` (0.5 ATR) of the price | `● PRICE NEAR  QML BUY LIMIT 60.709  SL ...  TP ...  (0.30 ATR)  order waiting` |
 | the M1 trigger fired on the candle that just closed | `SCALP BUY NOW  entry ... SL ... TP ...` |
 | orders are waiting but far | `WAIT - 2 order(s) waiting, nearest PULLBACK BUY LIMIT ... 4.5 ATR away` |
@@ -343,6 +345,36 @@ M5 `HH HL LH LL` labels, `▲ S` / `▼ S` scalp markers (hover for levels and o
 level lines of the active scalp, the latest QML (orange), pullback (blue) and NY trap
 (purple) plans. Anything else on the chart comes from another indicator or template.
 
+## Volatility regime + spike guard (news days - v1.7, both EAs)
+
+On an NFP day the metal (or the coin) jumps, comes back, and the "pullback buy" that follows
+is not a pullback - it is the other side of a spike (silver 62 → 59.80 on 2026-10-02). Two
+measurements in the common terminal layer (the engine is untouched) deal with it; both gate
+**new entries only** - closing is never blocked, and nothing is closed by them.
+
+**Volatility regime** - `ATR(M5)` against its own average over `InpVolAvgBars` (288 = 24 h),
+shown on the `VOL REGIME` panel row and in every journal line (`vol_regime`):
+
+| Regime | Ratio | Effect |
+|---|---|---|
+| DEAD | < 0.5 | no new trade (gate reason `VOLATILITY DEAD - NO NEW TRADE`) |
+| NORMAL | 0.5 - 1.5 | as configured |
+| EXPANSION | 1.5 - 2.5 | allowed with stronger confirmation: a radar breakout needs score ≥ `InpVolExpandRadar` (8 of 10), a scalp needs the M15 context on its side |
+| EXTREME | ≥ 2.5 | do not chase: no new trade, and after it ends the gate stays closed (`WAIT FOR FRESH STRUCTURE`) until a **confirmed M5 swing has formed after the extreme bar** |
+
+`InpVolGate = false` keeps the classification and the row but opens the gate.
+
+**Spike guard** - the last `InpSpikeBars` closed M5 bars (12 = 1 h) ranging at least
+`InpSpikeX` (2.5) times a **normal** such window (the average 12-bar range over the same
+lookback; a trending hour already spans ~4 ATR(M5), so the ATR alone would call every hour a
+spike). While the spike is in the window: no pullback plan, no scalp and no radar breakout in
+**its** direction (a waiting pullback / radar order in that direction is cancelled with the
+reason), while reversal plans against it (QML, NY trap) stay allowed. Once the close has given
+back `InpSpikeRetrace` (50 %) of it, a position in its direction gets the flashing
+**EXIT WARNING** above. The panel row reads e.g. `SPIKE UP 15.2 ATR (3.1x normal), 60% back -
+EXIT WARNING`; telemetry carries `spike_dir / spike_atr / spike_x / spike_retrace`. The EA has
+no news calendar - the spike is the evidence, the human decides.
+
 ## Risk engine (nothing here is ever widened by the EA)
 
 | Input | Default | |
@@ -378,6 +410,9 @@ Every order is printed to the **Experts** log, e.g.
 | Trade QML / pullback / NY trap / swing / radar | on | each kind can be switched off |
 | Radar stop buffer | 0.15 ATR5 | beyond the level |
 | Macro symbol / macro blocks | empty / on | e.g. USDX; empty = no macro filter |
+| Vol gate / average bars / DEAD / EXPANSION / EXTREME | on / 288 / 0.5 / 1.5 / 2.5 | ATR(M5) against its own average, see above |
+| Expansion radar score / scalp needs M15 | 8 / on | stronger confirmation during EXPANSION |
+| Spike guard / bars / x normal / retrace | on / 12 / 2.5 / 0.5 | the EXIT WARNING threshold |
 | NEAR distance | 0.5 ATR5 | |
 | Asia start / end, London start | 01 / 10 / 10 server hours | London ends at the NY open |
 | Draw levels | on | session highs/lows, previous day, S/R swings, VWAP, confirmed break marks |
@@ -438,6 +473,7 @@ What a snapshot carries, every field the EA's own observed state and labelled as
 | section | fields |
 |---|---|
 | identity | `system: NQ-EA`, `kind: telemetry`, `mode: ANALYSIS_ONLY`, `label`, `source`, `ea_version`, `symbol`, `metal`, `account_mode` (demo / real), `magic` |
+| regime | `vol_regime`, `vol_ratio`, `spike_dir`, `spike_atr`, `spike_x`, `spike_retrace` (v1.7) |
 | clocks | `ts_server` (broker clock), `ts_gmt` (the PC's GMT clock), `server_offset_sec` - two witnesses, so the platform can measure skew instead of assuming an offset; bar stamps stay in **server time, never converted** |
 | `candles` | state (`CLOSED FRESH` / `STALE` / `UNKNOWN`), closed M1 / M5 / M15 server stamps **with their ages in seconds on the EA's own clock**, ATR1 / ATR5 / ATR15, bid, ask, spread |
 | `m15` | context (`BULLISH` / `BEARISH` / `NEUTRAL`), NRTR direction and level, EMA200, close, closed stamp |

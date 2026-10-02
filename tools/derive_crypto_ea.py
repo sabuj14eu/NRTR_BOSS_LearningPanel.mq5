@@ -6,9 +6,10 @@ detector swapped for a coin-class detector (BTC / ETH / LTC / ALT), (2) a
 per-class specialist profile (risk multiplier <= 1, SL-buffer and min-impulse
 multipliers >= 1, a spread cap in ATR, radar on/off), (3) the spread cap
 expressed as x ATR(M5) because crypto spreads are hundreds of points, and
-(4) the macro filter turned into a BTC-LEAD filter (alts follow BTC: a break
-BTC points against is blocked). Everything else - the engine, the one-slot
-rule, the risk gate, the journal, the panel - is the same text.
+(4) the macro filter turned into a graded BTC-LEAD filter (alts follow BTC:
+a break BTC points against is blocked unless the coin's OWN structure is A+).
+Everything else - the engine, the volatility regime, the spike guard, the
+one-slot rule, the risk gate, the journal, the panel - is the same text.
 
 The ENGINE block stays byte-identical apart from the detector + its defines,
 and `run_tests.sh` proves it. The committed crypto files must equal this
@@ -238,12 +239,22 @@ string NqResolveLead()
 }
 
 // radar only: the alts follow BTC, so a break the lead's M15 NRTR points AGAINST
-// is blocked; an INVERSE lead (DXY-like) blocks when it points the SAME way
-bool NqLeadBlocks(int planDir)
+// is blocked (an INVERSE lead, DXY-like, blocks when it points the SAME way).
+// NOT a master switch: a coin's OWN A+ structure overrides it - the radar score
+// at least InpLeadOverrideScore AND its own M15 context AND its own M5 regime on
+// the side of the trade. Weak setups stay blocked. The gate (spread, risk, the
+// volatility regime) is applied before any order regardless.
+bool NqLeadBlocks(int planDir, int score)
 {
    if(!InpMacroBlocks || g_macroDir == 0 || planDir == 0)
       return false;
-   return InpMacroInverse ? (g_macroDir == planDir) : (g_macroDir == -planDir);
+   bool against = InpMacroInverse ? (g_macroDir == planDir) : (g_macroDir == -planDir);
+   if(!against)
+      return false;
+   if(InpLeadOverrideScore <= 10 && score >= InpLeadOverrideScore && g_s15.n > 0 && g_s5.n > 0 &&
+      g_s15.ctx[g_s15.n - 1] == planDir && g_s5.regime[g_s5.n - 1] == planDir)
+      return false;
+   return true;
 }
 
 // the spread cap in points: the input when set, else x ATR(M5) (a BTC spread
@@ -296,7 +307,8 @@ def derive_ea(m: str) -> str:
                r"\1"
                'input group "Coin specialist (BTC / ETH / LTC / ALT - the profile follows the class)"\n'
                "input ENUM_NQ_COIN   InpCoinClass        = NQ_COIN_AUTO_SEL; // Coin class: AUTO detects it; set ALT to trade a coin AUTO does not know\n"
-               "input bool           InpSpecialist       = true;        // Apply the class profile (risk x, SL buffers x, min impulse x, radar on/off); false = raw inputs\n")
+               "input bool           InpSpecialist       = true;        // Apply the class profile (risk x, SL buffers x, min impulse x, radar on/off); false = raw inputs\n"
+               "input int            InpLeadOverrideScore = 9;         // Lead against: the coin's OWN A+ structure overrides it at this radar score (M15 context + M5 regime must agree); 11 = never\n")
     t = rep_re(t, r'input string\s+InpMacroSymbol\s+= "";\s+// Macro filter symbol \(e\.g\. USDX / DXY\); empty = off\n'
                   r'input bool\s+InpMacroBlocks\s+= true;\s+// Block a radar order when the macro symbol\'s M15 NRTR points the same way\n',
                'input string         InpMacroSymbol      = "";          // BTC-lead symbol; empty = AUTO (the broker\'s BTC symbol for ETH/LTC/ALT, none for BTC); "-" = off\n'
@@ -322,10 +334,11 @@ def derive_ea(m: str) -> str:
             "bool     g_profRadar;  // radar (breakout STOP) plans allowed for this class\n")
     t = rep(t, 'string NqJsonI(string key, long val);\n',
             'string NqJsonI(string key, long val);\n'
-            'void   NqSetProfile();\nstring NqResolveLead();\nbool   NqLeadBlocks(int planDir);\nint    NqMaxSpreadPts();\n')
+            'void   NqSetProfile();\nstring NqResolveLead();\nint    NqMaxSpreadPts();\n')
+    t = rep(t, "bool   NqMacroBlocks(int planDir, int score);\n", "bool   NqLeadBlocks(int planDir, int score);\n")
     # 8. OnInit
     t = rep(t, "InpMaxTradesPerDay < 0 || InpMaxSpreadPoints < 0 ||",
-            "InpMaxTradesPerDay < 0 || InpMaxSpreadPoints < 0 || InpMaxSpreadAtr < 0.0 ||")
+            "InpMaxTradesPerDay < 0 || InpMaxSpreadPoints < 0 || InpMaxSpreadAtr < 0.0 || InpLeadOverrideScore < 0 || InpLeadOverrideScore > 11 ||")
     t = rep(t, "   g_metal = NqMetalOf(g_sym, SymbolInfoString(g_sym, SYMBOL_CURRENCY_BASE),\n"
                "                       SymbolInfoString(g_sym, SYMBOL_CURRENCY_PROFIT));\n   NqReadSpec();\n",
             "   g_coin = NqCoinOf(g_sym, SymbolInfoString(g_sym, SYMBOL_CURRENCY_BASE),\n"
@@ -349,22 +362,26 @@ def derive_ea(m: str) -> str:
     t = rep(t, '   g_macroDir = 0;\n   if(InpMacroSymbol == "")\n      return;\n', '   g_macroDir = 0;\n   if(g_macroSym == "")\n      return;\n')
     t = rep(t, "   if(!NqLoadSym(InpMacroSymbol, PERIOD_M15, m, why))\n", "   if(!NqLoadSym(g_macroSym, PERIOD_M15, m, why))\n")
     t = rep(t, "            // macro filter (radar only): the dollar index moving with the metal's intended break is a block\n"
-               "            if(isStop && InpMacroBlocks && g_macroDir != 0 && g_macroDir == pl.dir)\n"
+               "            int rdScore = (pl.dir > 0) ? g_rdUp.score : g_rdDn.score;\n"
+               "            if(isStop && NqMacroBlocks(pl.dir, rdScore))\n"
                "            {\n"
                '               g_note = "RADAR: MACRO AGAINST (" + InpMacroSymbol + " M15 NRTR " + NqDirText(g_macroDir) + ")";\n',
-            "            // lead filter (radar only): the alts follow BTC - a break the lead points against is a block\n"
-            "            if(isStop && NqLeadBlocks(pl.dir))\n"
+            "            // lead filter (radar only): the alts follow BTC - a break the lead points against is a block,\n"
+            "            // unless the coin's OWN structure is A+ (radar score, M15 context and M5 regime all agree)\n"
+            "            int rdScore = (pl.dir > 0) ? g_rdUp.score : g_rdDn.score;\n"
+            "            if(isStop && NqLeadBlocks(pl.dir, rdScore))\n"
             "            {\n"
-            '               g_note = "RADAR: LEAD AGAINST (" + g_macroSym + " M15 NRTR " + NqDirText(g_macroDir) + ")";\n')
+            '               g_note = "RADAR: LEAD AGAINST (" + g_macroSym + " M15 NRTR " + NqDirText(g_macroDir) + ") - own structure " +\n'
+            '                        IntegerToString(rdScore) + "/10, needs " + IntegerToString(InpLeadOverrideScore) + " + M15 + M5";\n')
     t = rep(t, '      string mac = (InpMacroSymbol == "") ? "" : ("   macro " + InpMacroSymbol + " " + ((g_macroDir == 0) ? "n/a" : NqDirText(g_macroDir)));\n',
             '      string mac = (g_macroSym == "") ? "" : ("   lead " + g_macroSym + " " + ((g_macroDir == 0) ? "n/a" : NqDirText(g_macroDir)));\n')
     t = rep(t, "      return InpTradeRadar;\n", "      return InpTradeRadar && g_profRadar;   // the class profile can switch breakout stops off\n")
     # 12. journal + telemetry
     t = rep(t, '              NqJsonS("ea_version", NQ_EA_VERSION) + "," + NqJsonS("symbol", g_sym) + "," +\n'
-               '              NqJsonS("tf",',
+               '              NqJsonS("vol_regime",',
             '              NqJsonS("ea_version", NQ_EA_VERSION) + "," + NqJsonS("symbol", g_sym) + "," +\n'
             '              NqJsonS("engine", "NQ-CRYPTO") + "," + NqJsonS("coin", g_coinName) + "," +\n'
-            '              NqJsonS("tf",')
+            '              NqJsonS("vol_regime",')
     t = rep(t, '   string metal = (g_metal == NQ_METAL_GOLD) ? "GOLD" : ((g_metal == NQ_METAL_SILVER) ? "SILVER" : "NONE");\n', "")
     t = rep(t, 'NqJsonS("source", "NRTR_QML_MetalScalper")', 'NqJsonS("source", "NRTR_QML_CryptoScalper")')
     t = rep(t, 'NqJsonS("symbol", g_sym) + "," + NqJsonS("metal", metal) + "," +',
@@ -384,8 +401,8 @@ def derive_ea(m: str) -> str:
             '   if(g_coin == NQ_COIN_ETH)\n      title = "ETH  -  NRTR QML CRYPTO SCALPER";\n'
             '   if(g_coin == NQ_COIN_LTC)\n      title = "LTC  -  NRTR QML CRYPTO SCALPER";\n'
             '   if(g_coin == NQ_COIN_ALT)\n      title = "ALTCOIN  -  NRTR QML CRYPTO SCALPER";\n')
-    t = rep(t, "   int rowsTop = 7;\n", "   int rowsTop = 8;\n")
-    t = rep(t, '   NqRow("e1", kx, vx, yr, "M15 CONTEXT", ctxT, ok ? NqDirColor(ctx) : cDim, cKey, fs);\n',
+    t = rep(t, "   int rowsTop = 8;\n", "   int rowsTop = 9;\n")
+    t = rep(t, '   string volT = "---";\n',
             '   string sprT = (InpMaxSpreadPoints > 0) ? (IntegerToString(InpMaxSpreadPoints) + " pts")\n'
             '                 : (DoubleToString((InpMaxSpreadAtr > 0.0) ? InpMaxSpreadAtr : g_profSpread, 2) + " ATR");\n'
             '   string profT = g_coinName + (InpSpecialist ? "" : " (profile off)") + "   risk x" + DoubleToString(g_profRisk, 2) +\n'
@@ -393,16 +410,21 @@ def derive_ea(m: str) -> str:
             '                  ((g_macroSym == "") ? "   lead none" : ("   lead " + g_macroSym));\n'
             '   NqRow("e0", kx, vx, yr, "COIN PROFILE", profT, (g_coin == NQ_COIN_NONE) ? cDim : cMetal, cKey, fs);\n'
             '   yr += rh;\n'
-            '   NqRow("e1", kx, vx, yr, "M15 CONTEXT", ctxT, ok ? NqDirColor(ctx) : cDim, cKey, fs);\n')
+            '   string volT = "---";\n')
     # 14. version + helper functions (after NqReadAccount's spread read block: append before NqEvaluate's doc comment)
-    t = rep(t, '#define NQ_EA_VERSION "1.6.0"', '#define NQ_EA_VERSION "1.0.0"')
+    t = rep(t, '#define NQ_EA_VERSION "1.7.0"', '#define NQ_EA_VERSION "1.1.0"')
+    t = rep(t, "// macro filter (radar only). Metals: the dollar index moving the SAME way as the\n"
+               "// intended break is a block. The score is unused here; the crypto twin grades it.\n"
+               "bool NqMacroBlocks(int planDir, int score)\n{\n"
+               "   if(!InpMacroBlocks || g_macroDir == 0 || planDir == 0)\n      return false;\n"
+               "   return g_macroDir == planDir;\n}\n\n", "")
     t = rep(t, "// account view (this EA's magic, this symbol)\n", "// account view (this EA's magic, this symbol)\n")
     t = rep(t, "\nvoid NqReadAccount()\n{\n", PROFILE_FUNCS + "\nvoid NqReadAccount()\n{\n")
     # 15. renames
     t = t.replace("g_metal", "g_coin").replace("NQ_METAL_NONE", "NQ_COIN_NONE")
     # 16. comment wording
     t = rep(t, "the metal's intended break", "the coin's intended break", count=t.count("the metal's intended break"))
-    for bad in ("NQ_METAL", "NqMetalOf", "GOLD / SILVER", 'InpMacroSymbol == ""', "XAUUSD", "XAGUSD"):
+    for bad in ("NQ_METAL", "NqMetalOf", "GOLD / SILVER", 'InpMacroSymbol == ""', "XAUUSD", "XAGUSD", "NqMacroBlocks"):
         if bad in t:
             raise SystemExit(f"leftover metal token in the crypto EA: {bad}")
     return t
@@ -420,8 +442,8 @@ def derive_test(s: str) -> str:
     t = rep(t, 'find("GOLD / SILVER ONLY")', 'find("CRYPTO ONLY")')
     t = rep(t, '"\\"metal\\":\\"GOLD\\""', '"\\"coin\\":\\"BTC\\""')
     t = rep(t, '"\\"source\\":\\"NRTR_QML_MetalScalper\\""', '"\\"source\\":\\"NRTR_QML_CryptoScalper\\""')
-    t = rep(t, '"\\"ea_version\\":\\"1.6.0\\""', '"\\"ea_version\\":\\"1.0.0\\""')
-    t = rep(t, 'CHECK(rows == 7, "7 engine rows");', 'CHECK(rows == 8, "8 engine rows (COIN PROFILE + the 7 engine rows)");')
+    t = rep(t, '"\\"ea_version\\":\\"1.7.0\\""', '"\\"ea_version\\":\\"1.1.0\\""')
+    t = rep(t, 'CHECK(rows == 8, "8 engine rows (VOL REGIME + the 7 engine rows)");', 'CHECK(rows == 9, "9 engine rows (COIN PROFILE + VOL REGIME + the 7 engine rows)");')
     t = rep(t, "   SIM.tickValue = tickValue;\n", "   SIM.tickValue = tickValue;\n   SIM.contract = 1.0;   // crypto CFD: one coin per lot\n")
     # price offsets of the hand-made broker items, scaled from a $4,150 metal to a $61,500 coin
     # a crypto CFD: 1 lot = 1 coin, so a 0.01 tick is worth 0.01 (not 1.0 as on a 100 oz gold lot)
@@ -537,11 +559,11 @@ CRYPTO_CHECKS = r'''
       CHECK(g_macroDir != 0, "the lead's M15 NRTR direction is read");
       int saved = g_macroDir;
       g_macroDir = -1;
-      CHECK(NqLeadBlocks(1) && !NqLeadBlocks(-1), "lead BEARISH: an UP break is blocked, a DOWN break is not");
+      CHECK(NqLeadBlocks(1, 0) && !NqLeadBlocks(-1, 0), "lead BEARISH: a weak UP break is blocked, a DOWN break is not");
       g_macroDir = 1;
-      CHECK(!NqLeadBlocks(1) && NqLeadBlocks(-1), "lead BULLISH: a DOWN break is blocked, an UP break is not");
+      CHECK(!NqLeadBlocks(1, 0) && NqLeadBlocks(-1, 0), "lead BULLISH: a weak DOWN break is blocked, an UP break is not");
       g_macroDir = 0;
-      CHECK(!NqLeadBlocks(1) && !NqLeadBlocks(-1), "no lead reading: nothing is blocked");
+      CHECK(!NqLeadBlocks(1, 0) && !NqLeadBlocks(-1, 0), "no lead reading: nothing is blocked");
       g_macroDir = saved;
       CHECK(lbl("v_e0").find("lead #BTCUSD.m") != std::string::npos, "panel names the lead");
       OnDeinit(0);
@@ -586,6 +608,29 @@ CRYPTO_CHECKS = r'''
       OnDeinit(0);
    }
    end("C5");
+
+   begin("C6 lead override: the coin's own A+ structure (score, M15 context, M5 regime) beats a lead against; a weak one does not");
+   {
+      Market eth = makeMarket(11, 2450.0, 0.01, 1.2, (int)DAYS);
+      load(eth, "#ETHUSD.m", "ETH", 2, 0.01, 0.01);
+      SIM.macro15 = toRates(btc.m15);
+      startAt(START);
+      run(START + 1, START + 16);
+      size_t i15 = (size_t)g_s15.n - 1, i5 = (size_t)g_s5.n - 1;
+      int c15 = g_s15.ctx[i15], r5 = g_s5.regime[i5], md = g_macroDir;
+      g_macroDir = -1; g_s15.ctx[i15] = 1; g_s5.regime[i5] = NQ_REG_BULL;
+      CHECK(NqLeadBlocks(1, 8) && !NqLeadBlocks(1, 9) && !NqLeadBlocks(1, 10), "lead BEARISH: score 8 blocked, 9+ with M15 and M5 agreeing allowed");
+      g_s15.ctx[i15] = -1;
+      CHECK(NqLeadBlocks(1, 10), "own M15 context against the trade: no override however high the score");
+      g_s15.ctx[i15] = 1; g_s5.regime[i5] = NQ_REG_CHOP;
+      CHECK(NqLeadBlocks(1, 10), "own M5 regime not on side: no override");
+      g_s5.regime[i5] = NQ_REG_BULL; g_macroDir = 1;
+      CHECK(!NqLeadBlocks(1, 0), "lead agrees: nothing to override");
+      g_macroDir = md; g_s15.ctx[i15] = c15; g_s5.regime[i5] = r5;
+      OnDeinit(0);
+      SIM.macro15.clear();
+   }
+   end("C6");
 '''
 
 

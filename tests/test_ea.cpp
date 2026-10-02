@@ -527,7 +527,7 @@ int main()
          if(v.empty() || v == "<missing>") empty++;
       }
       std::printf("    %d rows\n", rows);
-      CHECK(rows == 7, "7 engine rows");
+      CHECK(rows == 8, "8 engine rows (VOL REGIME + the 7 engine rows)");
       CHECK(dup == 0, "no key twice");
       CHECK(empty == 0, "every row has a value");
       CHECK(lbl("h1").find("ENGINE") != std::string::npos && lbl("h2").find("NY TRAP  +  PENDING ORDER BOARD") != std::string::npos, "engine table + board");
@@ -799,7 +799,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.6.0\"",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.7.0\"",
                            "\"symbol\":\"XAUUSD\"", "\"metal\":\"GOLD\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
@@ -849,6 +849,111 @@ int main()
       g_telDemoOnly = true;
    }
    end("A13");
+
+   begin("A14 volatility regime: DEAD blocks new trades, EXPANSION asks more, EXTREME blocks until a fresh M5 swing; the gate names it");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      run(START + 1, START + 30);
+      CHECK(g_volClass != NQ_VOL_UNKNOWN && g_volRatio > 0.0 && g_volAvg > 0.0, "a class is assigned once the 24h average exists");
+      CHECK(lbl("k_e0v") == "VOL REGIME" && lbl("v_e0v").find("ATR5") != std::string::npos, "the VOL REGIME row shows the ratio");
+      int n5 = g_s5.n;
+      double keep = g_s5.atr[(size_t)n5 - 1];
+      double avg = 0.0;
+      for(int i = n5 - 1 - InpVolAvgBars; i < n5 - 1; i++) avg += g_s5.atr[(size_t)i];
+      avg /= InpVolAvgBars;
+      g_s5.atr[(size_t)n5 - 1] = avg * 0.3; NqVolRegime();
+      CHECK(g_volClass == NQ_VOL_DEAD && NqVolGateBits() == NQ_K_VOL_DEAD, "0.3x the average = DEAD, gate closed");
+      g_s5.atr[(size_t)n5 - 1] = avg * 1.0; NqVolRegime();
+      CHECK(g_volClass == NQ_VOL_NORMAL && NqVolGateBits() == 0, "1.0x = NORMAL, gate open");
+      g_s5.atr[(size_t)n5 - 1] = avg * 1.8; NqVolRegime();
+      CHECK(g_volClass == NQ_VOL_EXPANSION && NqVolGateBits() == 0, "1.8x = EXPANSION, gate open (stronger confirmation instead)");
+      g_s5.atr[(size_t)n5 - 1] = avg * 3.0; NqVolRegime();
+      CHECK(g_volClass == NQ_VOL_EXTREME && NqVolGateBits() == NQ_K_VOL_EXTREME && g_volWaitFresh, "3.0x = EXTREME, gate closed, waiting for fresh structure");
+      g_s5.atr[(size_t)n5 - 1] = avg * 1.0; NqVolRegime();
+      CHECK(g_volClass == NQ_VOL_NORMAL && NqVolGateBits() == NQ_K_VOL_EXTREME, "back to NORMAL with no fresh M5 swing yet: still closed");
+      CHECK(NqGateAtX(NQ_K_VOL_EXTREME, 0).find("FRESH STRUCTURE") != std::string::npos && NqGateAtX(NQ_K_SPREAD | NQ_K_VOL_DEAD, 0) == NqGateName(NQ_K_SPREAD) &&
+            NqGateAtX(NQ_K_SPREAD | NQ_K_VOL_DEAD, 1).find("DEAD") != std::string::npos && NqGateAtX(NQ_K_SPREAD | NQ_K_VOL_DEAD, 2) == "",
+            "the gate names the regime after the engine's own reasons");
+      g_s5.atr[(size_t)n5 - 1] = keep;
+      bool cleared = false;
+      int waited = 0, openWhileWaiting = 0;
+      for(size_t i = START + 31; i <= START + 600 && !cleared; i++)
+      {
+         stepTo(i);
+         if(g_volWaitFresh) { waited++; if((g_gate & NQ_K_VOL_EXTREME) == 0) openWhileWaiting++; }
+         else cleared = true;
+      }
+      CHECK(cleared && waited > 0 && openWhileWaiting == 0, "a fresh confirmed M5 swing after the extreme reopens the gate; it stayed closed until then");
+      OnDeinit(0);
+   }
+   end("A14");
+
+   begin("A15 spike guard: a 15-ATR up-spike blocks pullback / radar plans in its direction; a BUY on the way back gets a flashing EXIT WARNING");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      run(START + 1, START + 30);
+      CHECK(g_volAvg > 0.0 && g_spikeDir == 0, "a quiet synthetic market: no spike");
+      int n5 = g_s5.n;
+      double base = g_s5.c[(size_t)n5 - 1], avg = g_volAvg;
+      double keepL = g_s5.l[(size_t)n5 - 10], keepH = g_s5.h[(size_t)n5 - 4];
+      CHECK(g_spikeNorm > 2.0 * avg && g_spikeNorm < 8.0 * avg, "a normal hour spans a few ATR(M5), so the ATR alone cannot define a spike");
+      g_s5.l[(size_t)n5 - 10] = base - 6.0 * avg;   // the low first ...
+      g_s5.h[(size_t)n5 - 4] = base + 9.0 * avg;    // ... then the high: an up-spike of 15 ATR, the close 60% back down
+      NqSpikeScan();
+      CHECK(g_spikeDir == 1 && near(g_spikeAtr, 15.0, 1e-6) && g_spikeX >= InpSpikeX && near(g_spikeRetr, 0.6, 1e-6) && g_spikeWarn,
+            "up-spike of 15 ATR, several normal hours in one, 60% given back: EXIT WARNING armed");
+      g_s5.h[(size_t)n5 - 4] = base + 1.5 * avg;
+      NqSpikeScan();
+      CHECK(g_spikeDir == 0, "a 7.5 ATR hour is a trending hour, not a spike");
+      g_s5.h[(size_t)n5 - 4] = base + 9.0 * avg;
+      NqSpikeScan();
+      NqPlan pl;
+      pl.dir = 1; pl.kind = NQ_PLAN_PB;
+      bool pbUp = NqSpikeBlocks(pl);
+      pl.kind = NQ_PLAN_RADAR;
+      bool rdUp = NqSpikeBlocks(pl);
+      pl.kind = NQ_PLAN_QML;
+      bool qmlUp = NqSpikeBlocks(pl);
+      pl.kind = NQ_PLAN_PB; pl.dir = -1;
+      bool pbDn = NqSpikeBlocks(pl);
+      CHECK(pbUp && rdUp && !qmlUp && !pbDn, "pullback and radar BUY plans are blocked (not a pullback, a reversal); QML and the SELL side are not");
+      SIM.ord.clear();
+      SIM.pos.clear();
+      SimPos p;
+      p.ticket = 4343; p.sym = "XAUUSD"; p.type = POSITION_TYPE_BUY; p.vol = 0.05; p.open = SIM.bid;
+      p.sl = 0; p.tp = 0; p.time = SIM.now; p.magic = InpMagic; p.comment = "NQ-Q4343";
+      SIM.pos.push_back(p);
+      int keepReg = g_s5.regime[(size_t)n5 - 1];
+      g_s5.regime[(size_t)n5 - 1] = NQ_REG_BULL;
+      NqVerdict();
+      CHECK(g_verdict.find("EXIT WARNING BUY #4343") != std::string::npos && g_verdict.find("SPIKE REVERSAL") != std::string::npos &&
+            g_verdict.find("60%") != std::string::npos && g_verdict.find("you decide") != std::string::npos && g_warnOn,
+            "a BUY with the regime still bullish: EXIT WARNING #ticket - spike reversal, 60% back, you decide");
+      NqDrawWarn();
+      CHECK(SIM.objs.count("NQEA_A_WARN") > 0 && obj("NQEA_A_WARN").find("EXIT WARNING") != std::string::npos, "the warning is drawn on the chart");
+      SIM.pos[0].type = POSITION_TYPE_SELL;
+      NqVerdict();
+      CHECK(g_verdict.find("HOLD SELL #4343") != std::string::npos || g_verdict.find("EXIT SELL #4343") != std::string::npos,
+            "a SELL is not in the spike direction: no warning");
+      CHECK(!g_warnOn, "no warning flag for the SELL");
+      SIM.pos[0].type = POSITION_TYPE_BUY;
+      g_s5.regime[(size_t)n5 - 1] = NQ_REG_BEAR;
+      NqVerdict();
+      CHECK(g_verdict.find("EXIT BUY #4343") != std::string::npos && g_verdict.find("REGIME FLIPPED") != std::string::npos && !g_warnOn,
+            "the regime flip outranks the warning: plain EXIT");
+      NqDrawWarn();
+      CHECK(SIM.objs.count("NQEA_A_WARN") == 0, "the chart warning is removed with the flag");
+      g_s5.regime[(size_t)n5 - 1] = keepReg;
+      g_s5.l[(size_t)n5 - 10] = keepL;
+      g_s5.h[(size_t)n5 - 4] = keepH;
+      NqSpikeScan();
+      CHECK(g_spikeDir == 0 && !g_spikeWarn, "the spike gone: nothing armed");
+      SIM.pos.clear();
+      OnDeinit(0);
+   }
+   end("A15");
 
    begin("A10 silver spec (3 digits, tick value 5): SL/TP on the grid, lots from the real tick value; rejected order is logged, not retried");
    {

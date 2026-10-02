@@ -2530,6 +2530,16 @@ enum ENUM_NQ_COIN
    NQ_COIN_ALT_SEL  = 4    // ALTCOIN specialist (any other coin)
 };
 
+// volatility regime (terminal layer; the engine never sees it)
+#define NQ_VOL_UNKNOWN   0
+#define NQ_VOL_DEAD      1
+#define NQ_VOL_NORMAL    2
+#define NQ_VOL_EXPANSION 3
+#define NQ_VOL_EXTREME   4
+// two gate bits beyond the engine's NQ_K_* (named by NqGateAtX, OR-ed into g_gate after the engine's gate)
+#define NQ_K_VOL_DEAD    0x800
+#define NQ_K_VOL_EXTREME 0x1000
+
 input group "Engine (M15 context / M5 regime / M1 trigger are fixed)"
 input int            InpNrtrAtrPeriod    = 14;          // NRTR ATR period
 input double         InpNrtrMultiplier   = 2.0;         // NRTR ATR multiplier
@@ -2540,6 +2550,7 @@ input int            InpHistoryDays      = 8;           // History used (days)
 input group "Coin specialist (BTC / ETH / LTC / ALT - the profile follows the class)"
 input ENUM_NQ_COIN   InpCoinClass        = NQ_COIN_AUTO_SEL; // Coin class: AUTO detects it; set ALT to trade a coin AUTO does not know
 input bool           InpSpecialist       = true;        // Apply the class profile (risk x, SL buffers x, min impulse x, radar on/off); false = raw inputs
+input int            InpLeadOverrideScore = 9;         // Lead against: the coin's OWN A+ structure overrides it at this radar score (M15 context + M5 regime must agree); 11 = never
 input group "Auto scalp (market order on the M1 trigger)"
 input bool           InpScalpAuto        = true;        // Auto scalp (lowest priority: only when no plan order is waiting)
 input double         InpScalpSlAtr       = 1.5;         // Scalp SL = x ATR(M5)  (1.5 validated)
@@ -2580,6 +2591,18 @@ input int            InpLondonStartHour  = 10;          // London session start 
 input bool           InpDrawLevels       = true;        // Draw session highs/lows, previous day, VWAP and break marks
 input int            InpSwingValidBars   = 96;          // Swing plan lifetime (M15 bars)  96 = 24 hours
 input double         InpNearAtr          = 0.5;         // "NEAR" when the price is within x ATR5 of a limit
+input group "Volatility regime + spike guard (news days: no chasing, no fake pullbacks)"
+input bool           InpVolGate          = true;        // Gate NEW entries on the regime (false = classify and show only)
+input int            InpVolAvgBars       = 288;         // ATR(M5) average over N closed M5 bars (288 = 24 h)
+input double         InpVolDead          = 0.5;         // DEAD below x the average: no new trade
+input double         InpVolExpand        = 1.5;         // EXPANSION from x: a breakout needs InpVolExpandRadar, a scalp needs the M15 context
+input double         InpVolExtreme       = 2.5;         // EXTREME from x: no new trade until a fresh confirmed M5 swing forms after it ends
+input int            InpVolExpandRadar   = 8;           // Radar score (of 10) a breakout needs during EXPANSION
+input bool           InpVolExpandScalpM15 = true;       // During EXPANSION a scalp needs the M15 context on its side
+input bool           InpSpikeGuard       = true;        // Spike guard: no pullback / scalp / breakout entry in the direction of a spike; EXIT WARNING on the way back
+input int            InpSpikeBars        = 12;          // A spike = the last N closed M5 bars (12 = 1 h) ...
+input double         InpSpikeX           = 2.5;         // ... ranging at least x a NORMAL N-bar range (its average over the regime lookback)
+input double         InpSpikeRetrace     = 0.5;         // EXIT WARNING once the close has given back this share of the spike
 input group "Risk engine (explicit - the EA never widens these)"
 input double         InpRiskPct          = 0.5;         // Risk per trade (% of balance)
 input double         InpDailyLossCapPct  = 2.0;         // Daily loss cap (% of balance) stops new trades; 0 = off
@@ -2661,11 +2684,23 @@ int      g_nRadar;
 NqRadar  g_rdUp;
 NqRadar  g_rdDn;
 int      g_macroDir;   // M15 NRTR direction of the macro symbol (0 = none / not available)
+int      g_volClass;   // NQ_VOL_*: ATR(M5) against its own average
+double   g_volRatio;   // ATR(M5) / average
+double   g_volAvg;     // the average ATR(M5) itself
+datetime g_volExtremeEndT; // M5 bar time of the last EXTREME reading
+bool     g_volWaitFresh;   // after EXTREME: closed until a confirmed M5 swing forms after it
+int      g_spikeDir;   // spike in the last InpSpikeBars M5 bars: +1 up, -1 down, 0 none
+double   g_spikeAtr;   // its range in average-ATR units (display)
+double   g_spikeX;     // its range against a normal InpSpikeBars-bar range (the test)
+double   g_spikeNorm;  // a normal InpSpikeBars-bar range: the average over the regime lookback
+double   g_spikeRetr;  // share of the spike the latest close has given back (0..1)
+bool     g_spikeWarn;  // retrace >= InpSpikeRetrace: EXIT WARNING for a position in the spike direction
+bool     g_warnOn;     // the verdict is an EXIT WARNING right now (chart marker)
 bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.0.0"
+#define NQ_EA_VERSION "1.1.0"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -2770,8 +2805,16 @@ string NqJsonN(string key, double val, int digits);
 string NqJsonI(string key, long val);
 void   NqSetProfile();
 string NqResolveLead();
-bool   NqLeadBlocks(int planDir);
 int    NqMaxSpreadPts();
+void   NqVolRegime();
+int    NqVolGateBits();
+string NqVolClassText(int c);
+string NqGateAtX(int g, int nth);
+string NqGateNameX(int bit);
+void   NqSpikeScan();
+bool   NqSpikeBlocks(const NqPlan &pl);
+bool   NqLeadBlocks(int planDir, int score);
+void   NqDrawWarn();
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -2782,7 +2825,10 @@ int OnInit()
       InpQmlWaitBars < 1 || InpPlanValidBars < 1 || InpPbRetrace <= 0.0 || InpPbRetrace >= 1.0 ||
       InpPbMinImpulseAtr < 0.0 || InpPbSlBufAtr < 0.0 || InpPlanTp1R <= 0.0 || InpPlanTp2R <= 0.0 ||
       InpRiskPct <= 0.0 || InpRiskPct > 5.0 || InpDailyLossCapPct < 0.0 || InpMaxOpenPositions < 0 ||
-      InpMaxTradesPerDay < 0 || InpMaxSpreadPoints < 0 || InpMaxSpreadAtr < 0.0 || InpSessionStartHour < 0 || InpSessionStartHour > 24 ||
+      InpMaxTradesPerDay < 0 || InpMaxSpreadPoints < 0 || InpMaxSpreadAtr < 0.0 || InpLeadOverrideScore < 0 || InpLeadOverrideScore > 11 ||
+      InpVolAvgBars < 20 || InpVolDead <= 0.0 || InpVolDead >= InpVolExpand || InpVolExpand >= InpVolExtreme ||
+      InpVolExpandRadar < 0 || InpVolExpandRadar > 10 || InpSpikeBars < 2 || InpSpikeX < 1.0 || InpSpikeRetrace <= 0.0 ||
+      InpSpikeRetrace > 1.0 || InpSessionStartHour < 0 || InpSessionStartHour > 24 ||
       InpSessionEndHour < 0 || InpSessionEndHour > 24 || InpMagic <= 0 || InpForecastMinScore < 1 ||
       InpArrowBars < 0 || InpNyStartHour < 0 || InpNyStartHour > 23 || InpNyStartMin < 0 || InpNyStartMin > 59 ||
       InpNyEndHour < 0 || InpNyEndHour > 24 || InpNyEndMin < 0 || InpNyEndMin > 59 || InpRangeStartHour < 0 ||
@@ -2856,6 +2902,18 @@ int OnInit()
    NqRadarReset(g_rdUp);
    NqRadarReset(g_rdDn);
    g_macroDir = 0;
+   g_volClass = NQ_VOL_UNKNOWN;
+   g_volRatio = 0.0;
+   g_volAvg = 0.0;
+   g_volExtremeEndT = 0;
+   g_volWaitFresh = false;
+   g_spikeDir = 0;
+   g_spikeAtr = 0.0;
+   g_spikeX = 0.0;
+   g_spikeNorm = 0.0;
+   g_spikeRetr = 0.0;
+   g_spikeWarn = false;
+   g_warnOn = false;
    g_newBar5 = false;
    ArrayResize(g_sbrk, 0);
    g_nSbrk = 0;
@@ -2967,6 +3025,7 @@ void NqUpdate()
       NqTrade();
    NqVerdict();
    NqDrawNear();
+   NqDrawWarn();
    NqWebDrain();
    NqTelemetry();
    NqDrawPanel();
@@ -2987,6 +3046,7 @@ void NqVerdict()
    g_nearText = "";
    g_nearPrice = 0.0;
    g_nearDir = 0;
+   g_warnOn = false;
    bool ok = (g_coin != NQ_COIN_NONE && g_ready && g_s5.n > 0 && g_s1.n > 0);
    if(g_coin == NQ_COIN_NONE)
    {
@@ -3033,6 +3093,14 @@ void NqVerdict()
          g_verdict = pre + "EXIT " + side + " #" + IntegerToString((long)tk) + " - M5 REGIME FLIPPED " + NqRegimeText(reg) +
                      (botWill && !manual ? "  (bot closes at the next M1 close)" : "  (you decide)") + pl;
          g_verdictClr = cBlock;
+      }
+      else if(InpSpikeGuard && g_spikeWarn && g_spikeDir == pdir)
+      {
+         g_verdict = pre + "EXIT WARNING " + side + " #" + IntegerToString((long)tk) + " - SPIKE REVERSAL: the " +
+                     DoubleToString(g_spikeAtr, 1) + " ATR " + ((pdir > 0) ? "up" : "down") + "-spike (" + DoubleToString(g_spikeX, 1) + "x a normal hour) gave back " +
+                     IntegerToString((int)MathRound(g_spikeRetr * 100.0)) + "% (news?)  - you decide" + pl;
+         g_verdictClr = (((long)TimeTradeServer() % 2) == 0) ? cBlock : clrWhite;   // flashes every second
+         g_warnOn = true;
       }
       else
       {
@@ -3086,7 +3154,7 @@ void NqVerdict()
       int cur = g_s1.sigOf[g_s1.n - 1];
       string side = (st1 > 0) ? "BUY" : "SELL";
       g_verdict = pre + "SCALP " + side + " NOW  entry " + NqPx(g_sigs[cur].entry) + "  SL " + NqPx(g_sigs[cur].sl) + "  TP " +
-                  NqPx(g_sigs[cur].tp) + ((g_gate != 0 && !manual) ? ("  (" + NqGateAt(g_gate, 0) + ")") : (InpScalpAuto && !manual ? "  (auto)" : ""));
+                  NqPx(g_sigs[cur].tp) + ((g_gate != 0 && !manual) ? ("  (" + NqGateAtX(g_gate, 0) + ")") : (InpScalpAuto && !manual ? "  (auto)" : ""));
       g_verdictClr = (st1 > 0) ? cUp : cDn;
       return;
    }
@@ -3118,6 +3186,24 @@ void NqDrawNear()
    datetime t = g_s1.t[g_s1.n - 1] + g_s1.sec;
    NqText(nm, t, g_nearPrice, NqSymDot() + " NEAR  " + g_nearText, clrWhite, 11, (g_nearDir > 0) ? ANCHOR_LEFT_UPPER : ANCHOR_LEFT_LOWER,
           "the price is within " + DoubleToString(InpNearAtr, 2) + " ATR of this level");
+}
+
+// a flashing EXIT WARNING marker on the chart while the verdict says so
+void NqDrawWarn()
+{
+   string nm = NQ_PFX_A + "WARN";
+   if(!g_warnOn || !InpDrawChart || !g_ready)
+   {
+      if(ObjectFind(0, nm) >= 0)
+         ObjectsDeleteAll(0, nm);
+      return;
+   }
+   datetime t = g_s1.t[g_s1.n - 1] + g_s1.sec;
+   double px = SymbolInfoDouble(g_sym, SYMBOL_BID);
+   color c = (((long)TimeTradeServer() % 2) == 0) ? NQ_RGB(230, 126, 34) : clrWhite;
+   NqText(nm, t, px, NqSymDot() + " EXIT WARNING - SPIKE REVERSAL", c, 12, (g_spikeDir > 0) ? ANCHOR_LEFT_LOWER : ANCHOR_LEFT_UPPER,
+          "a " + DoubleToString(g_spikeAtr, 1) + " ATR spike (" + DoubleToString(g_spikeX, 1) + "x a normal hour) has given back " + IntegerToString((int)MathRound(g_spikeRetr * 100.0)) +
+          "% - a news reversal looks like this; you decide");
 }
 
 void NqReadSpec()
@@ -3348,6 +3434,208 @@ bool NqIsOurs(long magic, string sym)
 }
 
 //+------------------------------------------------------------------+
+//| VOLATILITY REGIME. A news day goes from dead to wild without a    |
+//| session boundary, so ATR(M5) is judged against its own average:   |
+//| DEAD = no new trade; NORMAL = as configured; EXPANSION = allowed  |
+//| with stronger confirmation (radar score, M15 for scalps); EXTREME |
+//| = do not chase, and after it ends stay closed until a CONFIRMED   |
+//| M5 swing has formed after the extreme bar (fresh structure). It   |
+//| gates NEW entries only; closing is never blocked.                 |
+//+------------------------------------------------------------------+
+string NqVolClassText(int c)
+{
+   switch(c)
+   {
+      case NQ_VOL_DEAD:      return "DEAD";
+      case NQ_VOL_NORMAL:    return "NORMAL";
+      case NQ_VOL_EXPANSION: return "EXPANSION";
+      case NQ_VOL_EXTREME:   return "EXTREME";
+   }
+   return "UNKNOWN";
+}
+
+void NqVolRegime()
+{
+   g_volClass = NQ_VOL_UNKNOWN;
+   g_volRatio = 0.0;
+   g_volAvg = 0.0;
+   int n = g_s5.n;
+   if(!g_ready || n < InpVolAvgBars + 2)
+      return;
+   double a = g_s5.atr[n - 1];
+   if(a <= 0.0)
+      return;
+   double sum = 0.0;
+   int cnt = 0;
+   for(int i = n - 1 - InpVolAvgBars; i < n - 1; i++)
+   {
+      if(g_s5.atr[i] > 0.0)
+      {
+         sum += g_s5.atr[i];
+         cnt++;
+      }
+   }
+   if(cnt < InpVolAvgBars / 2)
+      return;
+   g_volAvg = sum / cnt;
+   g_volRatio = a / g_volAvg;
+   if(g_volRatio < InpVolDead)
+      g_volClass = NQ_VOL_DEAD;
+   else if(g_volRatio >= InpVolExtreme)
+      g_volClass = NQ_VOL_EXTREME;
+   else if(g_volRatio >= InpVolExpand)
+      g_volClass = NQ_VOL_EXPANSION;
+   else
+      g_volClass = NQ_VOL_NORMAL;
+   if(g_volClass == NQ_VOL_EXTREME)
+   {
+      g_volExtremeEndT = g_s5.t[n - 1];
+      g_volWaitFresh = true;
+      return;
+   }
+   if(g_volWaitFresh)
+   {
+      // fresh structure = a confirmed M5 swing whose bar is later than the extreme
+      for(int p = 0; p < g_s5.np; p++)
+      {
+         if(g_s5.t[g_piv5[p].idx] > g_volExtremeEndT)
+         {
+            g_volWaitFresh = false;
+            break;
+         }
+      }
+   }
+}
+
+int NqVolGateBits()
+{
+   if(!InpVolGate)
+      return 0;
+   if(g_volClass == NQ_VOL_DEAD)
+      return NQ_K_VOL_DEAD;
+   if(g_volClass == NQ_VOL_EXTREME || g_volWaitFresh)
+      return NQ_K_VOL_EXTREME;
+   return 0;
+}
+
+// gate names: the engine's own bits first (its helper, untouched), then the two regime bits
+string NqGateNameX(int bit)
+{
+   if(bit == NQ_K_VOL_DEAD)
+      return "VOLATILITY DEAD - NO NEW TRADE";
+   if(bit == NQ_K_VOL_EXTREME)
+      return "VOLATILITY EXTREME - WAIT FOR FRESH STRUCTURE";
+   return NqGateName(bit);
+}
+
+string NqGateAtX(int g, int nth)
+{
+   int engine = g & ~(NQ_K_VOL_DEAD | NQ_K_VOL_EXTREME);
+   string s = NqGateAt(engine, nth);
+   if(s != "")
+      return s;
+   int c = 0;
+   while(NqGateAt(engine, c) != "")
+      c++;
+   int k = nth - c;
+   if((g & NQ_K_VOL_DEAD) != 0)
+   {
+      if(k == 0)
+         return NqGateNameX(NQ_K_VOL_DEAD);
+      k--;
+   }
+   if((g & NQ_K_VOL_EXTREME) != 0 && k == 0)
+      return NqGateNameX(NQ_K_VOL_EXTREME);
+   return "";
+}
+
+//+------------------------------------------------------------------+
+//| SPIKE GUARD. "Up, then pullback, then buy" on a news day is not a |
+//| pullback - it is the other side of a spike. A spike = the last    |
+//| InpSpikeBars closed M5 bars ranging InpSpikeX x a NORMAL such     |
+//| window (a trending hour already spans ~4 ATR(M5): the ATR alone  |
+//| would call every hour a spike, so the test is the hour itself)    |
+//| ATR(M5) or more. While it is in the window: no pullback, scalp or |
+//| breakout entry in ITS direction (reversal plans against it - QML, |
+//| NY trap - stay allowed). Once the close has given back            |
+//| InpSpikeRetrace of it: EXIT WARNING on a position in its          |
+//| direction. The human decides; nothing is closed by this.          |
+//+------------------------------------------------------------------+
+void NqSpikeScan()
+{
+   g_spikeDir = 0;
+   g_spikeAtr = 0.0;
+   g_spikeX = 0.0;
+   g_spikeNorm = 0.0;
+   g_spikeRetr = 0.0;
+   g_spikeWarn = false;
+   int n = g_s5.n;
+   if(!InpSpikeGuard || !g_ready || g_volAvg <= 0.0 || n < InpSpikeBars + 1)
+      return;
+   // a normal window: the average InpSpikeBars-bar range over the regime lookback (non-overlapping windows, the current one excluded)
+   int wins = 0;
+   double sumR = 0.0;
+   for(int e = n - 1 - InpSpikeBars; e - InpSpikeBars + 1 >= 0 && wins < InpVolAvgBars / InpSpikeBars; e -= InpSpikeBars)
+   {
+      double wh = g_s5.h[e];
+      double wl = g_s5.l[e];
+      for(int j = e - InpSpikeBars + 1; j < e; j++)
+      {
+         if(g_s5.h[j] > wh)
+            wh = g_s5.h[j];
+         if(g_s5.l[j] < wl)
+            wl = g_s5.l[j];
+      }
+      if(wh > wl)
+      {
+         sumR += wh - wl;
+         wins++;
+      }
+   }
+   if(wins < 4)
+      return;
+   g_spikeNorm = sumR / wins;
+   int iHi = n - 1;
+   int iLo = n - 1;
+   for(int i = n - InpSpikeBars; i < n; i++)
+   {
+      if(g_s5.h[i] > g_s5.h[iHi])
+         iHi = i;
+      if(g_s5.l[i] < g_s5.l[iLo])
+         iLo = i;
+   }
+   double range = g_s5.h[iHi] - g_s5.l[iLo];
+   if(range < InpSpikeX * g_spikeNorm || iHi == iLo)
+      return;
+   double c = g_s5.c[n - 1];
+   g_spikeAtr = range / g_volAvg;
+   g_spikeX = range / g_spikeNorm;
+   if(iHi > iLo)
+   {
+      g_spikeDir = 1;                                   // low first, then the high: an up-spike
+      g_spikeRetr = (g_s5.h[iHi] - c) / range;
+   }
+   else
+   {
+      g_spikeDir = -1;
+      g_spikeRetr = (c - g_s5.l[iLo]) / range;
+   }
+   if(g_spikeRetr < 0.0)
+      g_spikeRetr = 0.0;
+   if(g_spikeRetr > 1.0)
+      g_spikeRetr = 1.0;
+   g_spikeWarn = (g_spikeRetr >= InpSpikeRetrace);
+}
+
+// a plan the spike guard refuses: a pullback (M5 or swing) or a breakout STOP in the spike direction
+bool NqSpikeBlocks(const NqPlan &pl)
+{
+   if(!InpSpikeGuard || g_spikeDir == 0 || pl.dir != g_spikeDir)
+      return false;
+   return (pl.kind == NQ_PLAN_PB || pl.kind == NQ_PLAN_RADAR);
+}
+
+//+------------------------------------------------------------------+
 //| COIN SPECIALIST PROFILE. The class decides how careful the bot is |
 //| with this coin. Multipliers only ever REDUCE risk (<= 1) and only |
 //| ever WIDEN buffers (>= 1); the panel shows the profile in force.   |
@@ -3429,12 +3717,22 @@ string NqResolveLead()
 }
 
 // radar only: the alts follow BTC, so a break the lead's M15 NRTR points AGAINST
-// is blocked; an INVERSE lead (DXY-like) blocks when it points the SAME way
-bool NqLeadBlocks(int planDir)
+// is blocked (an INVERSE lead, DXY-like, blocks when it points the SAME way).
+// NOT a master switch: a coin's OWN A+ structure overrides it - the radar score
+// at least InpLeadOverrideScore AND its own M15 context AND its own M5 regime on
+// the side of the trade. Weak setups stay blocked. The gate (spread, risk, the
+// volatility regime) is applied before any order regardless.
+bool NqLeadBlocks(int planDir, int score)
 {
    if(!InpMacroBlocks || g_macroDir == 0 || planDir == 0)
       return false;
-   return InpMacroInverse ? (g_macroDir == planDir) : (g_macroDir == -planDir);
+   bool against = InpMacroInverse ? (g_macroDir == planDir) : (g_macroDir == -planDir);
+   if(!against)
+      return false;
+   if(InpLeadOverrideScore <= 10 && score >= InpLeadOverrideScore && g_s15.n > 0 && g_s5.n > 0 &&
+      g_s15.ctx[g_s15.n - 1] == planDir && g_s5.regime[g_s5.n - 1] == planDir)
+      return false;
+   return true;
 }
 
 // the spread cap in points: the input when set, else x ATR(M5) (a BTC spread
@@ -3585,6 +3883,9 @@ void NqEvaluate()
    g_gate = NqRiskGate(InpScalpAuto || InpPendingAuto, g_isDemo, InpAllowRealAccount, tradeAllowed,
                        g_spreadPts, maxSpr, dayTotal, g_capMoney, g_openCount, InpMaxOpenPositions,
                        g_tradesToday, InpMaxTradesPerDay, NqInSession(hour, InpSessionStartHour, InpSessionEndHour));
+   NqVolRegime();
+   NqSpikeScan();
+   g_gate |= NqVolGateBits();   // DEAD / EXTREME volatility close the gate for NEW entries (named by NqGateAtX)
 
    if(!g_ready || g_s1.n < 1 || g_s5.n < 1 || g_s15.n < 1)
    {
@@ -3969,6 +4270,7 @@ string NqEventJson(const NqPlan &p, string event, string extra)
    string j = "{" + NqJsonS("signal_id", NqSignalIdOf(p)) + "," + NqJsonS("system", "NQ-EA") + "," +
               NqJsonS("ea_version", NQ_EA_VERSION) + "," + NqJsonS("symbol", g_sym) + "," +
               NqJsonS("engine", "NQ-CRYPTO") + "," + NqJsonS("coin", g_coinName) + "," +
+              NqJsonS("vol_regime", NqVolClassText(g_volClass)) + "," + NqJsonN("spike_atr", g_spikeAtr * g_spikeDir, 1) + "," +
               NqJsonS("tf", (p.kind == NQ_PLAN_SCALP) ? "1" : ((p.tf == 900) ? "15" : "5")) + "," +
               NqJsonS("direction", (p.dir > 0) ? "BUY" : "SELL") + "," +
               NqJsonN("entry", p.entry, g_digits) + "," + NqJsonN("sl", p.sl, g_digits) + "," +
@@ -4095,7 +4397,7 @@ string NqJsonNames(string key, int bits, bool gate)
    string out = "\"" + key + "\":[";
    for(int nth = 0; nth < 16; nth++)
    {
-      string nm = gate ? NqGateAt(bits, nth) : NqReasonAt(bits, nth);
+      string nm = gate ? NqGateAtX(bits, nth) : NqReasonAt(bits, nth);
       if(nm == "")
          break;
       out = out + ((nth > 0) ? "," : "") + "\"" + NqJsonEsc(nm) + "\"";
@@ -4143,7 +4445,9 @@ string NqTelemetryJson()
               NqJsonS("account_mode", g_isDemo ? "demo" : "real") + "," + NqJsonI("magic", InpMagic) + "," +
               NqJsonI("ts_server", (long)nowS) + "," + NqJsonI("ts_gmt", (long)nowG) + "," +
               NqJsonI("server_offset_sec", (long)nowS - (long)nowG) + "," + NqJsonI("heartbeat_sec", g_telSec) + "," +
-              NqJsonB("ready", g_ready) + "," + NqJsonB("fresh", ok && g_fresh) + "," + NqJsonS("data_reason", dataReason) + ",";
+              NqJsonB("ready", g_ready) + "," + NqJsonB("fresh", ok && g_fresh) + "," + NqJsonS("data_reason", dataReason) + "," +
+              NqJsonS("vol_regime", NqVolClassText(g_volClass)) + "," + NqJsonN("vol_ratio", g_volRatio, 2) + "," +
+              NqJsonI("spike_dir", g_spikeDir) + "," + NqJsonN("spike_atr", g_spikeAtr, 1) + "," + NqJsonN("spike_x", g_spikeX, 2) + "," + NqJsonN("spike_retrace", g_spikeRetr, 2) + ",";
 
    // candles / feed
    j = j + "\"candles\":{";
@@ -4249,7 +4553,7 @@ string NqTelemetryJson()
          sl = (reg > 0) ? NqRoundTick(entry - slD, g_tick, g_digits, -1) : NqRoundTick(entry + slD, g_tick, g_digits, 1);
          tp = (reg > 0) ? NqRoundTick(entry + tpD, g_tick, g_digits, 1) : NqRoundTick(entry - tpD, g_tick, g_digits, -1);
          if(st1 == NQ_BUY || st1 == NQ_SELL)
-            stT = "TRIGGER NOW" + (InpScalpAuto ? ((g_gate == 0) ? " - auto" : (" - " + NqGateAt(g_gate, 0))) : " - manual");
+            stT = "TRIGGER NOW" + (InpScalpAuto ? ((g_gate == 0) ? " - auto" : (" - " + NqGateAtX(g_gate, 0))) : " - manual");
          else
             stT = "WAIT: " + NqReasonAt(g_s1.reasons[n1 - 1], 0);
       }
@@ -4587,6 +4891,8 @@ void NqTrade()
             NqCancel(tk, "plan " + NqPlanStatusText(pl.status));
          else if(!NqKindEnabled(pl))
             NqCancel(tk, NqPlanKindText(pl.kind) + " trading switched off");
+         else if(NqSpikeBlocks(pl))
+            NqCancel(tk, "SPIKE GUARD: a " + NqPlanKindText(pl.kind) + " into a " + DoubleToString(g_spikeAtr, 1) + " ATR spike is not a pullback");
       }
       // place orders for every armed plan of an enabled kind
       if(InpPendingAuto)
@@ -4603,6 +4909,12 @@ void NqTrade()
                continue;
             if(g_gate != 0)
                continue;
+            if(NqSpikeBlocks(pl))
+            {
+               g_note = "SPIKE GUARD: " + NqPlanKindText(pl.kind) + " " + ((pl.dir > 0) ? "BUY" : "SELL") + " into a " +
+                        DoubleToString(g_spikeAtr, 1) + " ATR spike - not a pullback, not placed";
+               continue;
+            }
             double ask = SymbolInfoDouble(g_sym, SYMBOL_ASK);
             double bid = SymbolInfoDouble(g_sym, SYMBOL_BID);
             double minDist = g_stopsLevel * g_point;
@@ -4617,10 +4929,19 @@ void NqTrade()
                g_note = NqPlanKindText(pl.kind) + ": PRICE ALREADY PAST THE LEVEL - NOT PLACED";
                continue;
             }
-            // lead filter (radar only): the alts follow BTC - a break the lead points against is a block
-            if(isStop && NqLeadBlocks(pl.dir))
+            // lead filter (radar only): the alts follow BTC - a break the lead points against is a block,
+            // unless the coin's OWN structure is A+ (radar score, M15 context and M5 regime all agree)
+            int rdScore = (pl.dir > 0) ? g_rdUp.score : g_rdDn.score;
+            if(isStop && NqLeadBlocks(pl.dir, rdScore))
             {
-               g_note = "RADAR: LEAD AGAINST (" + g_macroSym + " M15 NRTR " + NqDirText(g_macroDir) + ")";
+               g_note = "RADAR: LEAD AGAINST (" + g_macroSym + " M15 NRTR " + NqDirText(g_macroDir) + ") - own structure " +
+                        IntegerToString(rdScore) + "/10, needs " + IntegerToString(InpLeadOverrideScore) + " + M15 + M5";
+               continue;
+            }
+            // volatility EXPANSION: a breakout needs stronger confirmation
+            if(isStop && g_volClass == NQ_VOL_EXPANSION && rdScore < InpVolExpandRadar)
+            {
+               g_note = "RADAR: VOLATILITY EXPANSION - needs score " + IntegerToString(InpVolExpandRadar) + " (" + IntegerToString(rdScore) + "/10)";
                continue;
             }
             double tp = InpPlanUseTp2 ? pl.tp2 : pl.tp1;
@@ -4628,7 +4949,7 @@ void NqTrade()
             int og = NqOrderGate(pl.dir, pl.entry, pl.sl, tp, lot, (int)NqPlanOrderType(pl));
             if(og != 0)
             {
-               g_note = NqPlanKindText(pl.kind) + ": " + NqGateAt(og, 0);
+               g_note = NqPlanKindText(pl.kind) + ": " + NqGateAtX(og, 0);
                continue;
             }
             string tfT = (pl.tf == 900) ? "M15" : "M5";
@@ -4670,7 +4991,17 @@ void NqTrade()
    }
    if(g_gate != 0)
    {
-      g_note = "SCALP TRIGGER " + sideT + " - " + NqGateAt(g_gate, 0);
+      g_note = "SCALP TRIGGER " + sideT + " - " + NqGateAtX(g_gate, 0);
+      return;
+   }
+   if(InpSpikeGuard && g_spikeDir != 0 && st == g_spikeDir)
+   {
+      g_note = "SCALP TRIGGER " + sideT + " - SPIKE GUARD: " + DoubleToString(g_spikeAtr, 1) + " ATR spike in this direction, not chasing";
+      return;
+   }
+   if(InpVolExpandScalpM15 && g_volClass == NQ_VOL_EXPANSION && g_s15.n > 0 && g_s15.ctx[g_s15.n - 1] != st)
+   {
+      g_note = "SCALP TRIGGER " + sideT + " - VOLATILITY EXPANSION: the M15 context must agree";
       return;
    }
    double entry = (st > 0) ? SymbolInfoDouble(g_sym, SYMBOL_ASK) : SymbolInfoDouble(g_sym, SYMBOL_BID);
@@ -4683,7 +5014,7 @@ void NqTrade()
    int og = NqOrderGate(st, entry, sl, tp, lot, (st > 0) ? (int)ORDER_TYPE_BUY : (int)ORDER_TYPE_SELL);
    if(og != 0)
    {
-      g_note = "SCALP TRIGGER " + sideT + " - " + NqGateAt(og, 0);
+      g_note = "SCALP TRIGGER " + sideT + " - " + NqGateAtX(og, 0);
       g_actedSig = sigTime;
       return;
    }
@@ -5130,7 +5461,7 @@ void NqDrawPanel()
    int kOff = (int)MathRound(8 * sc);
    int vOff = (int)MathRound(122 * sc);
    int bannerH = (int)MathRound(38 * sc);
-   int rowsTop = 8;
+   int rowsTop = 9;
    int rowsBot = 8 + 1 + 8 * 2 + NQ_BOARD_BROKER_ROWS + 2;   // NY/level/radar lines, header, plan + scalp rows, broker rows, footer
    int tTopH = rh + 3 + rowsTop * rh + 4;
    int tBotH = rh + 3 + rowsBot * rh + 8;
@@ -5223,7 +5554,7 @@ void NqDrawPanel()
    else if(g_final != NQ_WAIT)
    {
       r1 = "M5 " + NqRegimeText(g_s5.regime[i5]) + " + M1 NRTR REALIGNED + CANDLE CLOSED IN DIRECTION";
-      r2 = (g_gate != 0) ? NqGateAt(g_gate, 0) : ("SL " + DoubleToString(InpScalpSlAtr, 1) + " x ATR5, TP " +
+      r2 = (g_gate != 0) ? NqGateAtX(g_gate, 0) : ("SL " + DoubleToString(InpScalpSlAtr, 1) + " x ATR5, TP " +
                                                      DoubleToString(InpScalpTpAtr, 1) + " x ATR5, time stop " +
                                                      IntegerToString(InpScalpTimeStop) + " M1 bars");
    }
@@ -5268,6 +5599,33 @@ void NqDrawPanel()
                   "   SL buf x" + DoubleToString(g_profBuf, 2) + "   spread <= " + sprT + (g_profRadar ? "" : "   radar off") +
                   ((g_macroSym == "") ? "   lead none" : ("   lead " + g_macroSym));
    NqRow("e0", kx, vx, yr, "COIN PROFILE", profT, (g_coin == NQ_COIN_NONE) ? cDim : cMetal, cKey, fs);
+   yr += rh;
+   string volT = "---";
+   color volC = cDim;
+   if(g_volClass != NQ_VOL_UNKNOWN)
+   {
+      volT = NqVolClassText(g_volClass) + "  ATR5 " + DoubleToString(g_volRatio, 2) + "x its " + IntegerToString(InpVolAvgBars / 12) + "h avg";
+      if(g_volClass == NQ_VOL_DEAD)
+         volT = volT + " - no new trade";
+      if(g_volClass == NQ_VOL_EXPANSION)
+         volT = volT + " - radar needs " + IntegerToString(InpVolExpandRadar) + "/10, scalp needs M15";
+      if(g_volClass == NQ_VOL_EXTREME)
+         volT = volT + " - do not chase";
+      if(g_volWaitFresh)
+         volT = volT + " - waiting for a fresh M5 swing";
+      if(!InpVolGate)
+         volT = volT + " (gate off)";
+      volC = (g_volClass == NQ_VOL_NORMAL) ? cVal : ((g_volClass == NQ_VOL_EXPANSION) ? cWait : cBlock);
+      if(g_volClass == NQ_VOL_DEAD)
+         volC = cDim;
+      if(g_spikeDir != 0)
+      {
+         volT = volT + "   SPIKE " + ((g_spikeDir > 0) ? "UP " : "DOWN ") + DoubleToString(g_spikeAtr, 1) + " ATR (" + DoubleToString(g_spikeX, 1) + "x normal), " +
+                IntegerToString((int)MathRound(g_spikeRetr * 100.0)) + "% back" + (g_spikeWarn ? " - EXIT WARNING" : "");
+         volC = cBlock;
+      }
+   }
+   NqRow("e0v", kx, vx, yr, "VOL REGIME", volT, volC, cKey, fs);
    yr += rh;
    NqRow("e1", kx, vx, yr, "M15 CONTEXT", ctxT, ok ? NqDirColor(ctx) : cDim, cKey, fs);
    yr += rh;
@@ -5601,7 +5959,7 @@ void NqDrawPanel()
                      stT = "ARMED - slot taken";
                   else if(g_gate != 0)
                   {
-                     stT = "ARMED - " + NqGateAt(g_gate, 0);
+                     stT = "ARMED - " + NqGateAtX(g_gate, 0);
                      cSt = cBlock;
                   }
                   else if(dist < 0.0)
@@ -5693,7 +6051,7 @@ void NqDrawPanel()
             vD = "live";
             if(st1 == NQ_BUY || st1 == NQ_SELL)
             {
-               stT = "TRIGGER NOW" + (InpScalpAuto ? ((g_gate == 0) ? " - auto" : (" - " + NqGateAt(g_gate, 0))) : " - manual");
+               stT = "TRIGGER NOW" + (InpScalpAuto ? ((g_gate == 0) ? " - auto" : (" - " + NqGateAtX(g_gate, 0))) : " - manual");
                cSt = (g_gate == 0 || !InpScalpAuto) ? cUp : cBlock;
             }
             else
@@ -5819,7 +6177,7 @@ void NqDrawPanel()
             cSl++;
       }
    }
-   string gateT = (g_gate == 0) ? "GATE OPEN" : ("GATE: " + NqGateAt(g_gate, 0));
+   string gateT = (g_gate == 0) ? "GATE OPEN" : ("GATE: " + NqGateAtX(g_gate, 0));
    NqLabel("bf1", kx, yr, "ORDERS " + IntegerToString(g_pendCount) + "  POSITIONS " + IntegerToString(g_openCount) +
            "  TODAY M5: cancelled " + IntegerToString(cCan) + "  expired " + IntegerToString(cExp) + "  TP1 " +
            IntegerToString(cTp) + "  SL " + IntegerToString(cSl) + "   " + gateT, (g_gate == 0) ? cVal : cBlock, fsH, "Arial Bold", ANCHOR_LEFT_UPPER);
