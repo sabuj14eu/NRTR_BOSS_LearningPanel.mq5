@@ -73,6 +73,15 @@ inline ushort StringGetCharacter(const string &s, int pos)
 {
    return (pos >= 0 && pos < (int)s.size()) ? (ushort)(unsigned char)s[(size_t)pos] : 0;
 }
+inline int StringReplace(string &s, const string &from, const string &to)
+{
+   if(from.empty()) return 0;
+   int n = 0;
+   size_t pos = 0;
+   while((pos = s.find(from, pos)) != std::string::npos) { s.replace(pos, from.size(), to); pos += to.size(); n++; }
+   return n;
+}
+inline long long StringToInteger(const string &s) { try { return std::stoll(s); } catch(...) { return 0; } }
 // MQL strings are UTF-16; here a code point becomes UTF-8
 inline string ShortToString(ushort cp)
 {
