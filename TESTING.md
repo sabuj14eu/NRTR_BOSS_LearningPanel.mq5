@@ -41,7 +41,7 @@ EA TESTS:         162 checks passed, 0 failed
 -- NRTR_QML_CryptoScalper.mq5 --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-CRYPTO EA TESTS:  191 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
+CRYPTO EA TESTS:  192 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
                   BTC-sized market + an LTC 3-digit spec, plus the 6 crypto sections below)
 MetaEditor F7:    NOT RUN (not available in the build environment) - for BOTH files
 ```
@@ -60,7 +60,7 @@ the crypto EA only by running the script, never by hand.
 | C1 | Coin detector: BTC spellings (BTCUSD, #BTCUSD.m, XBTUSD, BITCOIN, btcusdt), ETH / LTC spellings incl. `ETH/USD` and LITECOIN, altcoins by ticker (SOL, DOGE, #XRPUSD.c, ADA); forex, metals, a non-dollar quote (ETHEUR), ETHW and an unknown coin refused; `InpCoinClass` forces the class | PASS |
 | C2 | Specialist profile: BTC raw risk and buffers; ETH buffers x1.25 at full risk; ALT half the risk money, buffers x1.5, impulse x1.25, radar plans not tradable; the COIN PROFILE panel row says so | PASS |
 | C3 | Spread cap in ATR: the cap equals 0.15 x ATR(M5) in points, a 600-point BTC spread passes, one point over the cap is SPREAD TOO WIDE | PASS |
-| C4 | BTC-lead filter: no BTC symbol at the broker = no lead (nothing invented); `#ETHUSD.m` finds `#BTCUSD.m` and reads its M15 NRTR; lead BEARISH blocks a weak UP break and not a DOWN one (and the mirror); no reading blocks nothing; BTC itself has no lead; the panel names the lead | PASS |
+| C4 | BTC-lead filter: no BTC symbol at the broker = no lead (nothing invented); `#ETHUSD.m` finds `#BTCUSD.m` and reads its M15 NRTR; lead BEARISH blocks a weak UP break and not a DOWN one (and the mirror); no reading blocks nothing; BTC itself has no lead; the panel names the lead and its M15 reading; a lead typed by hand that the broker cannot serve is shown as `lead BTC (NO DATA - no lead filter)` and blocks nothing | PASS |
 | C5 | Journal: every line carries `engine: NQ-CRYPTO` and `coin: BTC` beside the unchanged platform keys and `signal_id: NQ:BTCUSD:...` | PASS |
 | C6 | Lead override (graded, not a master switch): lead BEARISH, own radar score 8 blocked, 9 and 10 allowed when the coin's own M15 context and M5 regime agree; own M15 against or M5 not on side = no override however high the score; lead agreeing = nothing to override | PASS |
 

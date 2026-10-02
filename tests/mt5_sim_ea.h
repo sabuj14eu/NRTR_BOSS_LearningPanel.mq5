@@ -219,13 +219,15 @@ inline int simVisible(ENUM_TIMEFRAMES tf)
 inline bool simIsMacro(const string &sym) { return sym != SIM.sym && sym != _Symbol; }
 // Market Watch: this symbol always; a second symbol only while a macro series is loaded (and named, if a name was given)
 inline bool SymbolSelect(const string &sym, bool) { return !simIsMacro(sym) || (!SIM.macro15.empty() && (SIM.macroSym.empty() || SIM.macroSym == sym)); }
+// a second symbol the broker does not serve (macroSym set to another name): no bars, no rates
+inline bool simMacroServed(const string &sym) { return SIM.macroSym.empty() || SIM.macroSym == sym; }
 inline int simVisibleMacro()
 {
    int k = 0;
    while(k < (int)SIM.macro15.size() && SIM.macro15[(size_t)k].time <= SIM.now) k++;
    return k;
 }
-inline int Bars(const string &sym, ENUM_TIMEFRAMES tf) { return simIsMacro(sym) ? simVisibleMacro() : simVisible(tf); }
+inline int Bars(const string &sym, ENUM_TIMEFRAMES tf) { return simIsMacro(sym) ? (simMacroServed(sym) ? simVisibleMacro() : 0) : simVisible(tf); }
 inline int iBarShift(const string &sym, ENUM_TIMEFRAMES tf, datetime t, bool exact = false)
 {
    (void)exact;
@@ -255,6 +257,7 @@ inline int CopyRates(const string &sym, ENUM_TIMEFRAMES tf, int start, int count
    if(SIM.copyFail) return -1;
    if(simIsMacro(sym))
    {
+      if(!simMacroServed(sym)) return -1;
       int vm = simVisibleMacro();
       if(start >= vm || count <= 0) return -1;
       int last = vm - 1 - start;

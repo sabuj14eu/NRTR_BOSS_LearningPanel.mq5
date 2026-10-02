@@ -1088,7 +1088,22 @@ int main()
       g_macroDir = 0;
       CHECK(!NqLeadBlocks(1, 0) && !NqLeadBlocks(-1, 0), "no lead reading: nothing is blocked");
       g_macroDir = saved;
-      CHECK(lbl("v_e0").find("lead #BTCUSD.m") != std::string::npos, "panel names the lead");
+      CHECK(lbl("v_e0").find("lead #BTCUSD.m") != std::string::npos && lbl("v_e0").find("NO DATA") == std::string::npos, "panel names the lead and its reading");
+      OnDeinit(0);
+      SIM.macro15.clear();
+
+      // a lead symbol typed by hand that the broker cannot serve: kept by name, shown as NO DATA, blocks nothing
+      load(eth, "#ETHUSD.m", "ETH", 2, 0.01, 0.01);
+      SIM.macro15 = toRates(btc.m15);
+      SIM.macroSym = "#BTCUSD.m";
+      startAt(START);
+      run(START + 1, START + 16);
+      g_macroSym = "BTC";
+      NqReadMacro();
+      OnTimer();
+      CHECK(g_macroDir == 0 && lbl("v_e0").find("lead BTC (NO DATA - no lead filter)") != std::string::npos && !NqLeadBlocks(1, 0),
+            "a lead the broker has no data for is shown as NO DATA on the COIN PROFILE row and blocks nothing");
+      SIM.macroSym = "";
       OnDeinit(0);
       SIM.macro15.clear();
 

@@ -5599,7 +5599,7 @@ void NqDrawPanel()
                  : (DoubleToString((InpMaxSpreadAtr > 0.0) ? InpMaxSpreadAtr : g_profSpread, 2) + " ATR");
    string profT = g_coinName + (InpSpecialist ? "" : " (profile off)") + "   risk x" + DoubleToString(g_profRisk, 2) +
                   "   SL buf x" + DoubleToString(g_profBuf, 2) + "   spread <= " + sprT + (g_profRadar ? "" : "   radar off") +
-                  ((g_macroSym == "") ? "   lead none" : ("   lead " + g_macroSym));
+                  ((g_macroSym == "") ? "   lead none" : ("   lead " + g_macroSym + ((g_macroDir == 0) ? " (NO DATA - no lead filter)" : (" " + NqDirText(g_macroDir)))));
    NqRow("e0", kx, vx, yr, "COIN PROFILE", profT, (g_coin == NQ_COIN_NONE) ? cDim : cMetal, cKey, fs);
    yr += rh;
    string volT = "---";
