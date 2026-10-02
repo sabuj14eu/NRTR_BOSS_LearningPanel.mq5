@@ -33,7 +33,7 @@
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.00"
+#property version     "1.11"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -2700,7 +2700,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.1.0"
+#define NQ_EA_VERSION "1.1.1"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -5510,6 +5510,7 @@ void NqDrawPanel()
       title = "LTC  -  NRTR QML CRYPTO SCALPER";
    if(g_coin == NQ_COIN_ALT)
       title = "ALTCOIN  -  NRTR QML CRYPTO SCALPER";
+   title = title + "   v" + NQ_EA_VERSION;   // the build on the chart, so the real file is recognisable
    NqLabel("title", ox + pad, y, title, cMetal, fsT, "Arial Black", ANCHOR_LEFT_UPPER);
    y += (int)MathRound(rh * 1.4);
    double bid = SymbolInfoDouble(g_sym, SYMBOL_BID);

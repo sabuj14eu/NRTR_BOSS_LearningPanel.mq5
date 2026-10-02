@@ -33,7 +33,7 @@
 //|  Personal tool. No network, no Telegram, no DLL, no files.       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.00"
+#property version     "1.71"
 #property description "Gold/Silver: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback pending-order plans + per-candle forecast arrows."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -2635,7 +2635,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.7.0"
+#define NQ_EA_VERSION "1.7.1"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -5318,6 +5318,7 @@ void NqDrawPanel()
       title = "GOLD  -  NRTR QML SCALPER";
    if(g_metal == NQ_METAL_SILVER)
       title = "SILVER  -  NRTR QML SCALPER";
+   title = title + "   v" + NQ_EA_VERSION;   // the build on the chart, so the real file is recognisable
    NqLabel("title", ox + pad, y, title, cMetal, fsT, "Arial Black", ANCHOR_LEFT_UPPER);
    y += (int)MathRound(rh * 1.4);
    double bid = SymbolInfoDouble(g_sym, SYMBOL_BID);
