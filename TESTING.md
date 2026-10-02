@@ -29,13 +29,13 @@ the build environment. The EA was therefore verified like this:
 it behaves on a real broker feed. **Press F7 in MetaEditor and do the manual checks below
 before relying on it.** If F7 reports anything, send the exact message.
 
-## Results (2026-09-29)
+## Results (2026-09-30)
 
 ```
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 EA ENGINE TESTS:  98 checks passed, 0 failed
-EA TESTS:         74 checks passed, 0 failed
+EA TESTS:         140 checks passed, 0 failed
 MetaEditor F7:    NOT RUN (not available in the build environment)
 ```
 
@@ -71,6 +71,7 @@ MetaEditor F7:    NOT RUN (not available in the build environment)
 | A9 | Panel: 7 engine rows, no key twice, every row has a value; board with TYPE/SIDE/ENTRY/SL/TP SENT/DIST/STATUS for 7 plan slots (incl. RADAR UP / DOWN), two RADAR score lines, a permanent SCALP M1 row whose live levels equal ask ∓ 1.5 / ± 1.0 ATR5 with TRIGGER NOW or the WAIT reason, LEVELS (with VWAP) and BREAK lines, level lines and the VWAP polyline on the chart, + 6 broker rows, NY session / pre-NY range / sweep-trap / slot lines, LAST UPDATE; a planted broker order and position appear as rows within one refresh with ticket, kind, NEAR and RUNNING; slot line reads TAKEN | PASS |
 | A11 | The verdict: no position → WAIT / PRICE NEAR / SCALP; a planted position with the regime → `HOLD #ticket`; against it → `EXIT #ticket - REGIME FLIPPED (you decide)` and the bot leaves it (InpPlanCloseOnFlip=false); a level within 0.5 ATR → `PRICE NEAR` banner and a NEAR marker object on the chart | PASS |
 | A12 | Journal: 172 events over the run, one JSON line each in `NQ_events_XAUUSD.jsonl` with the platform fields, first event of every plan is `armed`, at most one terminal event per plan, placed / filled / closed / cancelled all occur, statuses map to pending / executed / closed+win / closed+loss and never `approved`; one POST per line to the configured URL with `X-Brain-Secret` and JSON content type; the secret never appears in the log or a payload; with the platform down 14 events are written to the file and queued, then drained in order once it answers | PASS |
+| A13 | Telemetry (ANALYSIS ONLY): with the journal off and the telemetry URL set, exactly one snapshot per closed M1 candle (30 over 30 bars) to the telemetry URL, JSON, `X-Brain-Secret` in the header; the snapshot opens with `system: NQ-EA, kind: telemetry, mode: ANALYSIS_ONLY`, is balanced JSON and carries the label, source, version, symbol, metal, account mode, both clocks with `server_offset_sec` = 10800 on a +3 h simulated broker, candles with server stamps and EA-clock ages, m15 / m5 / m1 sections with reason arrays, the OBSERVED EA STATE block, scalp row, radar, NY, plans, account and record; no `event` key and no platform status vocabulary at the top level; the M1 age is under 60 s; without a new candle the timer sends one snapshot per 60 s, not one per tick; the secret never appears in the log; on a REAL account with demo-only on nothing is sent and the log says why once; with demo-only off the snapshot says `account_mode: real` | PASS |
 | A10 | Silver (3 digits, tick value 5): SL/TP on the 0.001 grid, lots from the real tick value; with every order rejected: rejections logged, a rejected scalp is not re-sent for the same trigger | PASS |
 
 ## Manual checks in MT5 (10 minutes)

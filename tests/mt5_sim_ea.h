@@ -194,6 +194,7 @@ struct SimState
    struct WebCall { std::string method, url, headers, body; };
    std::vector<WebCall> web;
    int webCode = 200;
+   long long gmtOffsetSec = 0;          // TimeTradeServer() - TimeGMT(): the broker's clock ahead of GMT
 };
 static SimState SIM;
 static std::string _Symbol = "XAUUSD";
@@ -343,6 +344,7 @@ inline long long TerminalInfoInteger(int) { return SIM.terminalTrade ? 1 : 0; }
 inline long long MQLInfoInteger(int) { return SIM.mqlTrade ? 1 : 0; }
 inline datetime TimeTradeServer() { return SIM.now; }
 inline datetime TimeCurrent() { return SIM.now; }
+inline datetime TimeGMT() { return SIM.now - SIM.gmtOffsetSec; }
 inline string TimeToString(datetime t, int flags)
 {
    time_t tt = (time_t)t;

@@ -6,6 +6,7 @@
 #include "ea_full.inc"
 #include "../tests/synth.h"
 #include <cstdio>
+#include <cstdlib>
 #include <set>
 
 static int g_pass = 0, g_fail = 0, g_sec = 0;
@@ -757,6 +758,97 @@ int main()
       (void)webBefore;
    }
    end("A12");
+
+   begin("A13 telemetry: an ANALYSIS ONLY snapshot to its own URL on every closed M1 candle and every N seconds, demo only, secret in the header, never a plan event");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      SIM.gmtOffsetSec = 3 * 3600;
+      startAt(START);
+      g_webUrl = "";                                   // journal off: every POST below is telemetry
+      g_telUrl = "https://status.example/webhooks/metal/telemetry";
+      g_telSec = 60;
+      g_telDemoOnly = true;
+      g_webSecret = "s3cr3t-token";
+      size_t before = SIM.web.size();
+      run(START + 1, START + 30);
+      size_t posts = SIM.web.size() - before;
+      std::printf("    %zu telemetry POSTs over 30 closed M1 bars\n", posts);
+      CHECK(posts == 30, "exactly one snapshot per closed M1 candle");
+      bool routed = posts > 0;
+      std::string last;
+      for(size_t i = before; i < SIM.web.size(); i++)
+      {
+         const auto &w = SIM.web[i];
+         if(w.url != g_telUrl || w.method != "POST" || w.headers.find("X-Brain-Secret: s3cr3t-token") == std::string::npos ||
+            w.headers.find("Content-Type: application/json") == std::string::npos)
+            routed = false;
+         last = w.body;
+      }
+      CHECK(routed, "every snapshot goes to the telemetry URL, JSON, secret in the header");
+      CHECK(last.rfind("{\"system\":\"NQ-EA\",\"kind\":\"telemetry\",\"mode\":\"ANALYSIS_ONLY\"", 0) == 0, "the snapshot names itself ANALYSIS_ONLY before anything else");
+      int braces = 0, brackets = 0;
+      bool inStr = false;
+      for(size_t i = 0; i < last.size(); i++)
+      {
+         char ch = last[i];
+         if(inStr) { if(ch == '\\') i++; else if(ch == '"') inStr = false; continue; }
+         if(ch == '"') inStr = true;
+         else if(ch == '{') braces++;
+         else if(ch == '}') braces--;
+         else if(ch == '[') brackets++;
+         else if(ch == ']') brackets--;
+      }
+      CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.6.0\"",
+                           "\"symbol\":\"XAUUSD\"", "\"metal\":\"GOLD\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
+                           "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
+                           "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
+                           "\"m5\":{\"regime\":\"", "\"structure\":\"", "\"structure_state\":\"", "\"lookback\":3", "\"reasons\":[",
+                           "\"m1\":{\"nrtr_dir\":\"", "\"trigger\":\"", "\"forecast_next\":\"", "\"forecast_resolved\":",
+                           "\"observed\":{\"label\":\"OBSERVED EA STATE - not a SignalMesh recommendation\"", "\"verdict\":\"", "\"gate\":[",
+                           "\"scalp_row\":{\"side\":\"", "\"radar\":{\"up\":{\"state\":\"", "\"ny\":{\"high_side\":\"", "\"plans\":[",
+                           "\"account\":{\"balance\":", "\"record\":{\"scalp\":{\"done\":", "\"evidence\":\""})
+         CHECK(last.find(k) != std::string::npos, k);
+      CHECK(last.find("\"event\":") == std::string::npos && last.find("\"status\":\"pending\"") == std::string::npos,
+            "a snapshot is not a plan event: no event key, no platform status vocabulary at the top level");
+      // the ages are measured on the EA's own clock: the M1 bar closed at most a few seconds before the snapshot
+      {
+         size_t a = last.find("\"m1_age_sec\":");
+         long age = (a == std::string::npos) ? -1 : std::atol(last.c_str() + a + 13);
+         CHECK(age >= 0 && age < 60, "m1_age_sec is the closed bar's age on the server clock");
+      }
+      // timer cadence without a new bar: one snapshot per 60 s, not one per tick
+      size_t b2 = SIM.web.size();
+      for(int k = 0; k < 6; k++) { SIM.now += 10; OnTimer(); }
+      CHECK(SIM.web.size() - b2 == 1, "without a new candle the heartbeat is one snapshot per 60 s");
+      bool leaked = false;
+      for(const std::string &l : SIM.log) if(l.find("s3cr3t") != std::string::npos) leaked = true;
+      CHECK(!leaked, "the secret never appears in the log");
+
+      // a REAL account is never the witness while demo-only is on
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      SIM.accountMode = ACCOUNT_TRADE_MODE_REAL;
+      startAt(START);
+      g_webUrl = "";
+      g_telUrl = "https://status.example/webhooks/metal/telemetry";
+      g_telSec = 60;
+      g_telDemoOnly = true;
+      size_t b3 = SIM.web.size();
+      run(START + 1, START + 10);
+      CHECK(SIM.web.size() == b3, "REAL account + demo-only: no telemetry leaves the terminal");
+      bool said = false;
+      for(const std::string &l : SIM.log) if(l.find("demo-only") != std::string::npos) said = true;
+      CHECK(said, "and the Experts log says why, once");
+      g_telDemoOnly = false;
+      run(START + 11, START + 12);
+      CHECK(SIM.web.size() > b3 && SIM.web.back().body.find("\"account_mode\":\"real\"") != std::string::npos,
+            "with demo-only off the snapshot says account_mode real, so the page can flag it");
+      SIM.accountMode = ACCOUNT_TRADE_MODE_DEMO;
+      SIM.gmtOffsetSec = 0;
+      g_telUrl = "";
+      g_telDemoOnly = true;
+   }
+   end("A13");
 
    begin("A10 silver spec (3 digits, tick value 5): SL/TP on the grid, lots from the real tick value; rejected order is logged, not retried");
    {
