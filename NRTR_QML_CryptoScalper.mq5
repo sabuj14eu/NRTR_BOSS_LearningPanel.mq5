@@ -3530,7 +3530,8 @@ string NqGateNameX(int bit)
 
 string NqGateAtX(int g, int nth)
 {
-   int engine = g & ~(NQ_K_VOL_DEAD | NQ_K_VOL_EXTREME);
+   int mask = NQ_K_VOL_DEAD | NQ_K_VOL_EXTREME;   // an int variable: ~ on the literal is uint in MQL5 (compiler warning)
+   int engine = g & ~mask;
    string s = NqGateAt(engine, nth);
    if(s != "")
       return s;
