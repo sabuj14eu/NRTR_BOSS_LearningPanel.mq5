@@ -77,7 +77,7 @@ HEADER = '''//+-----------------------------------------------------------------
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.11"
+#property version     "1.12"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -413,7 +413,7 @@ def derive_ea(m: str) -> str:
             '   yr += rh;\n'
             '   string volT = "---";\n')
     # 14. version + helper functions (after NqReadAccount's spread read block: append before NqEvaluate's doc comment)
-    t = rep(t, '#define NQ_EA_VERSION "1.7.1"', '#define NQ_EA_VERSION "1.1.1"')
+    t = rep(t, '#define NQ_EA_VERSION "1.7.2"', '#define NQ_EA_VERSION "1.1.2"')
     t = rep(t, "// macro filter (radar only). Metals: the dollar index moving the SAME way as the\n"
                "// intended break is a block. The score is unused here; the crypto twin grades it.\n"
                "bool NqMacroBlocks(int planDir, int score)\n{\n"
@@ -443,7 +443,7 @@ def derive_test(s: str) -> str:
     t = rep(t, 'find("GOLD / SILVER ONLY")', 'find("CRYPTO ONLY")')
     t = rep(t, '"\\"metal\\":\\"GOLD\\""', '"\\"coin\\":\\"BTC\\""')
     t = rep(t, '"\\"source\\":\\"NRTR_QML_MetalScalper\\""', '"\\"source\\":\\"NRTR_QML_CryptoScalper\\""')
-    t = rep(t, '"\\"ea_version\\":\\"1.7.1\\""', '"\\"ea_version\\":\\"1.1.1\\""')
+    t = rep(t, '"\\"ea_version\\":\\"1.7.2\\""', '"\\"ea_version\\":\\"1.1.2\\""')
     t = rep(t, 'CHECK(rows == 8, "8 engine rows (VOL REGIME + the 7 engine rows)");', 'CHECK(rows == 9, "9 engine rows (COIN PROFILE + VOL REGIME + the 7 engine rows)");')
     t = rep(t, "   SIM.tickValue = tickValue;\n", "   SIM.tickValue = tickValue;\n   SIM.contract = 1.0;   // crypto CFD: one coin per lot\n")
     # price offsets of the hand-made broker items, scaled from a $4,150 metal to a $61,500 coin

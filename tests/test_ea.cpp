@@ -85,7 +85,17 @@ static std::string obj(const std::string &name, int prop = OBJPROP_TEXT)
    if(it == SIM.objs.end()) return "<missing>";
    return it->second.s[prop];
 }
-static std::string lbl(const char *id) { return obj(std::string("NQEA_P_") + id); }
+static std::string lbl(const char *id)
+{
+   std::string s = obj(std::string("NQEA_P_") + id);
+   for(int k = 1;; k++)
+   {
+      auto it = SIM.objs.find(std::string("NQEA_P_") + id + "~" + std::to_string(k));
+      if(it == SIM.objs.end()) break;
+      s += it->second.s[OBJPROP_TEXT];
+   }
+   return s;
+}
 static int countSent(int action, bool openingOnly)
 {
    int n = 0;
@@ -422,8 +432,8 @@ int main()
       for(auto &kv : objs)
       {
          auto it = SIM.objs.find(kv.first);
-         if(it == SIM.objs.end()) { diff++; continue; }
-         if(kv.first == "NQEA_P_r2") continue;   // transient note of the last action, not state
+         if(kv.first.compare(0, 9, "NQEA_P_r2") == 0) continue;   // transient note of the last action (and its pieces), not state
+         if(it == SIM.objs.end()) { std::printf("    missing after restart: %s\n", kv.first.c_str()); diff++; continue; }
          if(kv.first.compare(0, 7, "NQEA_P_") == 0 && kv.second.s[OBJPROP_TEXT] != it->second.s[OBJPROP_TEXT])
          {
             std::printf("    differs: %s | %s | %s\n", kv.first.c_str(), kv.second.s[OBJPROP_TEXT].c_str(), it->second.s[OBJPROP_TEXT].c_str());
@@ -603,11 +613,19 @@ int main()
       CHECK(lbl("bb06").find("NEAR") != std::string::npos, "an order within 0.5 ATR of the price is marked NEAR");
       CHECK(lbl("bb10") == "POSITION" && lbl("bb16").find("RUNNING  #555") != std::string::npos, "position row: RUNNING with ticket");
       CHECK(lbl("ny4").find("SLOT  TAKEN") == 0, "slot line says TAKEN while a position is open");
-      // every board line stays inside the panel: at most ~100 characters at the widest
+      // MT5 draws at most 63 characters of a label: no piece may exceed it, and a long text is split, not cut
       bool fits = true;
       for(auto &kv : SIM.objs)
-         if(kv.first.compare(0, 7, "NQEA_P_") == 0 && kv.second.s[OBJPROP_TEXT].size() > 105) { fits = false; std::printf("    too long: %s = %s\n", kv.first.c_str(), kv.second.s[OBJPROP_TEXT].c_str()); }
-      CHECK(fits, "no panel line longer than 105 characters");
+         if(kv.first.compare(0, 5, "NQEA_") == 0 && kv.second.s[OBJPROP_TEXT].size() > 63) { fits = false; std::printf("    too long: %s = %s\n", kv.first.c_str(), kv.second.s[OBJPROP_TEXT].c_str()); }
+      CHECK(fits, "no label piece longer than 63 characters (the MT5 limit)");
+      std::string longT = "LTC   risk x0.75   SL buf x1.50   spread <= 0.25 ATR   lead BTCUSD BULLISH   and a tail that makes it long";
+      NqLabel("zz", 10, 10, longT, 0, 9, "Arial", ANCHOR_LEFT_UPPER);
+      CHECK(obj("NQEA_P_zz").size() <= 63 && SIM.objs.count("NQEA_P_zz~1") > 0 && lbl("zz") == longT &&
+            SIM.objs["NQEA_P_zz~1"].i[OBJPROP_XDISTANCE] > 10,
+            "a long label is split into pieces at spaces, placed side by side, nothing lost");
+      NqLabel("zz", 10, 10, "short", 0, 9, "Arial", ANCHOR_LEFT_UPPER);
+      CHECK(lbl("zz") == "short" && SIM.objs.count("NQEA_P_zz~1") == 0, "a shorter text removes the stale pieces");
+      ObjectsDeleteAll(0, "NQEA_P_zz");
    }
    end("A9");
 
@@ -801,7 +819,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.7.1\"",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.7.2\"",
                            "\"symbol\":\"XAUUSD\"", "\"metal\":\"GOLD\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",

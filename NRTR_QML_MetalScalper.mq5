@@ -33,7 +33,7 @@
 //|  Personal tool. No network, no Telegram, no DLL, no files.       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.71"
+#property version     "1.72"
 #property description "Gold/Silver: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback pending-order plans + per-candle forecast arrows."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -2635,7 +2635,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.7.1"
+#define NQ_EA_VERSION "1.7.2"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -2747,6 +2747,8 @@ void   NqSpikeScan();
 bool   NqSpikeBlocks(const NqPlan &pl);
 bool   NqMacroBlocks(int planDir, int score);
 void   NqDrawWarn();
+void   NqLabelOne(string id, int x, int y, string txt, color clr, int size, string font, int anchor);
+int    NqSplitLabel(string txt, string &parts[]);
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -5208,7 +5210,83 @@ void NqRect(string id, int x, int y, int w, int h, color bg, color border)
    ObjectSetInteger(0, name, OBJPROP_ZORDER, 10);
 }
 
+// MT5 draws at most NQ_LBL_MAX characters of an OBJ_LABEL and silently drops the
+// rest ("lead BTCUSD" became "lead BTC" on a live chart). Longer text is split at
+// spaces into pieces placed side by side (TextGetSize measures each piece in the
+// label's font); the first piece keeps the id, the others are id~1, id~2, ...
+#define NQ_LBL_MAX 63
+int NqSplitLabel(string txt, string &parts[])
+{
+   ArrayResize(parts, 0);
+   int len = StringLen(txt);
+   int pos = 0;
+   while(len - pos > NQ_LBL_MAX)
+   {
+      int cut = -1;
+      for(int i = pos + NQ_LBL_MAX; i > pos + NQ_LBL_MAX / 2; i--)
+      {
+         if(StringGetCharacter(txt, i) == ' ')
+         {
+            cut = i;
+            break;
+         }
+      }
+      if(cut < 0)
+         cut = pos + NQ_LBL_MAX;
+      int n = ArraySize(parts);
+      ArrayResize(parts, n + 1);
+      parts[n] = StringSubstr(txt, pos, cut - pos);
+      pos = cut;                                         // the space leads the next piece: the gap is drawn
+   }
+   int n = ArraySize(parts);
+   ArrayResize(parts, n + 1);
+   parts[n] = StringSubstr(txt, pos);
+   return n + 1;
+}
+
 void NqLabel(string id, int x, int y, string txt, color clr, int size, string font, int anchor)
+{
+   string parts[];
+   int np = NqSplitLabel(txt, parts);
+   if(np > 1)
+   {
+      int widths[];
+      ArrayResize(widths, np);
+      int total = 0;
+      TextSetFont(font, -size * 10);                    // tenths of a point, like the label's point size
+      for(int i = 0; i < np; i++)
+      {
+         int w = 0, h = 0;
+         if(!TextGetSize(parts[i], w, h) || w <= 0)
+            w = StringLen(parts[i]) * size * 2 / 3;      // a guess only if the measure fails
+         widths[i] = w;
+         total += w;
+      }
+      int px = x;
+      int a = anchor;
+      if(anchor == ANCHOR_CENTER)
+      {
+         px = x - total / 2;                             // the pieces together stay centred on x
+         a = ANCHOR_LEFT;
+      }
+      for(int i = 0; i < np; i++)
+      {
+         NqLabelOne(id + ((i == 0) ? "" : ("~" + IntegerToString(i))), px, y, parts[i], clr, size, font, a);
+         px += widths[i];
+      }
+   }
+   else
+      NqLabelOne(id, x, y, txt, clr, size, font, anchor);
+   for(int k = np; ; k++)                               // pieces of an earlier, longer text
+   {
+      string stale = NQ_PFX_P + id + "~" + IntegerToString(k);
+      if(ObjectFind(0, stale) < 0)
+         break;
+      ObjectsDeleteAll(0, stale);
+   }
+}
+
+void NqLabelOne(string id, int x, int y, string txt, color clr, int size, string font, int anchor)
 {
    string name = NQ_PFX_P + id;
    if(ObjectFind(0, name) < 0)

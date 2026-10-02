@@ -79,7 +79,7 @@ enum { OBJPROP_CORNER = 1, OBJPROP_XDISTANCE, OBJPROP_YDISTANCE, OBJPROP_XSIZE, 
        OBJPROP_ZORDER, OBJPROP_ANCHOR, OBJPROP_TEXT, OBJPROP_FONT, OBJPROP_FONTSIZE, OBJPROP_TIME, OBJPROP_PRICE,
        OBJPROP_TOOLTIP, OBJPROP_STYLE, OBJPROP_RAY_RIGHT, OBJPROP_ARROWCODE };
 enum { CORNER_LEFT_UPPER = 0 };
-enum { ANCHOR_LEFT_UPPER = 0, ANCHOR_LEFT_LOWER, ANCHOR_CENTER, ANCHOR_UPPER, ANCHOR_LOWER, ANCHOR_TOP, ANCHOR_BOTTOM };
+enum { ANCHOR_LEFT_UPPER = 0, ANCHOR_LEFT_LOWER, ANCHOR_CENTER, ANCHOR_UPPER, ANCHOR_LOWER, ANCHOR_TOP, ANCHOR_BOTTOM, ANCHOR_LEFT };
 enum { BORDER_FLAT = 0 };
 enum { STYLE_SOLID = 0, STYLE_DASH, STYLE_DOT };
 enum { TIME_DATE = 1, TIME_MINUTES = 2, TIME_SECONDS = 4 };
@@ -772,6 +772,8 @@ inline int ObjectsDeleteAll(long, const string &prefix, int = -1, int = -1)
       else ++it;
    return n;
 }
+inline bool TextSetFont(const string &, int, unsigned = 0, int = 0) { return true; }
+inline bool TextGetSize(const string &t, int &w, int &h) { w = (int)t.size() * 7; h = 14; return true; }   // a fixed-pitch stand-in
 inline void ChartRedraw(long = 0) {}
 inline long long ChartGetInteger(long, int prop, int = 0) { return prop == CHART_WIDTH_IN_PIXELS ? 1400 : 900; }
 inline bool EventSetTimer(int) { return true; }
