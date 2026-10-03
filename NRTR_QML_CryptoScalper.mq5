@@ -33,7 +33,7 @@
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.12"
+#property version     "1.13"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -2700,7 +2700,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.1.2"
+#define NQ_EA_VERSION "1.1.3"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -4445,6 +4445,10 @@ string NqTelemetryJson()
               NqJsonS("mode", "ANALYSIS_ONLY") + "," + NqJsonS("label", "ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL") + "," +
               NqJsonS("source", "NRTR_QML_CryptoScalper") + "," + NqJsonS("ea_version", NQ_EA_VERSION) + "," +
               NqJsonS("symbol", g_sym) + "," + NqJsonS("asset_class", "crypto") + "," + NqJsonS("coin", g_coinName) + "," +
+              NqJsonB("specialist", InpSpecialist) + "," + NqJsonN("prof_risk", g_profRisk, 2) + "," + NqJsonN("prof_buf", g_profBuf, 2) + "," +
+              NqJsonN("prof_imp", g_profImp, 2) + "," + NqJsonN("prof_spread_atr", (InpMaxSpreadAtr > 0.0) ? InpMaxSpreadAtr : g_profSpread, 2) + "," +
+              NqJsonB("prof_radar", g_profRadar) + "," + NqJsonS("lead_symbol", g_macroSym) + "," +
+              NqJsonS("lead_dir", (g_macroDir == 0) ? "" : NqDirText(g_macroDir)) + "," +
               NqJsonS("account_mode", g_isDemo ? "demo" : "real") + "," + NqJsonI("magic", InpMagic) + "," +
               NqJsonI("ts_server", (long)nowS) + "," + NqJsonI("ts_gmt", (long)nowG) + "," +
               NqJsonI("server_offset_sec", (long)nowS - (long)nowG) + "," + NqJsonI("heartbeat_sec", g_telSec) + "," +

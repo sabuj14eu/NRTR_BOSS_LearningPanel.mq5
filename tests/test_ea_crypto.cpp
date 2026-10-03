@@ -821,7 +821,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_CryptoScalper\"", "\"ea_version\":\"1.1.2\"",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_CryptoScalper\"", "\"ea_version\":\"1.1.3\"", "\"prof_risk\":1.00", "\"prof_spread_atr\":0.15", "\"lead_symbol\":\"\"",
                            "\"symbol\":\"BTCUSD\"", "\"coin\":\"BTC\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",

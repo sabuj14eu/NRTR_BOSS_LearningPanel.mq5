@@ -42,7 +42,7 @@ panel, the verdict - is the same text. Only the asset side differs:
 | Sessions | metals break at the rollover | **24/7**: the session clock only shapes the levels (Asia / London / NY, previous day, VWAP), it never stops the bot. The NY trap still uses the NY open on the server clock |
 | Magic | 180915 | 180916 |
 | Journal | `system: NQ-EA` | the same keys plus `engine: NQ-CRYPTO` and `coin: BTC/ETH/LTC/ALT` (append-only) |
-| Telemetry | METAL ANALYSIS page | off by default; sends `asset_class: crypto` + `coin` to a crypto telemetry URL (a CRYPTO ANALYSIS page is a platform follow-up) |
+| Telemetry | METAL ANALYSIS page (`/webhooks/metal/telemetry`) | CRYPTO ANALYSIS page (`/webhooks/crypto/telemetry`, SignalMesh v5.107): the same snapshot plus `asset_class: crypto`, `coin`, the class profile (`specialist`, `prof_risk`, `prof_buf`, `prof_imp`, `prof_spread_atr`, `prof_radar`) and the BTC lead (`lead_symbol`, `lead_dir`) |
 
 One chart per coin, one EA per chart; the metal and crypto EAs never see each other's orders
 (magic + symbol). Everything else in this README applies to both files. It replaces the

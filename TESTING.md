@@ -41,7 +41,7 @@ EA TESTS:         164 checks passed, 0 failed
 -- NRTR_QML_CryptoScalper.mq5 --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-CRYPTO EA TESTS:  194 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
+CRYPTO EA TESTS:  197 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
                   BTC-sized market + an LTC 3-digit spec, plus the 6 crypto sections below)
 MetaEditor F7:    NOT RUN (not available in the build environment) - for BOTH files
 ```
@@ -56,7 +56,7 @@ the crypto EA only by running the script, never by hand.
 
 | # | Case | Result |
 |---|---|---|
-| A1-A15 | The metal whole-EA sections on a BTC-sized market ($61,500, ~0.05 % per M1 bar, 1 coin per lot, tick value 0.01) and an LTC 3-digit spec: scalps, plans, one slot, REAL account, Algo switch, manual items untouched, daily cap, spread guard ($200 spread over 0.15 x ATR blocks), regime flip, restart identity, stale feed, `CRYPTO ONLY` on EURUSD, arrows, panel (9 rows: COIN PROFILE + VOL REGIME + 7), verdict, journal, telemetry (`source: NRTR_QML_CryptoScalper`, `ea_version: 1.1.2`), volatility regime, spike guard + EXIT WARNING | PASS |
+| A1-A15 | The metal whole-EA sections on a BTC-sized market ($61,500, ~0.05 % per M1 bar, 1 coin per lot, tick value 0.01) and an LTC 3-digit spec: scalps, plans, one slot, REAL account, Algo switch, manual items untouched, daily cap, spread guard ($200 spread over 0.15 x ATR blocks), regime flip, restart identity, stale feed, `CRYPTO ONLY` on EURUSD, arrows, panel (9 rows: COIN PROFILE + VOL REGIME + 7), verdict, journal, telemetry (`source: NRTR_QML_CryptoScalper`, `ea_version: 1.1.3`), volatility regime, spike guard + EXIT WARNING | PASS |
 | C1 | Coin detector: BTC spellings (BTCUSD, #BTCUSD.m, XBTUSD, BITCOIN, btcusdt), ETH / LTC spellings incl. `ETH/USD` and LITECOIN, altcoins by ticker (SOL, DOGE, #XRPUSD.c, ADA); forex, metals, a non-dollar quote (ETHEUR), ETHW and an unknown coin refused; `InpCoinClass` forces the class | PASS |
 | C2 | Specialist profile: BTC raw risk and buffers; ETH buffers x1.25 at full risk; ALT half the risk money, buffers x1.5, impulse x1.25, radar plans not tradable; the COIN PROFILE panel row says so | PASS |
 | C3 | Spread cap in ATR: the cap equals 0.15 x ATR(M5) in points, a 600-point BTC spread passes, one point over the cap is SPREAD TOO WIDE | PASS |
