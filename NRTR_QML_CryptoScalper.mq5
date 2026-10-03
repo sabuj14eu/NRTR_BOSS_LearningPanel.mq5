@@ -1,41 +1,41 @@
 //+------------------------------------------------------------------+
-//|                                       NRTR_QML_MetalScalper.mq5  |
-//|        Gold / Silver scalp + pending-order EA  (MT5 DEMO)        |
+//|                                      NRTR_QML_CryptoScalper.mq5  |
+//|    BTC / ETH / LTC / ALTCOIN scalp + pending-order EA  (MT5)      |
+//|                                                                  |
+//|  The CRYPTO TWIN of NRTR_QML_MetalScalper.mq5: the same engine,  |
+//|  the same one-slot rule, the same risk gate, the same journal,   |
+//|  derived mechanically by tools/derive_crypto_ea.py. Only the     |
+//|  asset side differs:                                             |
+//|   * COIN CLASS: BTC, ETH, LTC or ALT (any other coin), detected   |
+//|     from the symbol name or forced with InpCoinClass.            |
+//|   * SPECIALIST PROFILE per class: risk multiplier (<= 1, never    |
+//|     widens), SL-buffer and min-impulse multipliers (>= 1), a     |
+//|     spread cap in ATR, radar on/off. Shown on the panel.         |
+//|   * SPREAD CAP = x ATR(M5), not points: a BTC spread is hundreds  |
+//|     of points, an altcoin's a handful - points mean nothing here. |
+//|   * BTC-LEAD FILTER: the alts follow BTC. A radar break that      |
+//|     BTC's M15 NRTR points against is blocked. The lead symbol is |
+//|     the broker's BTC symbol, found automatically.                 |
+//|   * 24/7: crypto never closes, so the session clock only shapes  |
+//|     the levels (Asia / London / NY), it never stops the bot.     |
 //|                                                                  |
 //|  M15 = CONTEXT ONLY        (EMA200 + NRTR: shades, never gates)  |
 //|   M5 = REGIME + STRUCTURE  (NRTR + confirmed HH/HL or LH/LL)     |
 //|         -> BULLISH / BEARISH / CHOP-UNKNOWN                      |
 //|   M1 = ENTRY TRIGGER       (NRTR realign + CLOSED candle)        |
 //|         -> BUY / SELL / WAIT                                     |
-//|   RISK ENGINE  -> AUTO LOT  -> MT5 (demo by default)             |
+//|   RISK ENGINE  -> AUTO LOT  -> MT5                               |
 //|                                                                  |
-//|  Two ways to trade, both from CLOSED candles only:               |
-//|   1. AUTO SCALP: market order on the M1 trigger. SL 1.5 x ATR5,  |
-//|      TP 1.0 x ATR5 (the validated small-R ladder), time stop.    |
-//|   2. PENDING ORDER PLAN: QML (Quasimodo) reversal limit orders   |
-//|      and 50% pullback limit orders in the M5 regime. Set them    |
-//|      and go to work; the EA can place/cancel them for you.       |
-//|                                                                  |
-//|  FORECAST ARROW: every candle gets an arrow with the forecast    |
-//|  for the NEXT candle. It is a forecast, so its hit rate is       |
-//|  measured and shown. n < 20 is luck, ~100 to judge.              |
-//|                                                                  |
-//|  SPIKE GUARD + VOLATILITY REGIME (news days, v1.7): ATR(M5)      |
-//|  against its own average gates NEW entries (DEAD / EXTREME =     |
-//|  none, EXPANSION = stronger confirmation); a spike of 4+ ATR     |
-//|  inside an hour blocks pullback / scalp / breakout entries in    |
-//|  its own direction (a retrace of a spike is not a pullback) and  |
-//|  flashes EXIT WARNING on a position once half of it is given     |
-//|  back. Closing is never blocked; only opening is.                |
-//|                                                                  |
-//|  Supported symbols: Gold (XAUUSD / GOLD) and Silver (XAGUSD /    |
-//|  SILVER), any broker prefix/suffix. Nothing else.                |
-//|  Personal tool. No network, no Telegram, no DLL, no files.       |
+//|  Supported symbols: BTC (BTCUSD / XBTUSD), ETH, LTC and any      |
+//|  altcoin quoted in USD / USDT / USDC / BUSD, any broker prefix   |
+//|  or suffix. A coin AUTO does not know: set InpCoinClass = ALT.   |
+//|  Personal tool. No Telegram, no DLL. Network = the two optional  |
+//|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.72"
-#property description "Gold/Silver: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
-#property description "Auto scalp + QML/pullback pending-order plans + per-candle forecast arrows."
+#property version     "1.12"
+#property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
+#property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
 #property strict
 
@@ -145,10 +145,12 @@
 #define NQ_RD_NEAR     3   // within 1 ATR, score 5-6
 #define NQ_RD_READY    4   // score >= 7 within 1 ATR: plan armed
 
-// supported metals
-#define NQ_METAL_NONE   0
-#define NQ_METAL_GOLD   1
-#define NQ_METAL_SILVER 2
+// supported coin classes (the specialist profile follows the class)
+#define NQ_COIN_NONE 0
+#define NQ_COIN_BTC  1
+#define NQ_COIN_ETH  2
+#define NQ_COIN_LTC  3
+#define NQ_COIN_ALT  4
 
 struct NqParams
 {
@@ -2190,9 +2192,29 @@ bool NqIsFresh(datetime last1, int sec1, datetime last5, int sec5, datetime last
    return true;
 }
 
-//--- Gold / Silver only. Broker prefixes/suffixes are fine (XAUUSD.m, #XAGUSD).
-int NqMetalOf(string name, string base, string profitCcy)
+//--- BTC / ETH / LTC / altcoins only. Broker prefixes/suffixes are fine
+//    (BTCUSD.m, #ETHUSD, LTCUSDT, SOL/USD). The quote must be a dollar: USD,
+//    USDT, USDC or BUSD. forced = NQ_COIN_BTC/ETH/LTC/ALT skips the name test
+//    (the user vouches for the symbol with InpCoinClass); NQ_COIN_NONE = detect.
+// true when the (upper-case, prefix-stripped) name starts with the ticker and a
+// dollar quote or a separator follows, or the base currency IS the ticker
+bool NqNameIs(string u, string b, string tk)
 {
+   if(b == tk)
+      return true;
+   if(StringFind(u, tk) != 0)
+      return false;
+   string rest = StringSubstr(u, StringLen(tk));
+   if(rest == "" || StringFind(rest, "USD") == 0 || StringFind(rest, "BUSD") == 0)
+      return true;
+   ushort ch = StringGetCharacter(rest, 0);
+   return !(ch >= 'A' && ch <= 'Z');
+}
+
+int NqCoinOf(string name, string base, string profitCcy, int forced)
+{
+   if(forced == NQ_COIN_BTC || forced == NQ_COIN_ETH || forced == NQ_COIN_LTC || forced == NQ_COIN_ALT)
+      return forced;
    string u = name;
    StringToUpper(u);
    int len = StringLen(u);
@@ -2210,13 +2232,34 @@ int NqMetalOf(string name, string base, string profitCcy)
    StringToUpper(b);
    string q = profitCcy;
    StringToUpper(q);
-   if(q != "" && q != "USD")
-      return NQ_METAL_NONE;
-   if(StringFind(u, "XAU") == 0 || StringFind(u, "GOLD") == 0 || b == "XAU")
-      return NQ_METAL_GOLD;
-   if(StringFind(u, "XAG") == 0 || StringFind(u, "SILVER") == 0 || b == "XAG")
-      return NQ_METAL_SILVER;
-   return NQ_METAL_NONE;
+   if(q != "" && q != "USD" && q != "USDT" && q != "USDC" && q != "BUSD")
+      return NQ_COIN_NONE;
+   if(NqNameIs(u, b, "BTC") || NqNameIs(u, b, "XBT") || StringFind(u, "BITCOIN") == 0)
+      return NQ_COIN_BTC;
+   if(NqNameIs(u, b, "ETH") || StringFind(u, "ETHEREUM") == 0)
+      return NQ_COIN_ETH;
+   if(NqNameIs(u, b, "LTC") || StringFind(u, "LITECOIN") == 0)
+      return NQ_COIN_LTC;
+   // altcoins: a known ticker at the start of the name (dollar quote after it) or as the base
+   string alts = "XRP,SOL,ADA,DOGE,BNB,DOT,LINK,AVAX,MATIC,POL,BCH,XLM,TRX,UNI,ATOM,NEAR,ETC,SHIB,PEPE,APT,ARB,OP,SUI,TON,"
+                 "FIL,AAVE,ALGO,EOS,XMR,DASH,ZEC,HBAR,ICP,VET,SAND,MANA,AXS,GRT,INJ,SEI,TIA,RNDR,RENDER,FET,KAS,WIF,BONK,"
+                 "FLOKI,IMX,STX,MKR,LDO,CRV,RUNE,THETA,XTZ,NEO,QNT,KSM,EGLD,FLOW,MINA,ROSE,GALA,ENJ,CHZ,ONE,ZIL,IOTA,MIOTA,"
+                 "DYDX,GMX,PENDLE,JUP,ENA,ONDO,WLD,TAO,ORDI,PYTH,JTO,STRK,BLUR,CFX,KAVA,COMP,SNX,SUSHI,YFI,1INCH,BAT,ZRX,"
+                 "ANKR,STORJ,SKL,CELO,QTUM,ICX,ONT,WAVES,DGB,LRC,RVN,HNT,AR,CAKE,LUNA,LUNC,APE,BSV,XEM,NANO,OMG,ZEN,DCR,"
+                 "BTT,HOT,SXP,TRB,BAND,OCEAN,NMR,AUDIO,CTSI,MASK,GLM,LPT,AGIX,WOO,JASMY,ASTR,BEAM,NEXO,TWT,OKB,CRO,LEO,KCS";
+   int pos = 0;
+   int n = StringLen(alts);
+   while(pos < n)
+   {
+      int comma = StringFind(alts, ",", pos);
+      if(comma < 0)
+         comma = n;
+      string tk = StringSubstr(alts, pos, comma - pos);
+      if(tk != "" && NqNameIs(u, b, tk))
+         return NQ_COIN_ALT;
+      pos = comma + 1;
+   }
+   return NQ_COIN_NONE;
 }
 
 //--- text helpers (ASCII source; symbols built from code points)
@@ -2307,7 +2350,7 @@ string NqReasonName(int bit)
 {
    switch(bit)
    {
-      case NQ_R_UNSUPPORTED:     return "GOLD / SILVER ONLY";
+      case NQ_R_UNSUPPORTED:     return "CRYPTO ONLY - BTC / ETH / LTC / ALTCOIN (set InpCoinClass)";
       case NQ_R_STALE:           return "DATA STALE / MARKET CLOSED";
       case NQ_R_NO_DATA:         return "MISSING DATA - NOT ENOUGH HISTORY";
       case NQ_R_NO_HIGHER_BAR:   return "NO CLOSED M5 BAR YET";
@@ -2478,6 +2521,15 @@ enum ENUM_NQ_CORNER
    NQ_BOTTOM_LEFT = 2   // Bottom left
 };
 
+enum ENUM_NQ_COIN
+{
+   NQ_COIN_AUTO_SEL = 0,   // AUTO: detect from the symbol name
+   NQ_COIN_BTC_SEL  = 1,   // BTC specialist
+   NQ_COIN_ETH_SEL  = 2,   // ETH specialist
+   NQ_COIN_LTC_SEL  = 3,   // LTC specialist
+   NQ_COIN_ALT_SEL  = 4    // ALTCOIN specialist (any other coin)
+};
+
 // volatility regime (terminal layer; the engine never sees it)
 #define NQ_VOL_UNKNOWN   0
 #define NQ_VOL_DEAD      1
@@ -2495,6 +2547,10 @@ input int            InpEmaSlow          = 200;         // M15 context EMA
 input int            InpEmaFast          = 20;          // Fast EMA (M1 filter + forecast)
 input int            InpSwingStrength    = 3;           // Structure lookback: bars each side of a swing
 input int            InpHistoryDays      = 8;           // History used (days)
+input group "Coin specialist (BTC / ETH / LTC / ALT - the profile follows the class)"
+input ENUM_NQ_COIN   InpCoinClass        = NQ_COIN_AUTO_SEL; // Coin class: AUTO detects it; set ALT to trade a coin AUTO does not know
+input bool           InpSpecialist       = true;        // Apply the class profile (risk x, SL buffers x, min impulse x, radar on/off); false = raw inputs
+input int            InpLeadOverrideScore = 9;         // Lead against: the coin's OWN A+ structure overrides it at this radar score (M15 context + M5 regime must agree); 11 = never
 input group "Auto scalp (market order on the M1 trigger)"
 input bool           InpScalpAuto        = true;        // Auto scalp (lowest priority: only when no plan order is waiting)
 input double         InpScalpSlAtr       = 1.5;         // Scalp SL = x ATR(M5)  (1.5 validated)
@@ -2520,8 +2576,9 @@ input bool           InpTradeNyTrap      = true;        // Trade NY trap plans
 input bool           InpTradeSwing       = true;        // Trade M15 swing plans (QML + pullback)
 input bool           InpTradeRadar       = true;        // Trade IMPULSE RADAR plans (STOP orders beyond the nearest level)
 input double         InpRadarBufAtr      = 0.15;        // Radar stop order: buffer beyond the level (x ATR5)
-input string         InpMacroSymbol      = "";          // Macro filter symbol (e.g. USDX / DXY); empty = off
-input bool           InpMacroBlocks      = true;        // Block a radar order when the macro symbol's M15 NRTR points the same way
+input string         InpMacroSymbol      = "";          // BTC-lead symbol; empty = AUTO (the broker's BTC symbol for ETH/LTC/ALT, none for BTC); "-" = off
+input bool           InpMacroBlocks      = true;        // Block a radar order when the lead's M15 NRTR points AGAINST the break (alts follow BTC)
+input bool           InpMacroInverse     = false;       // The lead moves INVERSELY (e.g. DXY): block when it points the SAME way instead
 input group "NY trap + swing"
 input int            InpNyStartHour      = 16;          // NY open, server hour   (EET broker: 16:30 all year)
 input int            InpNyStartMin       = 30;          // NY open, server minute
@@ -2551,18 +2608,19 @@ input double         InpRiskPct          = 0.5;         // Risk per trade (% of 
 input double         InpDailyLossCapPct  = 2.0;         // Daily loss cap (% of balance) stops new trades; 0 = off
 input int            InpMaxOpenPositions = 1;           // Max open positions (ONE SLOT per asset is enforced regardless)
 input int            InpMaxTradesPerDay  = 0;           // Max entries per day (0 = unlimited)
-input int            InpMaxSpreadPoints  = 50;          // Max spread (points)
+input int            InpMaxSpreadPoints  = 0;           // Max spread (points); 0 = the ATR rule below (crypto spreads are hundreds of points)
+input double         InpMaxSpreadAtr     = 0.0;         // Max spread as x ATR(M5); 0 = the class profile (BTC 0.15, ETH 0.20, LTC 0.25, ALT 0.30)
 input int            InpSessionStartHour = 0;           // Session start (server hour); 0-24 = trade round the clock
 input int            InpSessionEndHour   = 24;          // Session end (server hour)
 input bool           InpAllowRealAccount = true;        // Trade on a REAL account (false = demo only). The MT5 Algo Trading button is the on/off switch
-input int            InpMagic            = 180915;      // Magic number
+input int            InpMagic            = 180916;      // Magic number
 input int            InpSlippagePoints   = 20;          // Max slippage (points)
 input group "SignalMesh journal (every plan event, append-only)"
 input bool           InpJournalToFile    = true;        // Append every event to MQL5/Files/NQ_events_<symbol>.jsonl
 input string         InpSignalMeshUrl    = "";          // POST events here (e.g. https://app.signalmesh.dev/webhooks/brain/signal); empty = off
 input string         InpSignalMeshSecret = "";          // X-Brain-Secret for that URL (never printed). Allow the URL in Tools > Options > Expert Advisors
-input group "SignalMesh telemetry (ANALYSIS ONLY - a data witness for the METAL ANALYSIS page, never a signal)"
-input string         InpTelemetryUrl     = "";          // POST a state snapshot here (e.g. https://app.signalmesh.dev/webhooks/metal/telemetry); empty = off
+input group "SignalMesh telemetry (ANALYSIS ONLY - a data witness for the CRYPTO ANALYSIS page, never a signal)"
+input string         InpTelemetryUrl     = "";          // POST a state snapshot here (e.g. https://app.signalmesh.dev/webhooks/crypto/telemetry); empty = off
 input int            InpTelemetrySec     = 60;          // Heartbeat every N seconds, and on every closed M1 candle (min 5)
 input bool           InpTelemetryDemoOnly = true;       // Send telemetry from a DEMO account only: a REAL account is never the witness
 input group "Forecast arrows"
@@ -2577,7 +2635,14 @@ input bool           InpDrawChart        = true;        // Draw arrows / structu
 
 // symbol specification (always read from MT5, never hard-coded)
 string   g_sym;
-int      g_metal;
+int      g_coin;
+string   g_coinName;   // BTC / ETH / LTC / ALT
+string   g_macroSym;   // the lead symbol in force ("" = none)
+double   g_profRisk;   // class profile: risk multiplier (<= 1, never widens)
+double   g_profBuf;    // SL-buffer multiplier (>= 1)
+double   g_profImp;    // pullback min-impulse multiplier (>= 1)
+double   g_profSpread; // spread cap as x ATR(M5)
+bool     g_profRadar;  // radar (breakout STOP) plans allowed for this class
 int      g_digits;
 double   g_tick;
 double   g_point;
@@ -2635,7 +2700,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.7.2"
+#define NQ_EA_VERSION "1.1.2"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -2648,7 +2713,7 @@ datetime g_webLast;
 int      g_webFails;
 bool     g_jrFileWarned;
 // telemetry (ANALYSIS ONLY): a heartbeat snapshot of the panel's state for the
-// SignalMesh METAL ANALYSIS page. It reads state and sends it; it never
+// SignalMesh CRYPTO ANALYSIS page. It reads state and sends it; it never
 // changes a decision, a level or an order, and a failed POST is a Print.
 string   g_telUrl;
 int      g_telSec;
@@ -2738,6 +2803,9 @@ bool   NqPlanByComment(string cmt, NqPlan &out);
 string NqJsonS(string key, string val);
 string NqJsonN(string key, double val, int digits);
 string NqJsonI(string key, long val);
+void   NqSetProfile();
+string NqResolveLead();
+int    NqMaxSpreadPts();
 void   NqVolRegime();
 int    NqVolGateBits();
 string NqVolClassText(int c);
@@ -2745,7 +2813,7 @@ string NqGateAtX(int g, int nth);
 string NqGateNameX(int bit);
 void   NqSpikeScan();
 bool   NqSpikeBlocks(const NqPlan &pl);
-bool   NqMacroBlocks(int planDir, int score);
+bool   NqLeadBlocks(int planDir, int score);
 void   NqDrawWarn();
 void   NqLabelOne(string id, int x, int y, string txt, color clr, int size, string font, int anchor);
 int    NqSplitLabel(string txt, string &parts[]);
@@ -2759,7 +2827,7 @@ int OnInit()
       InpQmlWaitBars < 1 || InpPlanValidBars < 1 || InpPbRetrace <= 0.0 || InpPbRetrace >= 1.0 ||
       InpPbMinImpulseAtr < 0.0 || InpPbSlBufAtr < 0.0 || InpPlanTp1R <= 0.0 || InpPlanTp2R <= 0.0 ||
       InpRiskPct <= 0.0 || InpRiskPct > 5.0 || InpDailyLossCapPct < 0.0 || InpMaxOpenPositions < 0 ||
-      InpMaxTradesPerDay < 0 || InpMaxSpreadPoints < 0 ||
+      InpMaxTradesPerDay < 0 || InpMaxSpreadPoints < 0 || InpMaxSpreadAtr < 0.0 || InpLeadOverrideScore < 0 || InpLeadOverrideScore > 11 ||
       InpVolAvgBars < 20 || InpVolDead <= 0.0 || InpVolDead >= InpVolExpand || InpVolExpand >= InpVolExtreme ||
       InpVolExpandRadar < 0 || InpVolExpandRadar > 10 || InpSpikeBars < 2 || InpSpikeX < 1.0 || InpSpikeRetrace <= 0.0 ||
       InpSpikeRetrace > 1.0 || InpSessionStartHour < 0 || InpSessionStartHour > 24 ||
@@ -2777,8 +2845,10 @@ int OnInit()
    }
 
    g_sym = _Symbol;
-   g_metal = NqMetalOf(g_sym, SymbolInfoString(g_sym, SYMBOL_CURRENCY_BASE),
-                       SymbolInfoString(g_sym, SYMBOL_CURRENCY_PROFIT));
+   g_coin = NqCoinOf(g_sym, SymbolInfoString(g_sym, SYMBOL_CURRENCY_BASE),
+                     SymbolInfoString(g_sym, SYMBOL_CURRENCY_PROFIT), (int)InpCoinClass);
+   NqSetProfile();
+   g_macroSym = NqResolveLead();
    NqReadSpec();
 
    g_P.atrPeriod = InpNrtrAtrPeriod;
@@ -2790,12 +2860,12 @@ int OnInit()
    g_P.scalpTpAtr = InpScalpTpAtr;
    g_P.scalpValidBars = InpScalpValidBars;
    g_P.scalpTimeBars = InpScalpTimeStop;
-   g_P.qmlSlBufAtr = InpQmlSlBufAtr;
+   g_P.qmlSlBufAtr = InpQmlSlBufAtr * g_profBuf;      // class profile: wider, never tighter
    g_P.qmlWaitBars = InpQmlWaitBars;
    g_P.planValidBars = InpPlanValidBars;
    g_P.pbRetrace = InpPbRetrace;
-   g_P.pbMinImpulseAtr = InpPbMinImpulseAtr;
-   g_P.pbSlBufAtr = InpPbSlBufAtr;
+   g_P.pbMinImpulseAtr = InpPbMinImpulseAtr * g_profImp;
+   g_P.pbSlBufAtr = InpPbSlBufAtr * g_profBuf;
    g_P.planTp1R = InpPlanTp1R;
    g_P.planTp2R = InpPlanTp2R;
    g_P.fcMinScore = InpForecastMinScore;
@@ -2884,7 +2954,7 @@ int OnInit()
    g_newBar1 = false;
    g_fresh = false;
    g_final = NQ_WAIT;
-   g_finalR = (g_metal == NQ_METAL_NONE) ? NQ_R_UNSUPPORTED : NQ_R_NO_DATA;
+   g_finalR = (g_coin == NQ_COIN_NONE) ? NQ_R_UNSUPPORTED : NQ_R_NO_DATA;
    g_gate = 0;
    g_lotNext = 0.0;
    g_lossNext = 0.0;
@@ -2933,7 +3003,7 @@ void NqUpdate()
 {
    g_newBar1 = false;
    g_newBar5 = false;
-   if(g_metal != NQ_METAL_NONE)
+   if(g_coin != NQ_COIN_NONE)
    {
       datetime t15 = iTime(g_sym, PERIOD_M15, 1);
       datetime t5 = iTime(g_sym, PERIOD_M5, 1);
@@ -2979,10 +3049,10 @@ void NqVerdict()
    g_nearPrice = 0.0;
    g_nearDir = 0;
    g_warnOn = false;
-   bool ok = (g_metal != NQ_METAL_NONE && g_ready && g_s5.n > 0 && g_s1.n > 0);
-   if(g_metal == NQ_METAL_NONE)
+   bool ok = (g_coin != NQ_COIN_NONE && g_ready && g_s5.n > 0 && g_s1.n > 0);
+   if(g_coin == NQ_COIN_NONE)
    {
-      g_verdict = NqSymDot() + "  GOLD / SILVER ONLY";
+      g_verdict = NqSymDot() + "  CRYPTO ONLY  (BTC / ETH / LTC / ALT - set InpCoinClass)";
       g_verdictClr = cWait;
       return;
    }
@@ -3215,16 +3285,16 @@ bool NqLoad(ENUM_TIMEFRAMES tf, NqSeries &s, int &why)
    return NqLoadSym(g_sym, tf, s, why);
 }
 
-// macro filter: the M15 NRTR direction of another symbol (e.g. the dollar index)
+// lead filter: the M15 NRTR direction of the lead symbol (BTC for the alts)
 void NqReadMacro()
 {
    g_macroDir = 0;
-   if(InpMacroSymbol == "")
+   if(g_macroSym == "")
       return;
    NqSeries m;
    NqSeriesResize(m, 0);
    int why = 0;
-   if(!NqLoadSym(InpMacroSymbol, PERIOD_M15, m, why))
+   if(!NqLoadSym(g_macroSym, PERIOD_M15, m, why))
       return;
    NqCalcATR(m.h, m.l, m.c, m.n, g_P.atrPeriod, m.atr);
    NqCalcNRTR(m.c, m.atr, m.n, g_P.nrtrMult, m.dir, m.stop, m.ext, m.flip);
@@ -3354,7 +3424,7 @@ bool NqKindEnabled(const NqPlan &p)
    if(p.kind == NQ_PLAN_NY)
       return InpTradeNyTrap;
    if(p.kind == NQ_PLAN_RADAR)
-      return InpTradeRadar;
+      return InpTradeRadar && g_profRadar;   // the class profile can switch breakout stops off
    if(p.tf == 900)
       return InpTradeSwing;
    return (p.kind == NQ_PLAN_QML) ? InpTradeQml : InpTradePullback;
@@ -3363,15 +3433,6 @@ bool NqKindEnabled(const NqPlan &p)
 bool NqIsOurs(long magic, string sym)
 {
    return (magic == InpMagic && sym == g_sym);
-}
-
-// macro filter (radar only). Metals: the dollar index moving the SAME way as the
-// intended break is a block. The score is unused here; the crypto twin grades it.
-bool NqMacroBlocks(int planDir, int score)
-{
-   if(!InpMacroBlocks || g_macroDir == 0 || planDir == 0)
-      return false;
-   return g_macroDir == planDir;
 }
 
 //+------------------------------------------------------------------+
@@ -3577,12 +3638,130 @@ bool NqSpikeBlocks(const NqPlan &pl)
    return (pl.kind == NQ_PLAN_PB || pl.kind == NQ_PLAN_RADAR);
 }
 
+//+------------------------------------------------------------------+
+//| COIN SPECIALIST PROFILE. The class decides how careful the bot is |
+//| with this coin. Multipliers only ever REDUCE risk (<= 1) and only |
+//| ever WIDEN buffers (>= 1); the panel shows the profile in force.   |
+//+------------------------------------------------------------------+
+void NqSetProfile()
+{
+   g_coinName = "NONE";
+   g_profRisk = 1.0;
+   g_profBuf = 1.0;
+   g_profImp = 1.0;
+   g_profSpread = 0.20;
+   g_profRadar = true;
+   if(g_coin == NQ_COIN_BTC)
+   {
+      g_coinName = "BTC";          // the lead: deepest book, tightest spread, trends cleanly
+      g_profSpread = 0.15;
+   }
+   if(g_coin == NQ_COIN_ETH)
+   {
+      g_coinName = "ETH";          // higher beta than BTC: wicks run further past a level
+      g_profBuf = 1.25;
+      g_profSpread = 0.20;
+   }
+   if(g_coin == NQ_COIN_LTC)
+   {
+      g_coinName = "LTC";          // thinner book: wider stops, more impulse asked, less risk
+      g_profRisk = 0.75;
+      g_profBuf = 1.5;
+      g_profImp = 1.25;
+      g_profSpread = 0.25;
+   }
+   if(g_coin == NQ_COIN_ALT)
+   {
+      g_coinName = "ALT";          // anything else: half risk, widest buffers, no breakout stops
+      g_profRisk = 0.5;
+      g_profBuf = 1.5;
+      g_profImp = 1.25;
+      g_profSpread = 0.30;
+      g_profRadar = false;
+   }
+   if(!InpSpecialist)
+   {
+      g_profRisk = 1.0;            // raw inputs; the ATR spread cap stays (points are meaningless here)
+      g_profBuf = 1.0;
+      g_profImp = 1.0;
+      g_profRadar = true;
+   }
+}
+
+// the lead symbol: the input when given ("-" = none), else the broker's BTC
+// symbol spelled like this one (ETHUSD.m -> BTCUSD.m, #SOLUSDT -> #BTCUSDT);
+// none for BTC itself. A symbol the broker does not have = no lead filter.
+string NqResolveLead()
+{
+   if(InpMacroSymbol == "-")
+      return "";
+   if(InpMacroSymbol != "")
+      return InpMacroSymbol;
+   if(g_coin == NQ_COIN_BTC || g_coin == NQ_COIN_NONE)
+      return "";
+   string u = g_sym;
+   StringToUpper(u);
+   int len = StringLen(u);
+   int a = 0;
+   while(a < len)
+   {
+      ushort ch = StringGetCharacter(u, a);
+      if(ch >= 'A' && ch <= 'Z')
+         break;
+      a++;
+   }
+   int q = StringFind(u, "USD", a);
+   if(a >= len || q <= a)
+      return "";
+   string cand = StringSubstr(g_sym, 0, a) + "BTC" + StringSubstr(g_sym, q);
+   if(cand == g_sym || !SymbolSelect(cand, true))
+      return "";
+   return cand;
+}
+
+// radar only: the alts follow BTC, so a break the lead's M15 NRTR points AGAINST
+// is blocked (an INVERSE lead, DXY-like, blocks when it points the SAME way).
+// NOT a master switch: a coin's OWN A+ structure overrides it - the radar score
+// at least InpLeadOverrideScore AND its own M15 context AND its own M5 regime on
+// the side of the trade. Weak setups stay blocked. The gate (spread, risk, the
+// volatility regime) is applied before any order regardless.
+bool NqLeadBlocks(int planDir, int score)
+{
+   if(!InpMacroBlocks || g_macroDir == 0 || planDir == 0)
+      return false;
+   bool against = InpMacroInverse ? (g_macroDir == planDir) : (g_macroDir == -planDir);
+   if(!against)
+      return false;
+   if(InpLeadOverrideScore <= 10 && score >= InpLeadOverrideScore && g_s15.n > 0 && g_s5.n > 0 &&
+      g_s15.ctx[g_s15.n - 1] == planDir && g_s5.regime[g_s5.n - 1] == planDir)
+      return false;
+   return true;
+}
+
+// the spread cap in points: the input when set, else x ATR(M5) (a BTC spread
+// is hundreds of points and an altcoin's a handful - a fixed point cap is
+// meaningless across the class, an ATR fraction is the same test for every coin)
+int NqMaxSpreadPts()
+{
+   if(InpMaxSpreadPoints > 0)
+      return InpMaxSpreadPoints;
+   double frac = (InpMaxSpreadAtr > 0.0) ? InpMaxSpreadAtr : g_profSpread;
+   if(!g_ready || g_s1.n < 1 || g_point <= 0.0)
+      return 0;
+   int k5 = g_s1.map[g_s1.n - 1];
+   double atr5 = (k5 >= 0 && k5 < g_s5.n) ? g_s5.atr[k5] : 0.0;
+   if(atr5 <= 0.0)
+      return 0;
+   int pts = (int)MathRound(frac * atr5 / g_point);
+   return (pts < 1) ? 1 : pts;
+}
+
 void NqReadAccount()
 {
    g_balance = AccountInfoDouble(ACCOUNT_BALANCE);
    g_freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
    g_spreadPts = (int)SymbolInfoInteger(g_sym, SYMBOL_SPREAD);
-   g_riskMoney = NqRiskMoney(g_balance, InpRiskPct);
+   g_riskMoney = NqRiskMoney(g_balance, InpRiskPct * g_profRisk);   // the class never widens risk
    g_capMoney = NqRiskMoney(g_balance, InpDailyLossCapPct);
 
    g_openCount = 0;
@@ -3690,7 +3869,7 @@ void NqEvaluate()
 {
    g_lotNext = 0.0;
    g_lossNext = 0.0;
-   if(g_metal == NQ_METAL_NONE)
+   if(g_coin == NQ_COIN_NONE)
    {
       g_fresh = false;
       g_final = NQ_WAIT;
@@ -3703,8 +3882,9 @@ void NqEvaluate()
    bool tradeAllowed = (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) != 0 && MQLInfoInteger(MQL_TRADE_ALLOWED) != 0 &&
                         AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) != 0 && AccountInfoInteger(ACCOUNT_TRADE_EXPERT) != 0);
    double dayTotal = g_dayPnl + g_floating;
+   int maxSpr = NqMaxSpreadPts();
    g_gate = NqRiskGate(InpScalpAuto || InpPendingAuto, g_isDemo, InpAllowRealAccount, tradeAllowed,
-                       g_spreadPts, InpMaxSpreadPoints, dayTotal, g_capMoney, g_openCount, InpMaxOpenPositions,
+                       g_spreadPts, maxSpr, dayTotal, g_capMoney, g_openCount, InpMaxOpenPositions,
                        g_tradesToday, InpMaxTradesPerDay, NqInSession(hour, InpSessionStartHour, InpSessionEndHour));
    NqVolRegime();
    NqSpikeScan();
@@ -4092,6 +4272,7 @@ string NqEventJson(const NqPlan &p, string event, string extra)
    int n15 = g_s15.n;
    string j = "{" + NqJsonS("signal_id", NqSignalIdOf(p)) + "," + NqJsonS("system", "NQ-EA") + "," +
               NqJsonS("ea_version", NQ_EA_VERSION) + "," + NqJsonS("symbol", g_sym) + "," +
+              NqJsonS("engine", "NQ-CRYPTO") + "," + NqJsonS("coin", g_coinName) + "," +
               NqJsonS("vol_regime", NqVolClassText(g_volClass)) + "," + NqJsonN("spike_atr", g_spikeAtr * g_spikeDir, 1) + "," +
               NqJsonS("tf", (p.kind == NQ_PLAN_SCALP) ? "1" : ((p.tf == 900) ? "15" : "5")) + "," +
               NqJsonS("direction", (p.dir > 0) ? "BUY" : "SELL") + "," +
@@ -4201,7 +4382,7 @@ void NqWebDrain()
 
 //+------------------------------------------------------------------+
 //| TELEMETRY (ANALYSIS ONLY). A snapshot of what the panel shows,   |
-//| POSTed to SignalMesh's /webhooks/metal/telemetry so the METAL     |
+//| POSTed to SignalMesh's /webhooks/crypto/telemetry so the CRYPTO    |
 //| ANALYSIS page can display it. It is a DATA WITNESS: every field   |
 //| is the EA's own observed state, labelled as such; SignalMesh      |
 //| stores it verbatim and derives nothing from it. Nothing here can  |
@@ -4254,8 +4435,7 @@ string NqTelemetryJson()
    int n1 = g_s1.n;
    int n5 = g_s5.n;
    int n15 = g_s15.n;
-   bool ok = (g_metal != NQ_METAL_NONE && g_ready && n1 > 0 && n5 > 0 && n15 > 0);
-   string metal = (g_metal == NQ_METAL_GOLD) ? "GOLD" : ((g_metal == NQ_METAL_SILVER) ? "SILVER" : "NONE");
+   bool ok = (g_coin != NQ_COIN_NONE && g_ready && n1 > 0 && n5 > 0 && n15 > 0);
    string dataReason = "";
    if(!ok)
       dataReason = NqReasonAt(g_finalR, 0);
@@ -4263,8 +4443,8 @@ string NqTelemetryJson()
       dataReason = NqReasonName(NQ_R_STALE);
    string j = "{" + NqJsonS("system", "NQ-EA") + "," + NqJsonS("kind", "telemetry") + "," +
               NqJsonS("mode", "ANALYSIS_ONLY") + "," + NqJsonS("label", "ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL") + "," +
-              NqJsonS("source", "NRTR_QML_MetalScalper") + "," + NqJsonS("ea_version", NQ_EA_VERSION) + "," +
-              NqJsonS("symbol", g_sym) + "," + NqJsonS("metal", metal) + "," +
+              NqJsonS("source", "NRTR_QML_CryptoScalper") + "," + NqJsonS("ea_version", NQ_EA_VERSION) + "," +
+              NqJsonS("symbol", g_sym) + "," + NqJsonS("asset_class", "crypto") + "," + NqJsonS("coin", g_coinName) + "," +
               NqJsonS("account_mode", g_isDemo ? "demo" : "real") + "," + NqJsonI("magic", InpMagic) + "," +
               NqJsonI("ts_server", (long)nowS) + "," + NqJsonI("ts_gmt", (long)nowG) + "," +
               NqJsonI("server_offset_sec", (long)nowS - (long)nowG) + "," + NqJsonI("heartbeat_sec", g_telSec) + "," +
@@ -4592,7 +4772,7 @@ void NqEmitBroker(string comment, string event, string extra)
 //+------------------------------------------------------------------+
 void NqTrade()
 {
-   if(g_metal == NQ_METAL_NONE || !g_ready)
+   if(g_coin == NQ_COIN_NONE || !g_ready)
       return;
    int n1 = g_s1.n;
    int n5 = g_s5.n;
@@ -4752,11 +4932,13 @@ void NqTrade()
                g_note = NqPlanKindText(pl.kind) + ": PRICE ALREADY PAST THE LEVEL - NOT PLACED";
                continue;
             }
-            // macro filter (radar only): the dollar index moving with the metal's intended break is a block
+            // lead filter (radar only): the alts follow BTC - a break the lead points against is a block,
+            // unless the coin's OWN structure is A+ (radar score, M15 context and M5 regime all agree)
             int rdScore = (pl.dir > 0) ? g_rdUp.score : g_rdDn.score;
-            if(isStop && NqMacroBlocks(pl.dir, rdScore))
+            if(isStop && NqLeadBlocks(pl.dir, rdScore))
             {
-               g_note = "RADAR: MACRO AGAINST (" + InpMacroSymbol + " M15 NRTR " + NqDirText(g_macroDir) + ")";
+               g_note = "RADAR: LEAD AGAINST (" + g_macroSym + " M15 NRTR " + NqDirText(g_macroDir) + ") - own structure " +
+                        IntegerToString(rdScore) + "/10, needs " + IntegerToString(InpLeadOverrideScore) + " + M15 + M5";
                continue;
             }
             // volatility EXPANSION: a breakout needs stronger confirmation
@@ -5358,7 +5540,7 @@ void NqDrawPanel()
    int kOff = (int)MathRound(8 * sc);
    int vOff = (int)MathRound(122 * sc);
    int bannerH = (int)MathRound(38 * sc);
-   int rowsTop = 8;
+   int rowsTop = 9;
    int rowsBot = 8 + 1 + 8 * 2 + NQ_BOARD_BROKER_ROWS + 2;   // NY/level/radar lines, header, plan + scalp rows, broker rows, footer
    int tTopH = rh + 3 + rowsTop * rh + 4;
    int tBotH = rh + 3 + rowsBot * rh + 8;
@@ -5372,7 +5554,13 @@ void NqDrawPanel()
 
    color cBg = NQ_RGB(16, 20, 28);
    color cTbl = NQ_RGB(22, 27, 37);
-   color cMetal = (g_metal == NQ_METAL_SILVER) ? NQ_RGB(200, 206, 214) : NQ_RGB(212, 175, 55);
+   color cMetal = NQ_RGB(247, 147, 26);          // BTC orange
+   if(g_coin == NQ_COIN_ETH)
+      cMetal = NQ_RGB(140, 160, 255);
+   if(g_coin == NQ_COIN_LTC)
+      cMetal = NQ_RGB(190, 198, 210);
+   if(g_coin == NQ_COIN_ALT)
+      cMetal = NQ_RGB(60, 210, 190);
    color cKey = NQ_RGB(140, 150, 165);
    color cVal = NQ_RGB(235, 238, 242);
    color cUp = NQ_RGB(46, 204, 113);
@@ -5383,7 +5571,7 @@ void NqDrawPanel()
 
    NqRect("bg", ox, oy, W, H, cBg, cMetal);
 
-   bool ok = (g_metal != NQ_METAL_NONE && g_ready && g_s15.n > 0 && g_s5.n > 0 && g_s1.n > 0);
+   bool ok = (g_coin != NQ_COIN_NONE && g_ready && g_s15.n > 0 && g_s5.n > 0 && g_s1.n > 0);
    int i15 = ok ? g_s15.n - 1 : 0;
    int i5 = ok ? g_s5.n - 1 : 0;
    int i1 = ok ? g_s1.n - 1 : 0;
@@ -5391,11 +5579,15 @@ void NqDrawPanel()
 
    // title + price line (+ M1 candle countdown)
    int y = oy + pad;
-   string title = "NRTR QML METAL SCALPER";
-   if(g_metal == NQ_METAL_GOLD)
-      title = "GOLD  -  NRTR QML SCALPER";
-   if(g_metal == NQ_METAL_SILVER)
-      title = "SILVER  -  NRTR QML SCALPER";
+   string title = "NRTR QML CRYPTO SCALPER";
+   if(g_coin == NQ_COIN_BTC)
+      title = "BTC  -  NRTR QML CRYPTO SCALPER";
+   if(g_coin == NQ_COIN_ETH)
+      title = "ETH  -  NRTR QML CRYPTO SCALPER";
+   if(g_coin == NQ_COIN_LTC)
+      title = "LTC  -  NRTR QML CRYPTO SCALPER";
+   if(g_coin == NQ_COIN_ALT)
+      title = "ALTCOIN  -  NRTR QML CRYPTO SCALPER";
    title = title + "   v" + NQ_EA_VERSION;   // the build on the chart, so the real file is recognisable
    NqLabel("title", ox + pad, y, title, cMetal, fsT, "Arial Black", ANCHOR_LEFT_UPPER);
    y += (int)MathRound(rh * 1.4);
@@ -5411,9 +5603,9 @@ void NqDrawPanel()
    // banner = THE VERDICT (what to do now)
    string st = g_verdict;
    color bc = g_verdictClr;
-   if(g_metal == NQ_METAL_NONE)
+   if(g_coin == NQ_COIN_NONE)
    {
-      st = NqSymDot() + "  GOLD / SILVER ONLY";
+      st = NqSymDot() + "  CRYPTO ONLY  (BTC / ETH / LTC / ALT - set InpCoinClass)";
       bc = cWait;
    }
    else if((g_gate & NQ_K_REAL_ACCOUNT) != 0)
@@ -5433,7 +5625,7 @@ void NqDrawPanel()
    // reasons
    string r1 = "";
    string r2 = "";
-   if(g_metal == NQ_METAL_NONE)
+   if(g_coin == NQ_COIN_NONE)
       r1 = NqReasonName(NQ_R_UNSUPPORTED);
    else if(!ok)
       r1 = NqReasonAt(g_finalR, 0);
@@ -5481,6 +5673,13 @@ void NqDrawPanel()
       }
       ctxT = NqContextText(ctx) + "  (NRTR " + NqDirText(g_s15.dir[i15]) + ", " + emaSide + ")";
    }
+   string sprT = (InpMaxSpreadPoints > 0) ? (IntegerToString(InpMaxSpreadPoints) + " pts")
+                 : (DoubleToString((InpMaxSpreadAtr > 0.0) ? InpMaxSpreadAtr : g_profSpread, 2) + " ATR");
+   string profT = g_coinName + (InpSpecialist ? "" : " (profile off)") + "   risk x" + DoubleToString(g_profRisk, 2) +
+                  "   SL buf x" + DoubleToString(g_profBuf, 2) + "   spread <= " + sprT + (g_profRadar ? "" : "   radar off") +
+                  ((g_macroSym == "") ? "   lead none" : ("   lead " + g_macroSym + ((g_macroDir == 0) ? " (NO DATA - no lead filter)" : (" " + NqDirText(g_macroDir)))));
+   NqRow("e0", kx, vx, yr, "COIN PROFILE", profT, (g_coin == NQ_COIN_NONE) ? cDim : cMetal, cKey, fs);
+   yr += rh;
    string volT = "---";
    color volC = cDim;
    if(g_volClass != NQ_VOL_UNKNOWN)
@@ -5725,7 +5924,7 @@ void NqDrawPanel()
       }
       else
          rdD = rdD + "no support level below";
-      string mac = (InpMacroSymbol == "") ? "" : ("   macro " + InpMacroSymbol + " " + ((g_macroDir == 0) ? "n/a" : NqDirText(g_macroDir)));
+      string mac = (g_macroSym == "") ? "" : ("   lead " + g_macroSym + " " + ((g_macroDir == 0) ? "n/a" : NqDirText(g_macroDir)));
       rdD = rdD + mac;
    }
    else
