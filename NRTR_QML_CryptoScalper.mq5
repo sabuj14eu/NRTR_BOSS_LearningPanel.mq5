@@ -5438,11 +5438,11 @@ void NqLabel(string id, int x, int y, string txt, color clr, int size, string fo
       TextSetFont(font, -size * 10);                    // tenths of a point, like the label's point size
       for(int i = 0; i < np; i++)
       {
-         int w = 0, h = 0;
-         if(!TextGetSize(parts[i], w, h) || w <= 0)
-            w = StringLen(parts[i]) * size * 2 / 3;      // a guess only if the measure fails
-         widths[i] = w;
-         total += w;
+         uint w = 0, h = 0;                              // MQL5: TextGetSize(const string, uint&, uint&)
+         if(!TextGetSize(parts[i], w, h) || w == 0)
+            w = (uint)(StringLen(parts[i]) * size * 2 / 3);   // a guess only if the measure fails
+         widths[i] = (int)w;
+         total += (int)w;
       }
       int px = x;
       int a = anchor;

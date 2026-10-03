@@ -773,7 +773,7 @@ inline int ObjectsDeleteAll(long, const string &prefix, int = -1, int = -1)
    return n;
 }
 inline bool TextSetFont(const string &, int, unsigned = 0, int = 0) { return true; }
-inline bool TextGetSize(const string &t, int &w, int &h) { w = (int)t.size() * 7; h = 14; return true; }   // a fixed-pitch stand-in
+inline bool TextGetSize(const string &t, unsigned &w, unsigned &h) { w = (unsigned)t.size() * 7; h = 14; return true; }   // a fixed-pitch stand-in
 inline void ChartRedraw(long = 0) {}
 inline long long ChartGetInteger(long, int prop, int = 0) { return prop == CHART_WIDTH_IN_PIXELS ? 1400 : 900; }
 inline bool EventSetTimer(int) { return true; }
