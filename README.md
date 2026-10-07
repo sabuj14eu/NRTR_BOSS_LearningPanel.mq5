@@ -24,6 +24,27 @@ Decisions on **CLOSED candles only**, never repainted. Tests and exact results a
 
 ---
 
+## v1.9 (metal) / v1.3 (crypto): the forex layer on gold, silver and the coins
+
+Since v1.9.0 / v1.3.0 the metal EA (and the crypto twin by derivation) carries the forex EA's
+"cleverness" layer, adapted to a dollar-quoted asset. Every rule is switchable and recorded in
+the journal and telemetry so it can be judged on evidence (n >= 100 trades), not on feeling:
+
+| Rule | Metal | Crypto | Where it lives |
+|---|---|---|---|
+| **MACRO VOTE** per direction, every voter 1: dollar index (up = metal down), a US 10-year bond (`InpBondSymbol`, price up = yields down = metal up; a yield the other way), the calendar's reading of USD releases of the last 4 h (USD positive = metal down), H4 and H1 context, a fresh H1 CHoCH. A vote against of `InpMacroBlockLevel` (2) blocks every entry kind unless the metal's OWN structure is A+ (M15 + M5 with the trade, a radar break with score `InpMacroOverrideScore`) | yes | yes, with the **BTC lead counting double** in place of the dollar index (`InpMacroInverse` flips it) | `MACRO VOTE` row, `macro` / `witnesses` in telemetry |
+| **News guard** on the MT5 economic calendar, **USD events**: HIGH events close the gate 30 min before to 30 after (TOP TIER 60 / 60), resting orders pulled, a position >= 0.2 R in profit banked; calendar silence = NEWS UNKNOWN = no trading blind; N/A in the tester; re-read every minute | yes | yes | `NEWS (USD)` row, `news` in telemetry |
+| **H4 / H1** context + structure, every M5 / H1 / H4 break classified **BOS** (with the structure) or **CHoCH** (against it) | yes | yes | `H4 / H1` row, chart marks, `h4_ctx` / `h1_ctx` / `h1_break` / `m5_break` in the journal |
+| **SMART EXIT**: bank on an M5 flip in profit (0.1 R), cut under water, bank on an M1 turn (0.5 R), lock the SL at +0.7 R to entry + 0.1 R; a reversal plan whose regime never agreed is left alone | yes | yes | the verdict (`SMART EXIT banks it`), `smart_exit` in telemetry, journal event `sl_moved` |
+| **Friday stop** (orders pulled, profits banked 2 h before the Friday 17:00 NY close), **week-open guard** (first 60 min), **rollover window** (15 min each side of 17:00 NY) | yes | yes (crypto trades the weekend on some brokers: set `InpFridayStopMin` / `InpWeekOpenGuardMin` to 0 there) | `WEEK / SMART` row |
+| **Portfolio cap** across charts (`InpMaxOpenAcrossCharts`, 2) | yes | yes | gate `PORTFOLIO FULL` |
+
+What the metal and crypto EAs still do NOT have (forex only): currency strength, oil / gold
+witnesses, home sessions, the session tilt, the same-currency exposure cap - those are about a
+pair of currencies. The former radar-only DXY filter (`InpMacroBlocks`) and the crypto
+`InpLeadOverrideScore` are gone: the dollar index / the lead are voters now, the override score
+is `InpMacroOverrideScore` for all three EAs.
+
 ## The CRYPTO twin: `NRTR_QML_CryptoScalper.mq5` (BTC / ETH / LTC / altcoins)
 
 The same bot for crypto. It is **derived mechanically** from the metal EA by
@@ -37,7 +58,7 @@ panel, the verdict - is the same text. Only the asset side differs:
 | Symbols | XAUUSD / XAGUSD | **BTC** (BTCUSD, XBTUSD), **ETH**, **LTC**, any **altcoin** quoted in USD / USDT / USDC / BUSD; any prefix/suffix. A coin AUTO does not know: `InpCoinClass = ALT` |
 | Specialist profile | - | per class, shown on the panel (`COIN PROFILE` row): BTC risk x1.0 / SL buffers x1.0 / spread cap 0.15 ATR; ETH buffers x1.25, cap 0.20; LTC risk x0.75, buffers x1.5, min impulse x1.25, cap 0.25; ALT risk x0.5, buffers x1.5, impulse x1.25, cap 0.30, **radar (breakout STOP) plans off**. Multipliers only ever reduce risk and widen buffers. `InpSpecialist = false` = raw inputs |
 | Spread cap | 50 points | **x ATR(M5)** (`InpMaxSpreadAtr`, 0 = the class value); a BTC spread is hundreds of points and an altcoin's a handful, so a point cap means nothing here. `InpMaxSpreadPoints > 0` overrides |
-| Macro filter (radar only) | DXY, blocks when it points the **same** way | **BTC-lead filter, graded - not a master switch**: the alts follow BTC, so a break that BTC's M15 NRTR points **against** is blocked **unless the coin's OWN structure is A+**: radar score ≥ `InpLeadOverrideScore` (9 of 10) **and** its own M15 context **and** its own M5 regime on the side of the trade (spread, risk and the volatility regime are gated before it regardless; 11 = never override). Weak setups stay blocked. The lead is found automatically: this symbol's spelling with BTC in place of the coin (`#ETHUSD.m` -> `#BTCUSD.m`), so BTCUSD / BTCUSDm / BTCUSD.a are one class under the broker's exact name; none for BTC itself; `InpMacroSymbol = "-"` = off; `InpMacroInverse = true` for a DXY-like lead |
+| Macro vote | dollar index (1), bond, USD news, H4 / H1 | the same vote with the **BTC lead counting double** in the dollar index's slot: the alts follow BTC, so a lead against a break is -2 on its own, blocked unless the coin's OWN structure is A+ (M15 + M5 with the trade, radar score >= `InpMacroOverrideScore`). The lead is found automatically: this symbol's spelling with BTC in place of the coin (`#ETHUSD.m` -> `#BTCUSD.m`); none for BTC itself; `InpMacroSymbol = "-"` = off; `InpMacroInverse = true` for a DXY-like lead |
 | Volatility regime + spike guard | same (v1.7, common layer) | same - crypto goes from dead to wild without a session boundary, which is exactly what the regime measures |
 | Sessions | metals break at the rollover | **24/7**: the session clock only shapes the levels (Asia / London / NY, previous day, VWAP), it never stops the bot. The NY trap still uses the NY open on the server clock |
 | Magic | 180915 | 180916 |
@@ -63,7 +84,7 @@ coin. Attach it to any pair (`EURUSD`, `#GBPJPY`, `AUD/USD`, `USDTRY.m` ...); on
 banner reads **FOREX ONLY**. Magic `180917`; journal `engine: NQ-FOREX`; telemetry
 `/webhooks/forex/telemetry` with `asset_class: forex`.
 
-| | Metal / Crypto EA | Forex EA |
+| | Metal / Crypto EA (since v1.9 / v1.3 they share the vote, the news guard, H4/H1, the smart exit and the week rules) | Forex EA |
 |---|---|---|
 | Symbols | gold, silver / coins | any pair of two ISO codes, any prefix / suffix; class **MAJOR** (USD against EUR GBP JPY AUD NZD CAD CHF), **CROSS** (two of the eight, no USD), **EXOTIC** (any other currency). `InpPairClass` forces a class for a symbol AUTO cannot read |
 | Profile | metal: none; crypto: per coin | MAJOR raw; CROSS raw (yen crosses: SL buffers x1.25); **EXOTIC: risk x0.5, buffers x1.5, impulse x1.25, no radar stops, no scalps** (the spread eats a 1-ATR take-profit). Multipliers only ever reduce risk and widen buffers |
@@ -366,10 +387,8 @@ expiry, or when a newer level replaces them.
 level** is closed at once (`FALSE BREAK`), whatever the SL says. The record counts it as a
 loss.
 
-**Macro filter (optional).** Set `InpMacroSymbol` to your broker's dollar-index symbol
-(`USDX`, `DXY`, ...). The board shows its M15 NRTR direction, and with `InpMacroBlocks` a
-radar order is not placed while the index moves the same way as the metal's intended break
-(gold up + DXY up = blocked; gold up + DXY down = allowed). Empty = no macro filter.
+**Macro vote.** Since v1.9 the dollar index is one voter of the MACRO VOTE (with the bond, the
+USD news and H4 / H1), applied to every entry kind, not only the radar: see the v1.9 section.
 
 The board shows two `RADAR` lines (level, distance, score with its six components, state) and
 two plan rows `RADAR UP` / `RADAR DOWN` with the armed stop order and its live status. The
@@ -594,7 +613,12 @@ Every order is printed to the **Experts** log, e.g.
 | NY open / close / pre-range start | 16:30 / 23:00 / 00:00 server | used when Clock AUTO is off (EET broker = New York 09:30-16:00) |
 | Trade QML / pullback / NY trap / swing / radar | on | each kind can be switched off |
 | Radar stop buffer | 0.15 ATR5 | beyond the level |
-| Macro symbol / macro blocks | empty / on | e.g. USDX; empty = no macro filter |
+| Macro vote: gate / block level / override score | on / 2 / 9 | dollar index + bond + USD news + H4 / H1 (see v1.9) |
+| Dollar index / bond symbol / bond kind | AUTO / AUTO / AUTO | `"-"` = off; a symbol the broker lacks = NO DATA, no vote |
+| News guard: before / after / top tier / bank R / unknown blocks | 30 / 30 / 60 / 0.2 / on | USD events on the MT5 calendar |
+| Friday stop / weekend flat / week open / rollover guard | 120 min / on / 60 min / 15 min | from the AUTO clock |
+| Smart exit: flip profit R / cut loss / M1 profit R / lock at / lock to | 0.1 / on / 0.5 / 0.7 / 0.1 | see v1.9 |
+| Max open across charts | 2 | this EA on several charts, same magic |
 | Vol gate / average bars / DEAD / EXPANSION / EXTREME | on / 288 / 0.5 / 1.5 / 2.5 | ATR(M5) against its own average, see above |
 | Expansion radar score / scalp needs M15 | 8 / on | stronger confirmation during EXPANSION |
 | Spike guard / bars / x normal / retrace | on / 12 / 2.5 / 0.5 | the EXIT WARNING threshold |

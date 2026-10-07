@@ -37,15 +37,15 @@ before relying on it.** If F7 reports anything, send the exact message.
 ```
 CRYPTO TWIN:      derived files match; engine block identical apart from the asset detector
 FOREX EA:         engine block identical to the metal EA apart from the asset detector
--- NRTR_QML_MetalScalper.mq5 (v1.8.1) --
+-- NRTR_QML_MetalScalper.mq5 (v1.9.0) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 EA ENGINE TESTS:  116 checks passed, 0 failed   (E13 = the clock)
-EA TESTS:         171 checks passed, 0 failed
--- NRTR_QML_CryptoScalper.mq5 (v1.2.1) --
+EA TESTS:         233 checks passed, 0 failed   (A1-A15 + A10 with the v1.9 gates relaxed, plus M1-M5)
+-- NRTR_QML_CryptoScalper.mq5 (v1.3.0) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-CRYPTO EA TESTS:  205 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
+CRYPTO EA TESTS:  267 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
                   BTC-sized market + an LTC 3-digit spec, plus the 6 crypto sections below)
 -- NRTR_QML_ForexScalper.mq5 (v1.0.1) --
 EA SAFETY SCAN: PASS
@@ -80,6 +80,25 @@ symbols by name (the majors, oil, gold, bonds, the index), H1 / H4 series, `MQL_
 | F8 | The Friday stop: the resting order pulled, the +0.2R BUY banked, the losing SELL kept, with the reasons. The portfolio: two USD longs on other charts = USD +2 (they do not take this chart's slot); a EURUSD SELL (a third USD long) is blocked by `EXPOSURE`, a BUY is not; three positions across pairs = `PORTFOLIO FULL` closes the gate; the SESSION row shows `portfolio 3 pos USD+3` | PASS |
 | F9 | Higher timeframes on a 40-day market: 400 H1 and 200+ H4 bars, EMA200 ready, the `H4 / H1` row; BOS / CHoCH / BREAK classification; H4 and H1 context vote 1 each and cancel when opposed; a fresh H1 CHoCH down = -1 for a BUY, an old one nothing; no H1 / H4 at the broker = NO DATA, no vote, everything else runs | PASS |
 
+### Metal v1.9 layer (`tests/test_ea.cpp`, sections M1-M5; the crypto twin runs them too)
+
+The panel has 12 engine rows (H4 / H1, MACRO VOTE, NEWS (USD), WEEK / SMART, VOL REGIME + 7;
+13 on crypto with COIN PROFILE); the telemetry carries `htf`, `witnesses`, `macro`, `news`,
+`session`, `portfolio`, `smart_exit`. The A sections run with `relax()` (clock guards, macro
+gate and smart exit off) so the engine's behaviour is checked as before.
+
+| # | Case | Result |
+|---|---|---|
+| M1 | News guard (USD): CLEAR with no HIGH event; a HIGH USD event 20 min ahead = NEWS GUARD naming it, the resting order pulled; GBP and EUR events are not the metal's business, a USD presser is TOP TIER; windows, MODERATE, the release vote (USD POSITIVE = metal down = -1 for a BUY, a NEGATIVE release cancels it, older than 4 h nothing), banking +0.5R when a window opens, the timer re-read, a failed calendar call = UNKNOWN with error 5402 and no order over 186 candles, an empty answer = UNKNOWN, `InpNewsUnknownBlocks = false`, the tester = N/A | PASS |
+| M2 | Smart exit on gold: bank +0.30R on an agreed-then-flipped regime (the verdict said so first), cut -0.30R under water, a scalp keeps its own flip rule, a reversal plan whose regime never agreed is left alone, the +0.7R lock by one SLTP request never loosened, the M1 turn at +0.6R banked and +0.3R kept, smart exit off = the human decides | PASS |
+| M3 | The Friday stop: order pulled, +0.2R BUY banked, losing SELL kept; the portfolio: positions on other charts counted, two = `PORTFOLIO FULL` closes the gate, the WEEK / SMART row shows it | PASS |
+| M4 | H1 / H4 on a 40-day gold market: EMA200 ready, the row, BOS / CHoCH / BREAK classification, the context voters, a fresh H1 CHoCH, no H1 / H4 = NO DATA and no vote | PASS |
+| M5 | The week's edges and the rollover on the server clock: Friday 22:30 = FRIDAY STOP, 19:00 open, 23:50 = rollover, Monday 00:30 = first hour, Saturday = weekend, guards off = nothing | PASS |
+
+The crypto twin's C4 / C6 keep their meaning: the lead is a voter of weight 2, so a lead
+against a weak break is -2 = blocked, and the coin's own A+ structure (M15 + M5 + radar score 9)
+overrides it.
+
 ### Crypto twin (`tools/derive_crypto_ea.py`, `tests/test_ea_crypto.cpp`)
 
 Step 0 of `run_tests.sh` re-derives the crypto EA and its test from the metal twins and
@@ -96,7 +115,7 @@ the crypto EA only by running the script, never by hand.
 | C3 | Spread cap in ATR: the cap equals 0.15 x ATR(M5) in points, a 600-point BTC spread passes, one point over the cap is SPREAD TOO WIDE | PASS |
 | C4 | BTC-lead filter: no BTC symbol at the broker = no lead (nothing invented); `#ETHUSD.m` finds `#BTCUSD.m` and reads its M15 NRTR; lead BEARISH blocks a weak UP break and not a DOWN one (and the mirror); no reading blocks nothing; BTC itself has no lead; the panel names the lead and its M15 reading; a lead typed by hand that the broker cannot serve is shown as `lead BTC (NO DATA - no lead filter)` and blocks nothing | PASS |
 | C5 | Journal: every line carries `engine: NQ-CRYPTO` and `coin: BTC` beside the unchanged platform keys and `signal_id: NQ:BTCUSD:...` | PASS |
-| C6 | Lead override (graded, not a master switch): lead BEARISH, own radar score 8 blocked, 9 and 10 allowed when the coin's own M15 context and M5 regime agree; own M15 against or M5 not on side = no override however high the score; lead agreeing = nothing to override | PASS |
+| C6 | Lead override (graded, not a master switch): lead BEARISH (-2 in the vote), own radar score 8 blocked, 9 and 10 allowed when the coin's own M15 context and M5 regime agree; own M15 against or M5 not on side = no override however high the score; lead agreeing = nothing to override | PASS |
 
 ### EA engine tests (`tests/test_ea_engine.cpp`)
 
@@ -147,7 +166,8 @@ the crypto EA only by running the script, never by hand.
 4. **Arrows:** watch one M1 candle close: the big white `NEXT` arrow must turn into a small
    green or red one and a new white `NEXT` arrow must appear on the new candle.
 5. Optional: attach to EURUSD. It must show **GOLD / SILVER ONLY**.
-6. **v1.7:** the `VOL REGIME` row must read `NORMAL  ATR5 1.0x its 24h avg` (or DEAD /
+6. **v1.9:** the `H4 / H1`, `MACRO VOTE`, `NEWS (USD)` and `WEEK / SMART` rows must be filled: `NEWS (USD)` must read `clear - next ...` or `GUARD - ...` with a time that matches the terminal's calendar window (View > Toolbox > Calendar); `UNKNOWN` = no calendar at this broker (set `InpNewsUnknownBlocks = false` to trade without it); `MACRO VOTE` names the dollar-index and bond symbols it found (`NO DATA` = the broker lacks the symbol, type it into the input if you know its name).
+7. **v1.7:** the `VOL REGIME` row must read `NORMAL  ATR5 1.0x its 24h avg` (or DEAD /
    EXPANSION / EXTREME with its consequence) once the chart has a day of M5 history; on a
    news spike the row must add `SPIKE UP/DOWN n ATR (x normal), n% back` and, with a
    position in the spike direction once half of it is given back, the banner must flash
