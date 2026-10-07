@@ -367,9 +367,12 @@ shown on the `VOL REGIME` panel row and in every journal line (`vol_regime`):
 **Spike guard** - the last `InpSpikeBars` closed M5 bars (12 = 1 h) ranging at least
 `InpSpikeX` (2.5) times a **normal** such window (the average 12-bar range over the same
 lookback; a trending hour already spans ~4 ATR(M5), so the ATR alone would call every hour a
-spike). While the spike is in the window: no pullback plan, no scalp and no radar breakout in
-**its** direction (a waiting pullback / radar order in that direction is cancelled with the
-reason), while reversal plans against it (QML, NY trap) stay allowed. Once the close has given
+spike). While the spike is in the window: **no plan of any kind, and no scalp, in its
+direction** - pullback, radar breakout, QML and NY trap alike (a waiting order in that direction
+is cancelled with the reason). Selling the bounce of a crash is the mirror of buying the dip of a
+spike. Plans **against** the spike (a QML BUY after a down-spike) stay allowed: those are the
+reversal plans. (v1.7.3 - until 1.7.2 QML plans were exempt; 2026-10-07 gold showed two QML SELL
+limits waiting to sell the bounce of a 17 ATR down-spike.) Once the close has given
 back `InpSpikeRetrace` (50 %) of it, a position in its direction gets the flashing
 **EXIT WARNING** above. The panel row reads e.g. `SPIKE UP 15.2 ATR (3.1x normal), 60% back -
 EXIT WARNING`; telemetry carries `spike_dir / spike_atr / spike_x / spike_retrace`. The EA has

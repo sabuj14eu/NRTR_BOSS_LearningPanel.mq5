@@ -33,7 +33,7 @@
 //|  Personal tool. No network, no Telegram, no DLL, no files.       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.72"
+#property version     "1.73"
 #property description "Gold/Silver: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback pending-order plans + per-candle forecast arrows."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -2635,7 +2635,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.7.2"
+#define NQ_EA_VERSION "1.7.3"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -3570,11 +3570,16 @@ void NqSpikeScan()
 }
 
 // a plan the spike guard refuses: a pullback (M5 or swing) or a breakout STOP in the spike direction
+// v1.7.3 - EVERY plan kind in the spike's direction is blocked, QML and the NY trap
+// included. 2026-10-07, gold: a 17 ATR down-spike, then two QML SELL limits waiting
+// above the price to sell the bounce. Selling the bounce of a crash is the mirror of
+// "up, then pullback, then buy" - the case this guard exists for. Plans AGAINST the
+// spike (a QML BUY after a down-spike) stay allowed: those are the reversal plans.
 bool NqSpikeBlocks(const NqPlan &pl)
 {
    if(!InpSpikeGuard || g_spikeDir == 0 || pl.dir != g_spikeDir)
       return false;
-   return (pl.kind == NQ_PLAN_PB || pl.kind == NQ_PLAN_RADAR);
+   return true;
 }
 
 void NqReadAccount()
@@ -4715,7 +4720,7 @@ void NqTrade()
          else if(!NqKindEnabled(pl))
             NqCancel(tk, NqPlanKindText(pl.kind) + " trading switched off");
          else if(NqSpikeBlocks(pl))
-            NqCancel(tk, "SPIKE GUARD: a " + NqPlanKindText(pl.kind) + " into a " + DoubleToString(g_spikeAtr, 1) + " ATR spike is not a pullback");
+            NqCancel(tk, "SPIKE GUARD: a " + NqPlanKindText(pl.kind) + " in the direction of a " + DoubleToString(g_spikeAtr, 1) + " ATR spike - the bounce of a spike is not a setup");
       }
       // place orders for every armed plan of an enabled kind
       if(InpPendingAuto)
@@ -4734,8 +4739,8 @@ void NqTrade()
                continue;
             if(NqSpikeBlocks(pl))
             {
-               g_note = "SPIKE GUARD: " + NqPlanKindText(pl.kind) + " " + ((pl.dir > 0) ? "BUY" : "SELL") + " into a " +
-                        DoubleToString(g_spikeAtr, 1) + " ATR spike - not a pullback, not placed";
+               g_note = "SPIKE GUARD: " + NqPlanKindText(pl.kind) + " " + ((pl.dir > 0) ? "BUY" : "SELL") + " in the direction of a " +
+                        DoubleToString(g_spikeAtr, 1) + " ATR spike - the bounce of a spike is not a setup, not placed";
                continue;
             }
             double ask = SymbolInfoDouble(g_sym, SYMBOL_ASK);

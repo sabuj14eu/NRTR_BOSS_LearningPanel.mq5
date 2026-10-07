@@ -821,7 +821,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_CryptoScalper\"", "\"ea_version\":\"1.1.3\"", "\"prof_risk\":1.00", "\"prof_spread_atr\":0.15", "\"lead_symbol\":\"\"",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_CryptoScalper\"", "\"ea_version\":\"1.1.4\"", "\"prof_risk\":1.00", "\"prof_spread_atr\":0.15", "\"lead_symbol\":\"\"",
                            "\"symbol\":\"BTCUSD\"", "\"coin\":\"BTC\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
@@ -940,7 +940,12 @@ int main()
       bool qmlUp = NqSpikeBlocks(pl);
       pl.kind = NQ_PLAN_PB; pl.dir = -1;
       bool pbDn = NqSpikeBlocks(pl);
-      CHECK(pbUp && rdUp && !qmlUp && !pbDn, "pullback and radar BUY plans are blocked (not a pullback, a reversal); QML and the SELL side are not");
+      pl.kind = NQ_PLAN_NY; pl.dir = 1;
+      bool nyUp = NqSpikeBlocks(pl);
+      pl.kind = NQ_PLAN_QML; pl.dir = -1;
+      bool qmlDn = NqSpikeBlocks(pl);
+      CHECK(pbUp && rdUp && qmlUp && nyUp && !pbDn && !qmlDn,
+            "every plan kind in the spike's direction is blocked (QML and NY trap too - the bounce of a spike is not a setup); plans against the spike are not");
       SIM.ord.clear();
       SIM.pos.clear();
       SimPos p;
