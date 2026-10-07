@@ -77,7 +77,7 @@ HEADER = '''//+-----------------------------------------------------------------
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.14"
+#property version     "1.15"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -132,8 +132,23 @@ int NqCoinOf(string name, string base, string profitCcy, int forced)
       return NQ_COIN_ETH;
    if(NqNameIs(u, b, "LTC") || StringFind(u, "LITECOIN") == 0)
       return NQ_COIN_LTC;
+   // altcoins spelled out by the broker (IC Markets and others name some coins in words)
+   string words = "RIPPLE,SOLANA,CARDANO,DOGECOIN,BINANCE,POLKADOT,CHAINLINK,AVALANCHE,POLYGON,STELLAR,TRON,UNISWAP,COSMOS,"
+                  "BITCOINCASH,MONERO,ZCASH,HEDERA,ALGORAND,FILECOIN,APTOS,ARBITRUM,OPTIMISM,SHIBA,PEPE,";
+   int wa = 0;
+   while(wa < StringLen(words))
+   {
+      int we = StringFind(words, ",", wa);
+      if(we < 0)
+         break;
+      string w = StringSubstr(words, wa, we - wa);
+      if(StringFind(u, w) == 0)
+         return NQ_COIN_ALT;
+      wa = we + 1;
+   }
    // altcoins: a known ticker at the start of the name (dollar quote after it) or as the base
-   string alts = "XRP,SOL,ADA,DOGE,BNB,DOT,LINK,AVAX,MATIC,POL,BCH,XLM,TRX,UNI,ATOM,NEAR,ETC,SHIB,PEPE,APT,ARB,OP,SUI,TON,"
+   // (LNK = Chainlink at IC Markets; brokers abbreviate some tickers their own way)
+   string alts = "XRP,SOL,ADA,DOGE,BNB,DOT,LINK,LNK,AVAX,MATIC,POL,BCH,XLM,TRX,UNI,ATOM,NEAR,ETC,SHIB,PEPE,APT,ARB,OP,SUI,TON,"
                  "FIL,AAVE,ALGO,EOS,XMR,DASH,ZEC,HBAR,ICP,VET,SAND,MANA,AXS,GRT,INJ,SEI,TIA,RNDR,RENDER,FET,KAS,WIF,BONK,"
                  "FLOKI,IMX,STX,MKR,LDO,CRV,RUNE,THETA,XTZ,NEO,QNT,KSM,EGLD,FLOW,MINA,ROSE,GALA,ENJ,CHZ,ONE,ZIL,IOTA,MIOTA,"
                  "DYDX,GMX,PENDLE,JUP,ENA,ONDO,WLD,TAO,ORDI,PYTH,JTO,STRK,BLUR,CFX,KAVA,COMP,SNX,SUSHI,YFI,1INCH,BAT,ZRX,"
@@ -417,7 +432,7 @@ def derive_ea(m: str) -> str:
             '   yr += rh;\n'
             '   string volT = "---";\n')
     # 14. version + helper functions (after NqReadAccount's spread read block: append before NqEvaluate's doc comment)
-    t = rep(t, '#define NQ_EA_VERSION "1.7.3"', '#define NQ_EA_VERSION "1.1.4"')
+    t = rep(t, '#define NQ_EA_VERSION "1.7.3"', '#define NQ_EA_VERSION "1.1.5"')
     t = rep(t, "// macro filter (radar only). Metals: the dollar index moving the SAME way as the\n"
                "// intended break is a block. The score is unused here; the crypto twin grades it.\n"
                "bool NqMacroBlocks(int planDir, int score)\n{\n"
@@ -447,7 +462,7 @@ def derive_test(s: str) -> str:
     t = rep(t, 'find("GOLD / SILVER ONLY")', 'find("CRYPTO ONLY")')
     t = rep(t, '"\\"metal\\":\\"GOLD\\""', '"\\"coin\\":\\"BTC\\""')
     t = rep(t, '"\\"source\\":\\"NRTR_QML_MetalScalper\\""', '"\\"source\\":\\"NRTR_QML_CryptoScalper\\""')
-    t = rep(t, '"\\"ea_version\\":\\"1.7.3\\""', '"\\"ea_version\\":\\"1.1.4\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
+    t = rep(t, '"\\"ea_version\\":\\"1.7.3\\""', '"\\"ea_version\\":\\"1.1.5\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
     t = rep(t, 'CHECK(rows == 8, "8 engine rows (VOL REGIME + the 7 engine rows)");', 'CHECK(rows == 9, "9 engine rows (COIN PROFILE + VOL REGIME + the 7 engine rows)");')
     t = rep(t, "   SIM.tickValue = tickValue;\n", "   SIM.tickValue = tickValue;\n   SIM.contract = 1.0;   // crypto CFD: one coin per lot\n")
     # price offsets of the hand-made broker items, scaled from a $4,150 metal to a $61,500 coin
@@ -484,6 +499,10 @@ CRYPTO_CHECKS = r'''
             NqCoinOf("LTCUSDT", "LTC", "USDT", 0) == NQ_COIN_LTC && NqCoinOf("LITECOIN", "", "", 0) == NQ_COIN_LTC, "ETH / LTC spellings");
       CHECK(NqCoinOf("SOLUSD", "SOL", "USD", 0) == NQ_COIN_ALT && NqCoinOf("DOGEUSDT", "", "USDT", 0) == NQ_COIN_ALT &&
             NqCoinOf("#XRPUSD.c", "", "USD", 0) == NQ_COIN_ALT && NqCoinOf("ADAUSD", "ADA", "USD", 0) == NQ_COIN_ALT, "altcoins by ticker");
+      CHECK(NqCoinOf("LNKUSD", "LNK", "USD", 0) == NQ_COIN_ALT && NqCoinOf("LINKUSD", "LINK", "USD", 0) == NQ_COIN_ALT &&
+            NqCoinOf("BNBUSD", "BNB", "USD", 0) == NQ_COIN_ALT && NqCoinOf("CHAINLINK", "", "", 0) == NQ_COIN_ALT &&
+            NqCoinOf("Cardano", "", "USD", 0) == NQ_COIN_ALT && NqCoinOf("BinanceCoin", "", "", 0) == NQ_COIN_ALT &&
+            NqCoinOf("Solana.m", "", "USD", 0) == NQ_COIN_ALT, "broker spellings: LNK, spelled-out names (Chainlink / Cardano / Binance / Solana)");
       CHECK(NqCoinOf("EURUSD", "EUR", "USD", 0) == NQ_COIN_NONE && NqCoinOf("XAUUSD", "XAU", "USD", 0) == NQ_COIN_NONE &&
             NqCoinOf("ETHEUR", "ETH", "EUR", 0) == NQ_COIN_NONE && NqCoinOf("ETHW", "", "", 0) == NQ_COIN_NONE &&
             NqCoinOf("AUDUSD", "AUD", "USD", 0) == NQ_COIN_NONE && NqCoinOf("FOOUSD", "FOO", "USD", 0) == NQ_COIN_NONE,

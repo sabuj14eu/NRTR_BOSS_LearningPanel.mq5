@@ -821,7 +821,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_CryptoScalper\"", "\"ea_version\":\"1.1.4\"", "\"prof_risk\":1.00", "\"prof_spread_atr\":0.15", "\"lead_symbol\":\"\"",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_CryptoScalper\"", "\"ea_version\":\"1.1.5\"", "\"prof_risk\":1.00", "\"prof_spread_atr\":0.15", "\"lead_symbol\":\"\"",
                            "\"symbol\":\"BTCUSD\"", "\"coin\":\"BTC\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
@@ -1025,6 +1025,10 @@ int main()
             NqCoinOf("LTCUSDT", "LTC", "USDT", 0) == NQ_COIN_LTC && NqCoinOf("LITECOIN", "", "", 0) == NQ_COIN_LTC, "ETH / LTC spellings");
       CHECK(NqCoinOf("SOLUSD", "SOL", "USD", 0) == NQ_COIN_ALT && NqCoinOf("DOGEUSDT", "", "USDT", 0) == NQ_COIN_ALT &&
             NqCoinOf("#XRPUSD.c", "", "USD", 0) == NQ_COIN_ALT && NqCoinOf("ADAUSD", "ADA", "USD", 0) == NQ_COIN_ALT, "altcoins by ticker");
+      CHECK(NqCoinOf("LNKUSD", "LNK", "USD", 0) == NQ_COIN_ALT && NqCoinOf("LINKUSD", "LINK", "USD", 0) == NQ_COIN_ALT &&
+            NqCoinOf("BNBUSD", "BNB", "USD", 0) == NQ_COIN_ALT && NqCoinOf("CHAINLINK", "", "", 0) == NQ_COIN_ALT &&
+            NqCoinOf("Cardano", "", "USD", 0) == NQ_COIN_ALT && NqCoinOf("BinanceCoin", "", "", 0) == NQ_COIN_ALT &&
+            NqCoinOf("Solana.m", "", "USD", 0) == NQ_COIN_ALT, "broker spellings: LNK, spelled-out names (Chainlink / Cardano / Binance / Solana)");
       CHECK(NqCoinOf("EURUSD", "EUR", "USD", 0) == NQ_COIN_NONE && NqCoinOf("XAUUSD", "XAU", "USD", 0) == NQ_COIN_NONE &&
             NqCoinOf("ETHEUR", "ETH", "EUR", 0) == NQ_COIN_NONE && NqCoinOf("ETHW", "", "", 0) == NQ_COIN_NONE &&
             NqCoinOf("AUDUSD", "AUD", "USD", 0) == NQ_COIN_NONE && NqCoinOf("FOOUSD", "FOO", "USD", 0) == NQ_COIN_NONE,

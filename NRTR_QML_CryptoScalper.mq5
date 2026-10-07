@@ -33,7 +33,7 @@
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.14"
+#property version     "1.15"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -2240,8 +2240,23 @@ int NqCoinOf(string name, string base, string profitCcy, int forced)
       return NQ_COIN_ETH;
    if(NqNameIs(u, b, "LTC") || StringFind(u, "LITECOIN") == 0)
       return NQ_COIN_LTC;
+   // altcoins spelled out by the broker (IC Markets and others name some coins in words)
+   string words = "RIPPLE,SOLANA,CARDANO,DOGECOIN,BINANCE,POLKADOT,CHAINLINK,AVALANCHE,POLYGON,STELLAR,TRON,UNISWAP,COSMOS,"
+                  "BITCOINCASH,MONERO,ZCASH,HEDERA,ALGORAND,FILECOIN,APTOS,ARBITRUM,OPTIMISM,SHIBA,PEPE,";
+   int wa = 0;
+   while(wa < StringLen(words))
+   {
+      int we = StringFind(words, ",", wa);
+      if(we < 0)
+         break;
+      string w = StringSubstr(words, wa, we - wa);
+      if(StringFind(u, w) == 0)
+         return NQ_COIN_ALT;
+      wa = we + 1;
+   }
    // altcoins: a known ticker at the start of the name (dollar quote after it) or as the base
-   string alts = "XRP,SOL,ADA,DOGE,BNB,DOT,LINK,AVAX,MATIC,POL,BCH,XLM,TRX,UNI,ATOM,NEAR,ETC,SHIB,PEPE,APT,ARB,OP,SUI,TON,"
+   // (LNK = Chainlink at IC Markets; brokers abbreviate some tickers their own way)
+   string alts = "XRP,SOL,ADA,DOGE,BNB,DOT,LINK,LNK,AVAX,MATIC,POL,BCH,XLM,TRX,UNI,ATOM,NEAR,ETC,SHIB,PEPE,APT,ARB,OP,SUI,TON,"
                  "FIL,AAVE,ALGO,EOS,XMR,DASH,ZEC,HBAR,ICP,VET,SAND,MANA,AXS,GRT,INJ,SEI,TIA,RNDR,RENDER,FET,KAS,WIF,BONK,"
                  "FLOKI,IMX,STX,MKR,LDO,CRV,RUNE,THETA,XTZ,NEO,QNT,KSM,EGLD,FLOW,MINA,ROSE,GALA,ENJ,CHZ,ONE,ZIL,IOTA,MIOTA,"
                  "DYDX,GMX,PENDLE,JUP,ENA,ONDO,WLD,TAO,ORDI,PYTH,JTO,STRK,BLUR,CFX,KAVA,COMP,SNX,SUSHI,YFI,1INCH,BAT,ZRX,"
@@ -2700,7 +2715,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.1.4"
+#define NQ_EA_VERSION "1.1.5"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
