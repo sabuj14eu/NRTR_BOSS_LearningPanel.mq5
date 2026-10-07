@@ -3,7 +3,7 @@
 Run everything with:
 
 ```
-./run_tests.sh        # needs python3 and g++ (C++17); about 90 s
+./run_tests.sh        # needs python3 and g++ (C++17); about 5 min (the forex sections are the long part)
 ```
 
 ## What was run, and what it proves
@@ -11,6 +11,9 @@ Run everything with:
 MetaQuotes' compiler (MetaEditor) only runs on Windows/Wine and could not be downloaded in
 the build environment. The EA was therefore verified like this:
 
+0. **Twins** (`tools/derive_crypto_ea.py --check`, `tools/check_forex_engine.py`): the crypto EA is
+   the derivation of the metal EA; the forex EA's engine block is byte-identical to the metal
+   EA's apart from the asset detector (its asset layer is its own file).
 1. **Safety scan** (`tests/check_safety_ea.py`): pure ASCII; none of 30 forbidden
    identifiers (network, files, DLLs, async/`CTrade` order paths, stop orders); the required
    guards present (`InpAllowRealAccount` as a bool input, the Algo Trading switch honoured,
@@ -29,22 +32,53 @@ the build environment. The EA was therefore verified like this:
 it behaves on a real broker feed. **Press F7 in MetaEditor and do the manual checks below
 before relying on it.** If F7 reports anything, send the exact message.
 
-## Results (2026-10-02)
+## Results (2026-10-07)
 
 ```
 CRYPTO TWIN:      derived files match; engine block identical apart from the asset detector
--- NRTR_QML_MetalScalper.mq5 --
+FOREX EA:         engine block identical to the metal EA apart from the asset detector
+-- NRTR_QML_MetalScalper.mq5 (v1.8.0) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-EA ENGINE TESTS:  98 checks passed, 0 failed
-EA TESTS:         164 checks passed, 0 failed
--- NRTR_QML_CryptoScalper.mq5 --
+EA ENGINE TESTS:  115 checks passed, 0 failed   (E13 = the clock)
+EA TESTS:         171 checks passed, 0 failed
+-- NRTR_QML_CryptoScalper.mq5 (v1.2.0) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-CRYPTO EA TESTS:  197 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
+CRYPTO EA TESTS:  205 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
                   BTC-sized market + an LTC 3-digit spec, plus the 6 crypto sections below)
-MetaEditor F7:    NOT RUN (not available in the build environment) - for BOTH files
+-- NRTR_QML_ForexScalper.mq5 (v1.0.0) --
+EA SAFETY SCAN: PASS
+EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
+FOREX EA TESTS:   295 checks passed, 0 failed   (the 15 whole-EA sections on a EURUSD
+                  5-digit market + a USDJPY 3-digit spec, plus the 9 forex sections below)
+MetaEditor F7:    NOT RUN (not available in the build environment) - for ALL THREE files
 ```
+
+### Forex EA (`tests/test_ea_forex.cpp`)
+
+Sections A1-A15 and A10 are the metal sections on a EURUSD-like market ($1.0850, 5 digits,
+tick value 1.00 per point, 0.2 pip spread) and a USDJPY-like spec (3 digits, tick value 0.66),
+with the forex gates switched off by `relax()` so the engine's own behaviour is checked as on
+the metal EA; the panel has 14 engine rows (PAIR PROFILE, H4 / H1, STRENGTH, MACRO VOTE, NEWS,
+SESSION, VOL REGIME + 7); the telemetry carries `asset_class: forex`, `pair_class`, `base`,
+`quote`, `strength`, `news`, `session`, `htf`, `smart_exit`, `portfolio`. The simulated terminal
+grew an economic calendar (`CalendarValueHistory` / `CalendarEventById` / `CalendarCountryById`,
+a LONG_MIN "no value" sentinel, a LOW filler event so a working calendar is never empty), extra
+symbols by name (the majors, oil, gold, bonds, the index), H1 / H4 series, `MQL_TESTER` and
+`TRADE_ACTION_SLTP`.
+
+| # | Case | Result |
+|---|---|---|
+| F1 | Pair detector: EURUSD / USDJPY.m / #GBPJPY / EUR/USD / mEURUSDmicro / AUDUSD-STD / USDTRY / EURPLN / USDZAR.i read into MAJOR / CROSS / EXOTIC with base and quote; XAUUSD, BTCUSD, US500, USDX, USDOLLAR, USOIL refused; the broker's base / profit when the name says nothing; a forced class overrides the class but never invents the currencies | PASS |
+| F2 | Profile and pips: MAJOR raw with pip 0.0001 = 10.00 USD/lot on the row; the spread cap is 0.15 x ATR(M5) in points, 0.2 pip passes, one point over blocks; USDJPY pip 0.01; USDTRY = EXOTIC: half the risk money, buffers x1.5, impulse x1.25, radar plans not tradable, no market order over 600 bars, the row says `radar off  scalp off` | PASS |
+| F3 | The clock: GMT+3 in summer gives NY 16:30-23:00, London 10:00, Asia 01:00, rollover 00:00 and the NY SESSION line says AUTO; EURUSD's home = London + NY (05:00 = Asia: HOME bit; 12:00 London and 17:00 NY: open); 23:50 = ROLLOVER bit; Friday 22:30 = FRIDAY STOP, 19:00 open; Monday 00:30 = the first hour; Saturday and Sunday = WEEKEND; guards off = nothing; USDJPY home = Asia + NY; a GMT+0 broker: NY 13:30, London 07:00, rollover 21:00, the week opens Sunday 21:00 (21:30 = first hour, 20:00 = weekend), Friday 19:30 = FRIDAY STOP | PASS |
+| F4 | News guard: a working calendar with no HIGH event = CLEAR, nothing gated; a HIGH USD event 20 min ahead = NEWS GUARD naming it, the resting order pulled with the reason; a GBP event is not this pair's business, an EUR presser is (TOP TIER); a plain HIGH 50 min away is outside the 30-min window and named as next, FOMC 50 min away is inside the 60-min window; MODERATE gates only with the input; 40 min after a release = clear, 20 min after = still inside; the calendar's own reading votes (USD POSITIVE 1 h ago = -1 for a EURUSD BUY, an EUR POSITIVE cancels it, older than 4 h = nothing); a +0.5R position is banked when a window opens while the losing one keeps its SL; no calendar = NEWS UNKNOWN closes the gate and says so, `InpNewsUnknownBlocks = false` trades blind and says so; the Strategy Tester = N/A, not gated | PASS |
+| F5 | Currency strength: all seven majors served = 7 pairs; every strength equals the mean of the signed moves in ATR units recomputed by hand, diff = base - quote, the grade by the two thresholds, the row; a broker without the majors = the pair alone (1 pair). Witnesses on USDCAD: oil found by AUTO, no gold (no AUD), no bond / index at the broker; oil BULLISH = -1 for a BUY and +1 for a SELL; a bond price up = -1 for a USD-base BUY, a yield up = +1; AUTO bond kind from the name; gold votes nothing on USDCAD; a witness the broker lacks = NO DATA on the row, no vote. The vote on EURUSD: strength EUR<USD STRONG (-2) + DXY BULLISH (-1) = BUY -3 / SELL +3 with the voters named; a BUY blocked, a SELL not; M15 + M5 with the trade override it (a radar break needs 9); M15 against = no override; a WEAK vote blocks nothing; gate off blocks nothing and the row says so | PASS |
+| F6 | Session tilt: NY leans SELL - a BUY pullback with M15 and M5 against it is blocked (`AGAINST THE NY TILT (SELL)`), a SELL never; M15 + M5 with it and macro 0 = strong, allowed; M5 CHOP = a pullback not confirmed, a reversal plan needs the M15 context only; a radar break needs score 8; the macro vote against = not strong; Asia leans BUY; London no lean; tilt off = nothing. Every journal line carries `engine: NQ-FOREX`, `pair_class`, `base`, `quote`, `session`, `tilt`, `with_tilt`, `h4_ctx`, `m5_break` | PASS |
+| F7 | Smart exit: the regime agreed then flipped with +0.3R = banked with the reason (the verdict said so first); under water = cut at -0.30R before the SL; a scalp under water keeps its own flip rule; a reversal plan whose regime never agreed is left alone and the verdict says why; +0.8R with the regime intact = one SLTP request moving the SL to entry + 0.1R, never loosened or repeated, `HOLD ... SL locked`; an M1 turn with +0.6R = banked, with +0.3R kept; smart exit off = the plan position is left to the human | PASS |
+| F8 | The Friday stop: the resting order pulled, the +0.2R BUY banked, the losing SELL kept, with the reasons. The portfolio: two USD longs on other charts = USD +2 (they do not take this chart's slot); a EURUSD SELL (a third USD long) is blocked by `EXPOSURE`, a BUY is not; three positions across pairs = `PORTFOLIO FULL` closes the gate; the SESSION row shows `portfolio 3 pos USD+3` | PASS |
+| F9 | Higher timeframes on a 40-day market: 400 H1 and 200+ H4 bars, EMA200 ready, the `H4 / H1` row; BOS / CHoCH / BREAK classification; H4 and H1 context vote 1 each and cancel when opposed; a fresh H1 CHoCH down = -1 for a BUY, an old one nothing; no H1 / H4 at the broker = NO DATA, no vote, everything else runs | PASS |
 
 ### Crypto twin (`tools/derive_crypto_ea.py`, `tests/test_ea_crypto.cpp`)
 
@@ -79,6 +113,7 @@ the crypto EA only by running the script, never by hand.
 | E09 | Freshness (M1 4 min old = stale), metal detection, every reason/gate bit named, stale named first | PASS |
 | E12 | Impulse radar on a crafted rise under the previous-day high: every component measured (compression 2, proximity 2, momentum 1, M15 1, efficiency ≥ 1), READY at score ≥ 7 within 1 ATR arms a BUY STOP at level + 0.15 ATR with SL below and TP1 above; 2+ ATR away is FAR; an earlier plan at a passed level is dropped; the break bar fills the stop and TP1 follows; a spike that closes back below the level is a FALSE BREAK; falling pressure cancels an unfilled plan; nearest active levels per bar are causal | PASS |
 | E11 | Session levels on two crafted days: previous-day high/low active all day, Asia / London / pre-NY / NY highs and lows become active when their session ends; exactly one BREAKOUT per level on the first M5 close through it; day VWAP = running mean of typical price under constant volume, reset at midnight | PASS |
+| E13 | The clock: 2026 US / EU daylight instants to the second, the October gap where they differ; sessions on the server clock for GMT+3 summer (the former hard-coded defaults come out exactly), GMT+2 winter, GMT+0, GMT+5:30, GMT-4 (Asia clamped to the server day); the week's position for an EET and a UTC broker | PASS |
 | E10 | NY trap state machine on a crafted server day: pre-NY range, sweep, return, plan armed only on the confirmation bar (SELL LIMIT at the swept high, SL beyond the extreme), filled and TP1; sweep + return without confirmation is not a trade; an unfilled plan expires at the session end; next day starts fresh; distance in ATR units | PASS |
 
 ### Whole-EA tests (`tests/test_ea.cpp`, gold-like and silver-like synthetic markets)
@@ -117,6 +152,27 @@ the crypto EA only by running the script, never by hand.
    news spike the row must add `SPIKE UP/DOWN n ATR (x normal), n% back` and, with a
    position in the spike direction once half of it is given back, the banner must flash
    `EXIT WARNING ... SPIKE REVERSAL`. **Both files must be recompiled (F7).**
+
+### The forex EA (same 10 minutes)
+
+1. **Compile** `NRTR_QML_ForexScalper.mq5` with **F7**. Expect `0 errors, 0 warnings`. The file
+   uses the MQL5 calendar API (`CalendarValueHistory`, `CalendarEventById`,
+   `CalendarCountryById`), `MQL_TESTER` and `TRADE_ACTION_SLTP`; if F7 names one of them, send
+   the exact message.
+2. Attach to EURUSD M1: the title must read `EUR/USD MAJOR  -  NRTR QML FOREX SCALPER`, the
+   `PAIR PROFILE` row `MAJOR  EUR/USD   pip 0.00010 = 10.00 USD/lot ...` with the live spread in
+   pips, the `STRENGTH` row `n pairs` where n is how many of the seven majors your broker serves,
+   the `MACRO VOTE` row the witnesses it found (`-` = not for this pair, `NO DATA` = the broker
+   has no such symbol).
+3. `NEWS` must read `clear - next HIGH ...` or `GUARD - ...` with a time that matches the
+   terminal's own calendar window (View > Toolbox > Calendar). `UNKNOWN` = no calendar at this
+   broker: the EA will not trade until you set `InpNewsUnknownBlocks = false`.
+4. `SESSION` must show `AUTO  server GMT+n` and the NY open where your broker's clock puts it;
+   outside EURUSD's home sessions (Asia) the gate must read `OUTSIDE HOME SESSION`.
+5. Attach to USDJPY: pip 0.01; to USDTRY: `EXOTIC ... radar off  scalp off`; to XAUUSD: **FOREX ONLY**.
+6. **The clock on all three EAs:** the `NY SESSION` line must say `clock AUTO  server GMT+n  NY
+   DST on/off  EU DST on/off`, and the NY open it shows must be 09:30 New York on your broker's
+   clock. **All three files must be recompiled (F7).**
 
 ### The crypto twin (same 10 minutes)
 

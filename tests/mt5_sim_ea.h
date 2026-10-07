@@ -23,7 +23,7 @@ struct MqlRates
    long long real_volume;
 };
 
-enum ENUM_TIMEFRAMES { PERIOD_CURRENT = 0, PERIOD_M1 = 1, PERIOD_M5 = 5, PERIOD_M15 = 15, PERIOD_H1 = 16385 };
+enum ENUM_TIMEFRAMES { PERIOD_CURRENT = 0, PERIOD_M1 = 1, PERIOD_M5 = 5, PERIOD_M15 = 15, PERIOD_H1 = 16385, PERIOD_H4 = 16388 };
 inline int PeriodSeconds(ENUM_TIMEFRAMES tf)
 {
    switch(tf)
@@ -32,6 +32,7 @@ inline int PeriodSeconds(ENUM_TIMEFRAMES tf)
       case PERIOD_M5: return 300;
       case PERIOD_M15: return 900;
       case PERIOD_H1: return 3600;
+      case PERIOD_H4: return 14400;
       default: return 900;
    }
 }
@@ -60,7 +61,7 @@ enum { ACCOUNT_TRADE_MODE = 1, ACCOUNT_TRADE_ALLOWED, ACCOUNT_TRADE_EXPERT, ACCO
 enum { ACCOUNT_TRADE_MODE_DEMO = 0, ACCOUNT_TRADE_MODE_CONTEST = 1, ACCOUNT_TRADE_MODE_REAL = 2 };
 enum { ACCOUNT_BALANCE = 1, ACCOUNT_EQUITY, ACCOUNT_MARGIN_FREE };
 enum { TERMINAL_TRADE_ALLOWED = 1 };
-enum { MQL_TRADE_ALLOWED = 1 };
+enum { MQL_TRADE_ALLOWED = 1, MQL_TESTER = 2 };
 enum { POSITION_MAGIC = 1, POSITION_TYPE, POSITION_TIME, POSITION_TICKET, POSITION_IDENTIFIER };
 enum { POSITION_SYMBOL = 1, POSITION_COMMENT };
 enum { POSITION_VOLUME = 1, POSITION_PRICE_OPEN, POSITION_SL, POSITION_TP, POSITION_PROFIT, POSITION_SWAP };
@@ -122,6 +123,36 @@ struct MqlTradeResult
 };
 template <class T> void ZeroMemory(T &x) { x = T(); }
 
+// ---- economic calendar (MQL5 built-in) ----
+enum ENUM_CALENDAR_EVENT_IMPORTANCE { CALENDAR_IMPORTANCE_NONE = 0, CALENDAR_IMPORTANCE_LOW = 1, CALENDAR_IMPORTANCE_MODERATE = 2, CALENDAR_IMPORTANCE_HIGH = 3 };
+enum ENUM_CALENDAR_EVENT_IMPACT { CALENDAR_IMPACT_NA = 0, CALENDAR_IMPACT_POSITIVE = 1, CALENDAR_IMPACT_NEGATIVE = 2 };
+struct MqlCalendarValue
+{
+   ulong id = 0;
+   ulong event_id = 0;
+   datetime time = 0;
+   datetime period = 0;
+   int revision = 0;
+   long long actual_value = LONG_MIN, prev_value = LONG_MIN, revised_prev_value = LONG_MIN, forecast_value = LONG_MIN;   // LONG_MIN = no value
+   ENUM_CALENDAR_EVENT_IMPACT impact_type = CALENDAR_IMPACT_NA;
+};
+struct MqlCalendarEvent
+{
+   ulong id = 0;
+   int type = 0, sector = 0, frequency = 0, time_mode = 0;
+   ulong country_id = 0;
+   int unit = 0;
+   ENUM_CALENDAR_EVENT_IMPORTANCE importance = CALENDAR_IMPORTANCE_NONE;
+   int multiplier = 0;
+   unsigned int digits = 0;
+   string source_url, event_code, name;
+};
+struct MqlCalendarCountry
+{
+   ulong id = 0;
+   string name, code, currency, currency_symbol, url_name;
+};
+
 struct SimObj
 {
    int type;
@@ -170,6 +201,7 @@ struct SimState
    double contract = 100.0, leverage = 100.0;
    double bid = 0.0;
    std::vector<MqlRates> m1, m5, m15;   // full history, may extend past `now`
+   std::vector<MqlRates> h1, h4;        // higher timeframes (empty = the broker serves none)
    std::vector<MqlRates> macro15;       // optional M15 series of a second symbol (macro / lead filter)
    std::string macroSym;                // its name ("" = any second symbol answers); SymbolSelect sees it only when macro15 is loaded
    datetime now = 0;
@@ -195,7 +227,16 @@ struct SimState
    struct WebCall { std::string method, url, headers, body; };
    std::vector<WebCall> web;
    int webCode = 200;
-   long long gmtOffsetSec = 0;          // TimeTradeServer() - TimeGMT(): the broker's clock ahead of GMT
+   long long gmtOffsetSec = 3 * 3600;   // TimeTradeServer() - TimeGMT(): an EET-like broker, 3 h ahead of GMT in summer
+   bool tester = false;                 // MQLInfoInteger(MQL_TESTER)
+   // extra symbols the broker serves (M15 series by exact name): currency-strength pairs, oil, gold, bonds, the dollar index
+   std::map<std::string, std::vector<MqlRates>> extra;
+   // the economic calendar: values + their events + countries; calOk=false = the terminal has no calendar (every query fails)
+   bool calOk = true;
+   bool calFiller = true;               // a daily LOW filler event of a far country so a working calendar is never empty
+   std::vector<MqlCalendarValue> cal;
+   std::map<ulong, MqlCalendarEvent> calEv;
+   std::map<ulong, MqlCalendarCountry> calCo;
 };
 static SimState SIM;
 static std::string _Symbol = "XAUUSD";
@@ -206,6 +247,8 @@ inline double simAsk() { return SIM.bid + SIM.spreadPts * SIM.point; }
 inline const std::vector<MqlRates> &simSeries(ENUM_TIMEFRAMES tf)
 {
    if(tf == PERIOD_M1) return SIM.m1;
+   if(tf == PERIOD_H1) return SIM.h1;
+   if(tf == PERIOD_H4) return SIM.h4;
    return tf == PERIOD_M5 ? SIM.m5 : SIM.m15;
 }
 // bars that exist at SIM.now: the last one is the forming bar (series index 0)
@@ -217,8 +260,19 @@ inline int simVisible(ENUM_TIMEFRAMES tf)
    return k;
 }
 inline bool simIsMacro(const string &sym) { return sym != SIM.sym && sym != _Symbol; }
+inline const std::vector<MqlRates> *simExtra(const string &sym)
+{
+   auto it = SIM.extra.find(sym);
+   return it == SIM.extra.end() ? nullptr : &it->second;
+}
+inline int simVisibleOf(const std::vector<MqlRates> &v)
+{
+   int k = 0;
+   while(k < (int)v.size() && v[(size_t)k].time <= SIM.now) k++;
+   return k;
+}
 // Market Watch: this symbol always; a second symbol only while a macro series is loaded (and named, if a name was given)
-inline bool SymbolSelect(const string &sym, bool) { return !simIsMacro(sym) || (!SIM.macro15.empty() && (SIM.macroSym.empty() || SIM.macroSym == sym)); }
+inline bool SymbolSelect(const string &sym, bool) { return !simIsMacro(sym) || simExtra(sym) != nullptr || (!SIM.macro15.empty() && (SIM.macroSym.empty() || SIM.macroSym == sym)); }
 // a second symbol the broker does not serve (macroSym set to another name): no bars, no rates
 inline bool simMacroServed(const string &sym) { return SIM.macroSym.empty() || SIM.macroSym == sym; }
 inline int simVisibleMacro()
@@ -227,16 +281,24 @@ inline int simVisibleMacro()
    while(k < (int)SIM.macro15.size() && SIM.macro15[(size_t)k].time <= SIM.now) k++;
    return k;
 }
-inline int Bars(const string &sym, ENUM_TIMEFRAMES tf) { return simIsMacro(sym) ? (simMacroServed(sym) ? simVisibleMacro() : 0) : simVisible(tf); }
+inline int Bars(const string &sym, ENUM_TIMEFRAMES tf)
+{
+   if(!simIsMacro(sym)) return simVisible(tf);
+   const auto *x = simExtra(sym);
+   if(x) return simVisibleOf(*x);
+   return simMacroServed(sym) ? simVisibleMacro() : 0;
+}
 inline int iBarShift(const string &sym, ENUM_TIMEFRAMES tf, datetime t, bool exact = false)
 {
    (void)exact;
    if(simIsMacro(sym))
    {
-      int v = simVisibleMacro();
-      if(v == 0 || t < SIM.macro15[0].time) return -1;
+      const auto *x = simExtra(sym);
+      const std::vector<MqlRates> &m = x ? *x : SIM.macro15;
+      int v = x ? simVisibleOf(m) : simVisibleMacro();
+      if(v == 0 || t < m[0].time) return -1;
       int k = v - 1;
-      while(k > 0 && SIM.macro15[(size_t)k].time > t) k--;
+      while(k > 0 && m[(size_t)k].time > t) k--;
       return v - 1 - k;
    }
    int v = simVisible(tf);
@@ -257,12 +319,14 @@ inline int CopyRates(const string &sym, ENUM_TIMEFRAMES tf, int start, int count
    if(SIM.copyFail) return -1;
    if(simIsMacro(sym))
    {
-      if(!simMacroServed(sym)) return -1;
-      int vm = simVisibleMacro();
+      const auto *x = simExtra(sym);
+      if(!x && !simMacroServed(sym)) return -1;
+      const std::vector<MqlRates> &m = x ? *x : SIM.macro15;
+      int vm = x ? simVisibleOf(m) : simVisibleMacro();
       if(start >= vm || count <= 0) return -1;
       int last = vm - 1 - start;
       int first = std::max(0, last - count + 1);
-      out.assign(SIM.macro15.begin() + first, SIM.macro15.begin() + last + 1);
+      out.assign(m.begin() + first, m.begin() + last + 1);
       return (int)out.size();
    }
    int v = simVisible(tf);
@@ -347,7 +411,7 @@ inline double AccountInfoDouble(int prop)
    return 0.0;
 }
 inline long long TerminalInfoInteger(int) { return SIM.terminalTrade ? 1 : 0; }
-inline long long MQLInfoInteger(int) { return SIM.mqlTrade ? 1 : 0; }
+inline long long MQLInfoInteger(int prop) { return prop == MQL_TESTER ? (SIM.tester ? 1 : 0) : (SIM.mqlTrade ? 1 : 0); }
 inline datetime TimeTradeServer() { return SIM.now; }
 inline datetime TimeCurrent() { return SIM.now; }
 inline datetime TimeGMT() { return SIM.now - SIM.gmtOffsetSec; }
@@ -650,6 +714,24 @@ inline bool OrderSend(const MqlTradeRequest &req, MqlTradeResult &res)
       res.order = o.ticket;
       return true;
    }
+   if(req.action == TRADE_ACTION_SLTP)
+   {
+      for(size_t i = 0; i < SIM.pos.size(); i++)
+         if(SIM.pos[i].ticket == req.position)
+         {
+            SimPos &p = SIM.pos[i];
+            double px = (p.type == POSITION_TYPE_BUY) ? SIM.bid : simAsk();
+            bool buy = (p.type == POSITION_TYPE_BUY);
+            if(buy && ((req.sl > 0 && req.sl > px - minDist) || (req.tp > 0 && req.tp < px + minDist))) { res.retcode = TRADE_RETCODE_INVALID_STOPS; return false; }
+            if(!buy && ((req.sl > 0 && req.sl < px + minDist) || (req.tp > 0 && req.tp > px - minDist))) { res.retcode = TRADE_RETCODE_INVALID_STOPS; return false; }
+            p.sl = req.sl;
+            p.tp = req.tp;
+            res.retcode = TRADE_RETCODE_DONE;
+            return true;
+         }
+      res.retcode = TRADE_RETCODE_INVALID;
+      return false;
+   }
    if(req.action == TRADE_ACTION_REMOVE)
    {
       for(size_t i = 0; i < SIM.ord.size(); i++)
@@ -698,6 +780,101 @@ inline void simBarPath(const MqlRates &b)
       }
       i++;
    }
+}
+
+// ---- economic calendar ----
+inline bool CalendarValueHistory(std::vector<MqlCalendarValue> &values, datetime from, datetime to, const char *country = nullptr, const char *currency = nullptr)
+{
+   (void)country;
+   values.clear();
+   if(!SIM.calOk) return false;
+   for(const MqlCalendarValue &v : SIM.cal)
+   {
+      if(v.time < from || (to > 0 && v.time > to)) continue;
+      if(currency)
+      {
+         auto e = SIM.calEv.find(v.event_id);
+         if(e == SIM.calEv.end()) continue;
+         auto c = SIM.calCo.find(e->second.country_id);
+         if(c == SIM.calCo.end() || c->second.currency != currency) continue;
+      }
+      values.push_back(v);
+   }
+   if(SIM.calFiller && !currency)
+   {
+      // one LOW event per day of a far country: a working calendar always answers something
+      for(datetime d = (from / 86400) * 86400; d <= (to > 0 ? to : from + 86400); d += 86400)
+      {
+         MqlCalendarValue v;
+         v.id = 900000 + (ulong)(d / 86400);
+         v.event_id = 999001;
+         v.time = d + 3600;
+         if(v.time >= from && (to == 0 || v.time <= to)) values.push_back(v);
+      }
+   }
+   return true;
+}
+inline bool CalendarEventById(ulong id, MqlCalendarEvent &ev)
+{
+   if(!SIM.calOk) return false;
+   if(id == 999001)
+   {
+      ev = MqlCalendarEvent();
+      ev.id = id;
+      ev.country_id = 999;
+      ev.importance = CALENDAR_IMPORTANCE_LOW;
+      ev.name = "filler";
+      return true;
+   }
+   auto it = SIM.calEv.find(id);
+   if(it == SIM.calEv.end()) return false;
+   ev = it->second;
+   return true;
+}
+inline bool CalendarCountryById(ulong id, MqlCalendarCountry &co)
+{
+   if(!SIM.calOk) return false;
+   if(id == 999)
+   {
+      co = MqlCalendarCountry();
+      co.id = id;
+      co.currency = "XXX";
+      co.code = "XX";
+      return true;
+   }
+   auto it = SIM.calCo.find(id);
+   if(it == SIM.calCo.end()) return false;
+   co = it->second;
+   return true;
+}
+// plant one calendar event: currency, server time, importance, name
+inline void simAddEvent(const std::string &ccy, datetime when, ENUM_CALENDAR_EVENT_IMPORTANCE imp, const std::string &name,
+                        ENUM_CALENDAR_EVENT_IMPACT impact = CALENDAR_IMPACT_NA, bool released = false)
+{
+   ulong cid = 100;
+   for(auto &kv : SIM.calCo) if(kv.second.currency == ccy) cid = kv.first;
+   if(!SIM.calCo.count(cid) || SIM.calCo[cid].currency != ccy)
+   {
+      cid = 100 + (ulong)SIM.calCo.size();
+      MqlCalendarCountry co;
+      co.id = cid;
+      co.currency = ccy;
+      co.code = ccy.substr(0, 2);
+      SIM.calCo[cid] = co;
+   }
+   MqlCalendarEvent ev;
+   ev.id = 5000 + (ulong)SIM.calEv.size();
+   ev.country_id = cid;
+   ev.importance = imp;
+   ev.name = name;
+   SIM.calEv[ev.id] = ev;
+   MqlCalendarValue v;
+   v.id = 70000 + (ulong)SIM.cal.size();
+   v.event_id = ev.id;
+   v.time = when;
+   v.impact_type = impact;
+   if(released) { v.actual_value = 1500; v.forecast_value = 1200; v.prev_value = 1100; }
+   SIM.cal.push_back(v);
 }
 
 // ---- files: FILE_TXT append only, enough for a JSONL journal ----

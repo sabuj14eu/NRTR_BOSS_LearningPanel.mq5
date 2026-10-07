@@ -1,4 +1,4 @@
-# NRTR QML Metal Scalper (MT5, Gold & Silver) + the Crypto twin (BTC, ETH, LTC, altcoins)
+# NRTR QML Metal Scalper (MT5, Gold & Silver) + the Crypto twin (BTC, ETH, LTC, altcoins) + the Forex EA (any pair)
 
 One standalone Expert Advisor, `NRTR_QML_MetalScalper.mq5`, for **XAUUSD / Gold** and
 **XAGUSD / Silver** only. Nothing else. No Telegram, no DLLs. The only network use is two
@@ -49,7 +49,154 @@ One chart per coin, one EA per chart; the metal and crypto EAs never see each ot
 old crypto learning-panel indicator (`NRTR_BOSS_Crypto_NYTrap.mq5`, which lived on another
 branch): remove that indicator from your charts.
 
-## Install
+
+---
+
+## The FOREX EA: `NRTR_QML_ForexScalper.mq5` (any currency pair)
+
+Its own file, written for forex. It shares the metal EA's **engine** (M15 context, M5 regime +
+structure, M1 trigger, the six setups, one slot per chart, the risk gate, auto lot, journal,
+telemetry, the volatility regime and the spike guard): `tools/check_forex_engine.py` proves the
+engine block is byte-identical apart from the asset detector, and the test runner fails on any
+drift. Everything on the **asset side** is different, because a pair is not a metal and not a
+coin. Attach it to any pair (`EURUSD`, `#GBPJPY`, `AUD/USD`, `USDTRY.m` ...); on anything else the
+banner reads **FOREX ONLY**. Magic `180917`; journal `engine: NQ-FOREX`; telemetry
+`/webhooks/forex/telemetry` with `asset_class: forex`.
+
+| | Metal / Crypto EA | Forex EA |
+|---|---|---|
+| Symbols | gold, silver / coins | any pair of two ISO codes, any prefix / suffix; class **MAJOR** (USD against EUR GBP JPY AUD NZD CAD CHF), **CROSS** (two of the eight, no USD), **EXOTIC** (any other currency). `InpPairClass` forces a class for a symbol AUTO cannot read |
+| Profile | metal: none; crypto: per coin | MAJOR raw; CROSS raw (yen crosses: SL buffers x1.25); **EXOTIC: risk x0.5, buffers x1.5, impulse x1.25, no radar stops, no scalps** (the spread eats a 1-ATR take-profit). Multipliers only ever reduce risk and widen buffers |
+| Units | points | **pips** (10 points on 3- and 5-digit quotes). Spread cap = `InpMaxSpreadPips`, or x ATR(M5) by class (0.15 / 0.20 / 0.30); the panel shows the spread, the pip value per lot and the cap in pips |
+| Macro filter | DXY (metal) / BTC lead (crypto), radar only | the **MACRO VOTE** (below), every entry kind |
+| News | none - the spike is the evidence | the **MT5 economic calendar** (built in, no network, no DLL): a guard window, resting orders pulled, profits banked, and the terminal's own reading of each release as a vote |
+| Clock | sessions shape the levels | sessions **gate** entries: home sessions per currency, the rollover, the week's edges, a session **tilt** |
+| Exits | SL / TP, scalp time stop + flip | the same plus **SMART EXIT**: bank on a bias change, cut under water, lock profit |
+| Portfolio | one chart = one slot | one chart = one slot **and** a cap across charts + same-currency exposure |
+
+### A pair is two currencies: the MACRO VOTE
+
+Every voter is counted, never weighted. `+` supports the direction, `-` is against it; a voter
+without data votes nothing and the panel says `NO DATA`. The `MACRO VOTE` row shows the vote for
+BUY and for SELL with every voter named.
+
+| Voter | Measured how | Votes |
+|---|---|---|
+| **Currency strength** | the broker's seven USD majors (and this pair when it is not one of them) in this chart's spelling (`GBPUSD.m` ...): each pair's move over `InpStrengthBars` (16 M15 bars = 4 h) in ATR(M15) units, `+r` to its base, `-r` to its quote; a currency's strength is the mean of its contributions. `diff = strength(base) - strength(quote)` | WEAK (1) at `InpStrengthWeak` (1.0), STRONG (2) at `InpStrengthStrong` (2.0). A broker without the majors: the pair alone, said as `1 pair` |
+| **Oil** (CAD, NOK, MXN) | M15 NRTR of `XTIUSD / USOIL / WTI / BRENT ...` (`InpOilSymbol`, AUTO) | oil up = CAD up = USDCAD down |
+| **Gold** (AUD) | M15 NRTR of `XAUUSD / GOLD` | gold up = AUD up |
+| **US 10-year bond** (USD) | M15 NRTR of `USTNOTE / TNOTE / US10Y ...`; a **price** (up = yields down = USD weaker) or a **yield** (up = USD stronger), `InpBondKind` AUTO reads the name (NOTE / BOND / ZN = price, `US10Y` / YIELD = yield) | 1 |
+| **Dollar index** (USD) | M15 NRTR of `USDX / DXY / USDOLLAR` | 1 |
+| **News vote** | releases of the pair's currencies in the last `InpNewsVoteHours` (4 h) with the calendar's own POSITIVE / NEGATIVE reading (actual against forecast) | 1 each, for the currency |
+| **H4 and H1 context** | EMA200 + NRTR of this symbol on H4 and H1 (`InpHtfBars` = 400 closed bars) | 1 each |
+| **H1 CHoCH** | a fresh (`InpHtfChochBars` = 12 H1 bars) change of character on H1 | 1 in its direction |
+
+**The rule** (`InpMacroGate`): a vote **against** a trade of at least `InpMacroBlockLevel` (2)
+blocks it - every plan kind and the scalp - **unless the pair's OWN structure is A+**: M15
+context and M5 regime on the side of the trade, and for a radar break a score of at least
+`InpMacroOverrideScore` (9 of 10). The note names the voters: `MACRO AGAINST BUY (vote -3:
+strength EUR<USD STRONG -2, DXY BULLISH -1) - own structure not A+`.
+
+### BOS / CHoCH and the higher timeframes
+
+Every close through a confirmed swing on **M5, H1 and H4** is classified: **BOS** (break of
+structure) when it goes **with** the structure in force before it (a close above a swing high
+in HH/HL), **CHoCH** (change of character) when it goes **against** it (a close below a swing low
+in HH/HL), `BREAK` when the structure was not confirmed. The `H4 / H1` row shows each
+timeframe's context, its structure (`HH -> HL`) and its last break (`CHoCH down 1.0850 @14:00`);
+the chart marks on M5 read `BOS` / `CHoCH` instead of the metal EA's `BREAKOUT CONFIRMED`; every
+journal line carries `h4_ctx`, `h1_ctx`, `h1_break`, `m5_break`. The QML plan is itself a
+CHoCH-type reversal (a close through the neck after a higher high). Without H1 / H4 at the broker
+the row says `NO DATA` and nothing votes.
+
+### News: the MT5 economic calendar
+
+One query per closed M1 candle over yesterday .. +2 days, kept for the pair's **two
+currencies** at MODERATE and HIGH importance. **Times are the broker's server time**, like
+everything else on the panel (the row shows the next event's time so you can check it against
+the broker's calendar window).
+
+* **The guard** (`InpNewsGuard`): a HIGH event closes the gate from `InpNewsBeforeMin` (30)
+  before to `InpNewsAfterMin` (30) after. **Top tier** - FOMC, rate decisions, NFP / payrolls,
+  CPI, GDP, PCE, unemployment rate, ISM, retail sales, central-bank press conferences and
+  governors - gets `InpNewsTopBeforeMin` / `InpNewsTopAfterMin` (60 / 60). MODERATE events
+  gate too with `InpNewsMediumBlocks` (off: shown only).
+* **Resting orders are pulled** through the window (the plan stays armed and is re-placed when
+  the window ends), and a position at least `InpNewsBankProfitR` (0.2 R) in profit is **closed
+  and banked** when the window opens (a loser keeps its SL: the spike can go either way and the
+  SL is the plan). Nothing new is opened inside the window; the spike guard and the volatility
+  regime take over after the release.
+* **UNKNOWN is not clear.** A calendar that answers nothing (no calendar at this broker, the
+  terminal offline) is `NEWS UNKNOWN`, and by default the EA does not trade blind
+  (`InpNewsUnknownBlocks`; set it false to trade anyway - the row says so). The Strategy Tester
+  has no calendar: there the row reads `N/A` and nothing is gated.
+* The `NEWS` row: `GUARD - USD FOMC Rate Decision at 21:00 (TOP TIER, in 0h42m) - gate closed
+  60 min before to 60 min after`, or `clear - next HIGH USD Initial Jobless Claims in 3h10m
+  (gate closes 30 min before)   released 4h: USD CPI POSITIVE`.
+
+### The forex clock
+
+Sessions are defined where they live and converted with the broker's **live GMT offset**
+(`TimeTradeServer - TimeGMT`, two witnesses) plus the computed US and EU daylight rules - see
+**The clock** below; it is the same AUTO clock the metal and crypto EAs use since v1.8.0 / v1.2.0.
+On top of it, forex-only:
+
+| Rule | Default | Gate / action |
+|---|---|---|
+| **Home session** (`InpHomeSessionOnly`) | on | a new trade only while a home session of one of the pair's currencies is open: **Asia** for JPY AUD NZD (SGD HKD CNH ...), **London** for EUR GBP CHF (SEK NOK DKK PLN HUF CZK TRY ZAR ...), **New York** for USD CAD (MXN BRL ...). EURUSD = London + NY, USDJPY = Asia + NY, AUDNZD = Asia, EURGBP = London. `OUTSIDE HOME SESSION - EUR London, USD NY - now ASIA` |
+| **Rollover** (`InpRolloverGuardMin`) | 15 min | no new trade from 15 min before to 15 min after 17:00 New York (spreads widen, the swap is charged) |
+| **Friday stop** (`InpFridayStopMin`) | 120 min | no new trade in the last 2 hours before the Friday 17:00 NY close; **every resting order is pulled** and, with `InpWeekendFlat` (on), every position at least `InpWeekendMinProfitR` (0 = any non-negative result) in profit is **closed**. Losers keep their SL unless `InpWeekendCloseLosers` |
+| **Week open** (`InpWeekOpenGuardMin`) | 60 min | no new trade in the first hour after the Sunday 17:00 NY open (gaps, thin books); the weekend itself is `WEEK EDGE - WEEKEND` |
+| **Session tilt** (`InpSessionTilt`) | on: Asia BUY, London none, NY SELL | the operator's observation, encoded as an explicit switchable rule, **not validated evidence**: a trade against the session's lean needs **strong confirmation** - M15 context and M5 regime with it (a reversal plan, QML or NY trap, needs the M15 context), the macro vote not against, a radar break with score `InpTiltOverrideScore` (8). Every journal line records `session`, `tilt` and `with_tilt`, so the hypothesis can be judged on **n >= 100 filled trades** (Evidence Law) instead of memory; `InpSessionTilt = false` keeps recording and gates nothing |
+
+The `SESSION` row: `LONDON  home London+NY OPEN   tilt none   NY 16:30-23:00  London 10:00  Asia
+01:00  rollover 00:00   AUTO  server GMT+3  NY DST on  EU DST on`, plus the portfolio and the
+last smart-exit action.
+
+### SMART EXIT (intelligent management)
+
+Open positions are managed on every closed M1 candle (`InpSmartExit`), on top of the SL / TP:
+
+| Rule | Default | What happens |
+|---|---|---|
+| **Bank on an M5 flip** | `InpSmartFlipProfitR` 0.1 R | the M5 regime flipped against a position that is at least 0.1 R in profit: closed, `SMART EXIT: M5 regime flipped BEARISH against the position, banking +0.42R before the TP` |
+| **Cut on an M5 flip** | `InpSmartFlipCutLoss` on | flipped against a position under water: closed now, a smaller loss than the SL (`false` = the SL decides). Scalps keep their own flip rule |
+| **Bank on an M1 turn** | `InpSmartM1ProfitR` 0.5 R | the M1 NRTR turned against a position at least 0.5 R in profit: closed and banked |
+| **Profit lock** | `InpSmartLockAtR` 0.7 R, `InpSmartLockR` 0.1 R | once a position reaches +0.7 R the SL moves to entry + 0.1 R (one `TRADE_ACTION_SLTP`, journal event `sl_moved`), tightened only, never loosened |
+
+"Flipped" means the regime **agreed with the position at some point since the open** and now
+points against it (read from the M5 history, so a restart changes nothing). A reversal plan
+(QML, NY trap) whose regime never agreed is **left alone** - it runs on its SL / TP, and the
+verdict says why: `EXIT BUY #4242 - M5 REGIME FLIPPED BEARISH  (you decide - the regime never
+agreed with this reversal trade, the plan runs on its SL/TP)`. The HOLD verdict shows the result
+in R and the lock state: `HOLD BUY #4242 (pullback) - M5 regime intact  P/L +12.30 USD (+0.42R)
+SL ... TP ...  lock at +0.7R`.
+
+### Portfolio (one EA per chart, one magic)
+
+* `InpMaxOpenAcrossPairs` (3): at most this many positions of this EA across **all** charts
+  (gate `PORTFOLIO FULL - 3 POSITIONS ACROSS PAIRS`).
+* `InpMaxCcyExposure` (2): a new trade carrying a currency the same way as 2 positions already
+  do is blocked (`EXPOSURE - already 2 position(s) long USD on other charts`): a USDJPY long and a
+  USDCAD long are one USD bet taken twice, a third is not taken. Positions on other charts are
+  read by their symbol's currencies; they never take this chart's slot.
+
+### Install
+
+1. Copy `NRTR_QML_ForexScalper.mq5` to `MQL5/Experts/`, MetaEditor **F7**, expect `0 errors`.
+2. Open the pair's **M1** chart, drag the EA on, tick **Allow Algo Trading**. One chart per pair.
+3. Check the first three rows: `PAIR PROFILE` names the class and the pip value, `H4 / H1` shows
+   both contexts (or `NO DATA`), `STRENGTH` says how many majors the broker served. `MACRO VOTE`
+   lists the witnesses it found; a `-` means not applicable to this pair, `NO DATA` means the
+   broker does not serve that symbol (type it into `InpOilSymbol` / `InpBondSymbol` / ... if you
+   know its name).
+4. `NEWS` must read `clear - next ...` or `GUARD - ...` with a time that matches the broker's
+   calendar. `UNKNOWN` means the terminal has no calendar: decide with `InpNewsUnknownBlocks`.
+5. `SESSION` must show `AUTO  server GMT+n` with the NY open where your broker's clock puts it.
+
+---
+
+## Install (metal / crypto)
 
 1. MT5 → **File → Open Data Folder** → `MQL5/Experts/`. Copy `NRTR_QML_MetalScalper.mq5` there.
 2. MetaEditor → open → **F7**. Expect `0 errors`.
@@ -223,6 +370,30 @@ The board shows two `RADAR` lines (level, distance, score with its six component
 two plan rows `RADAR UP` / `RADAR DOWN` with the armed stop order and its live status. The
 scalp remains the lowest priority; the radar is one more limit/stop plan inside the one-slot
 rule.
+
+## The clock (v1.8.0 metal, v1.2.0 crypto, forex from the start): AUTO sessions
+
+Until v1.7 the sessions were **server hours typed in by hand** (NY 16:30-23:00, London 10:00,
+Asia 01:00-10:00), right only on an EET broker that follows US daylight time. Since v1.8.0 the
+sessions are defined **where they live** and converted with the broker's **live GMT offset**
+(`TimeTradeServer() - TimeGMT()`: two witnesses, never an assumed number) and the computed US
+and EU daylight rules (engine `NqClockFromGmt`, tested at the switch instants):
+
+| Session | Defined as | On a GMT+3 (EET summer) broker | On a GMT+0 broker |
+|---|---|---|---|
+| New York | 09:30-16:00 New York | 16:30-23:00 | 13:30-20:00 |
+| London | 08:00 London to the NY open | 10:00-16:30 | 07:00-13:30 |
+| Asia | 22:00 UTC (the Sydney / Tokyo book) to the London open | 01:00-10:00 | 00:00-07:00 (clamped to the server day) |
+| Rollover | 17:00 New York | 00:00 | 21:00 |
+| Pre-NY range | from the server day start | 00:00-16:30 | 00:00-13:30 |
+
+The `NY SESSION` line says what is in force: `clock AUTO  server GMT+3  NY DST on  EU DST on`.
+`InpClockAuto = false` uses the server-hour inputs as before; if the derived sessions wrap the
+server day in a way the day-bound engine cannot hold (an exotic broker clock), the line says
+`AUTO FAILED ... MANUAL inputs in use`. Telemetry carries `clock`, `clock_offset_min`, `ny_dst`,
+`eu_dst` and the derived minutes. In the two or three weeks a year when the US and EU switch on
+different Sundays the London open and the NY open are an hour apart from their summer distance -
+and the AUTO clock follows each of them.
 
 ## 4. Session levels, breakouts, VWAP (to read the day)
 
@@ -409,7 +580,8 @@ Every order is printed to the **Experts** log, e.g.
 | Scalp actionable for / time stop | 2 / 45 M1 bars | |
 | QML SL buffer / wait bars | 0.2 × ATR5 / 36 M5 bars | head confirmation → neck break |
 | Plan lifetime (M5 / swing) | 72 M5 bars / 96 M15 bars | |
-| NY open / close / pre-range start | 16:30 / 23:00 / 00:00 server | EET broker = New York 09:30-16:00 |
+| Clock AUTO | on | sessions from the broker's GMT offset + US/EU DST (see The clock); off = the server hours below |
+| NY open / close / pre-range start | 16:30 / 23:00 / 00:00 server | used when Clock AUTO is off (EET broker = New York 09:30-16:00) |
 | Trade QML / pullback / NY trap / swing / radar | on | each kind can be switched off |
 | Radar stop buffer | 0.15 ATR5 | beyond the level |
 | Macro symbol / macro blocks | empty / on | e.g. USDX; empty = no macro filter |
@@ -417,7 +589,7 @@ Every order is printed to the **Experts** log, e.g.
 | Expansion radar score / scalp needs M15 | 8 / on | stronger confirmation during EXPANSION |
 | Spike guard / bars / x normal / retrace | on / 12 / 2.5 / 0.5 | the EXIT WARNING threshold |
 | NEAR distance | 0.5 ATR5 | |
-| Asia start / end, London start | 01 / 10 / 10 server hours | London ends at the NY open |
+| Asia start / end, London start | 01 / 10 / 10 server hours | used when Clock AUTO is off; London ends at the NY open |
 | Draw levels | on | session highs/lows, previous day, S/R swings, VWAP, confirmed break marks |
 | Plan close on regime flip | off | scalps always close on a flip; plans say EXIT and wait for you |
 | Journal to file / SignalMesh URL / secret | on / empty / empty | see the journal section |

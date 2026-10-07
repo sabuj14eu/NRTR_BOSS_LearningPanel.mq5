@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <string>

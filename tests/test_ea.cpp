@@ -19,7 +19,7 @@ static void begin(const char *n) { g_sec = g_fail; std::printf("[ RUN  ] %s\n", 
 static void end(const char *n) { std::printf("[ %s ] %s\n", g_fail == g_sec ? " OK " : "FAIL", n); }
 static bool near(double a, double b, double eps = 1e-9) { return std::fabs(a - b) <= eps; }
 
-static const long long T0 = 1788220800LL;   // 2026-08-31 00:00 UTC (a Monday)
+static const long long T0 = 1788220800LL;   // 2026-09-01 00:00 UTC (a Tuesday)
 
 static std::vector<MqlRates> toRates(const std::vector<SBar> &v)
 {
@@ -819,9 +819,9 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.7.3\"",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.8.0\"",
                            "\"symbol\":\"XAUUSD\"", "\"metal\":\"GOLD\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
-                           "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
+                           "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"clock\":\"AUTO\"", "\"clock_offset_min\":180", "\"ny_dst\":true", "\"ny_open_min\":990", "\"london_open_min\":600", "\"asia_open_min\":60", "\"rollover_min\":0", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
                            "\"m5\":{\"regime\":\"", "\"structure\":\"", "\"structure_state\":\"", "\"lookback\":3", "\"reasons\":[",
                            "\"m1\":{\"nrtr_dir\":\"", "\"trigger\":\"", "\"forecast_next\":\"", "\"forecast_resolved\":",
@@ -864,7 +864,7 @@ int main()
       CHECK(SIM.web.size() > b3 && SIM.web.back().body.find("\"account_mode\":\"real\"") != std::string::npos,
             "with demo-only off the snapshot says account_mode real, so the page can flag it");
       SIM.accountMode = ACCOUNT_TRADE_MODE_DEMO;
-      SIM.gmtOffsetSec = 0;
+      SIM.gmtOffsetSec = 3 * 3600;
       g_telUrl = "";
       g_telDemoOnly = true;
    }

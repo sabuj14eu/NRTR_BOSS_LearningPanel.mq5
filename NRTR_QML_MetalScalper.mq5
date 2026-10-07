@@ -33,7 +33,7 @@
 //|  Personal tool. No network, no Telegram, no DLL, no files.       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.73"
+#property version     "1.80"
 #property description "Gold/Silver: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback pending-order plans + per-candle forecast arrows."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -2176,6 +2176,150 @@ int NqRiskGate(bool autoOn, bool isDemo, bool allowReal, bool tradeAllowed,
    return g;
 }
 
+//--- CLOCK. Sessions are defined where they live (New York 09:30-16:00,
+//    London 08:00, the Asian book from 22:00 UTC) and converted to the
+//    broker's clock with its LIVE GMT offset (TimeTradeServer - TimeGMT:
+//    two witnesses, never an assumed number). US and EU daylight-saving
+//    rules are computed, so the server hour of the NY open is right in both
+//    seasons and on any broker clock. Pure arithmetic, no terminal call.
+struct NqClock
+{
+   int      offsetMin;    // server clock minus GMT, to the half hour
+   bool     usDst;        // New York on daylight time
+   bool     euDst;        // London on daylight time
+   int      nyS;          // server minutes of the day
+   int      nyE;
+   int      lonS;         // London open; London ends at the NY open
+   int      asiaS;
+   int      asiaE;        // = London open
+   int      preS;         // pre-NY range start (the server day start)
+   int      roll;         // the daily rollover (17:00 New York)
+};
+
+// civil date of a UTC timestamp (days since 1970-01-01)
+void NqCivil(datetime t, int &y, int &m, int &d)
+{
+   long days = (long)t / 86400;
+   long z = days + 719468;
+   long era = ((z >= 0) ? z : z - 146096) / 146097;
+   long doe = z - era * 146097;
+   long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+   long yy = yoe + era * 400;
+   long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+   long mp = (5 * doy + 2) / 153;
+   d = (int)(doy - (153 * mp + 2) / 5 + 1);
+   m = (int)((mp < 10) ? mp + 3 : mp - 9);
+   y = (int)((m <= 2) ? yy + 1 : yy);
+}
+
+long NqDaysFromCivil(int y, int m, int d)
+{
+   long yy = (m <= 2) ? y - 1 : y;
+   long era = ((yy >= 0) ? yy : yy - 399) / 400;
+   long yoe = yy - era * 400;
+   long mm = m;
+   long doy = (153 * (mm + ((mm > 2) ? -3 : 9)) + 2) / 5 + d - 1;
+   long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+   return era * 146097 + doe - 719468;
+}
+
+// 0 = Sunday ... 6 = Saturday (1970-01-01 was a Thursday)
+int NqDow(datetime t)
+{
+   return (int)(((long)t / 86400 + 4) % 7);
+}
+
+// day of month of the n-th Sunday (n = 1..4) or the last Sunday (n = 0)
+int NqSundayOf(int y, int m, int n)
+{
+   long d1 = NqDaysFromCivil(y, m, 1);
+   int dow1 = (int)((d1 + 4) % 7);
+   int firstSun = 1 + ((7 - dow1) % 7);
+   if(n >= 1)
+      return firstSun + 7 * (n - 1);
+   int ny = (m == 12) ? y + 1 : y;
+   int nm = (m == 12) ? 1 : m + 1;
+   int dim = (int)(NqDaysFromCivil(ny, nm, 1) - d1);
+   int last = firstSun;
+   while(last + 7 <= dim)
+      last += 7;
+   return last;
+}
+
+// US daylight time: second Sunday of March 07:00 UTC to first Sunday of November 06:00 UTC
+bool NqUsDst(datetime utc)
+{
+   int y = 0;
+   int m = 0;
+   int d = 0;
+   NqCivil(utc, y, m, d);
+   datetime a = (datetime)(NqDaysFromCivil(y, 3, NqSundayOf(y, 3, 2)) * 86400 + 7 * 3600);
+   datetime b = (datetime)(NqDaysFromCivil(y, 11, NqSundayOf(y, 11, 1)) * 86400 + 6 * 3600);
+   return (utc >= a && utc < b);
+}
+
+// EU daylight time: last Sunday of March 01:00 UTC to last Sunday of October 01:00 UTC
+bool NqEuDst(datetime utc)
+{
+   int y = 0;
+   int m = 0;
+   int d = 0;
+   NqCivil(utc, y, m, d);
+   datetime a = (datetime)(NqDaysFromCivil(y, 3, NqSundayOf(y, 3, 0)) * 86400 + 3600);
+   datetime b = (datetime)(NqDaysFromCivil(y, 10, NqSundayOf(y, 10, 0)) * 86400 + 3600);
+   return (utc >= a && utc < b);
+}
+
+int NqServerMin(int utcMin, int offsetMin)
+{
+   int m = (utcMin + offsetMin) % 1440;
+   if(m < 0)
+      m += 1440;
+   return m;
+}
+
+// the day's session minutes on the SERVER clock. false = the sessions wrap
+// the server day in a way the day-bound engine cannot hold (an exotic broker
+// clock): the caller falls back to its manual inputs and says so.
+bool NqClockFromGmt(datetime utcNow, long offsetSec, NqClock &c)
+{
+   c.usDst = NqUsDst(utcNow);
+   c.euDst = NqEuDst(utcNow);
+   c.offsetMin = (int)MathRound(offsetSec / 1800.0) * 30;
+   int nyOpenUtc = c.usDst ? 13 * 60 + 30 : 14 * 60 + 30;   // 09:30 New York
+   int nyCloseUtc = c.usDst ? 20 * 60 : 21 * 60;            // 16:00 New York
+   int rollUtc = c.usDst ? 21 * 60 : 22 * 60;               // 17:00 New York
+   int lonOpenUtc = c.euDst ? 7 * 60 : 8 * 60;               // 08:00 London
+   int asiaOpenUtc = 22 * 60;                                // Sydney / Tokyo: the Asian book
+   c.nyS = NqServerMin(nyOpenUtc, c.offsetMin);
+   c.nyE = NqServerMin(nyCloseUtc, c.offsetMin);
+   c.lonS = NqServerMin(lonOpenUtc, c.offsetMin);
+   c.asiaS = NqServerMin(asiaOpenUtc, c.offsetMin);
+   c.asiaE = c.lonS;
+   c.roll = NqServerMin(rollUtc, c.offsetMin);
+   c.preS = 0;
+   if(c.nyE <= c.nyS)
+      c.nyE = 1440;                 // NY runs into the server midnight: it ends with the day
+   if(c.asiaS >= c.asiaE)
+      c.asiaS = 0;                  // Asia started before the server midnight: its part after it
+   if(c.asiaE <= c.asiaS || c.lonS >= c.nyS || c.nyS <= 0)
+      return false;
+   return true;
+}
+
+// position in the trading week on the server clock: the week opens at the
+// Sunday rollover (17:00 New York) and closes at the Friday one. Minutes
+// since the open and until the close; false = the weekend.
+bool NqWeekPos(int dow, int mod, int rollMin, int &sinceOpen, int &untilClose)
+{
+   int weekMin = dow * 1440 + mod;
+   int openMin = ((rollMin >= 720) ? 0 : 1440) + rollMin;
+   int closeMin = ((rollMin >= 720) ? 5 : 6) * 1440 + rollMin;
+   sinceOpen = weekMin - openMin;
+   untilClose = closeMin - weekMin;
+   return (weekMin >= openMin && weekMin < closeMin);
+}
+
 //--- data is only usable if the last closed bars are recent
 bool NqIsFresh(datetime last1, int sec1, datetime last5, int sec5, datetime last15, int sec15, datetime now)
 {
@@ -2522,7 +2666,9 @@ input bool           InpTradeRadar       = true;        // Trade IMPULSE RADAR p
 input double         InpRadarBufAtr      = 0.15;        // Radar stop order: buffer beyond the level (x ATR5)
 input string         InpMacroSymbol      = "";          // Macro filter symbol (e.g. USDX / DXY); empty = off
 input bool           InpMacroBlocks      = true;        // Block a radar order when the macro symbol's M15 NRTR points the same way
-input group "NY trap + swing"
+input group "Clock (sessions live in New York / London / Asia time; AUTO converts them with the broker's live GMT offset)"
+input bool           InpClockAuto        = true;        // AUTO: NY 09:30-16:00, London 08:00, Asia 22:00 UTC from TimeTradeServer-TimeGMT + US/EU DST; false = the server hours below
+input group "NY trap + swing (server hours - used when InpClockAuto = false)"
 input int            InpNyStartHour      = 16;          // NY open, server hour   (EET broker: 16:30 all year)
 input int            InpNyStartMin       = 30;          // NY open, server minute
 input int            InpNyEndHour        = 23;          // NY close, server hour
@@ -2619,6 +2765,9 @@ int      g_nRadar;
 NqRadar  g_rdUp;
 NqRadar  g_rdDn;
 int      g_macroDir;   // M15 NRTR direction of the macro symbol (0 = none / not available)
+NqClock  g_clk;        // the session minutes in force (AUTO from the GMT offset, or the manual inputs)
+bool     g_clkAuto;    // AUTO succeeded
+string   g_clkText;    // what the panel says about the clock
 int      g_volClass;   // NQ_VOL_*: ATR(M5) against its own average
 double   g_volRatio;   // ATR(M5) / average
 double   g_volAvg;     // the average ATR(M5) itself
@@ -2635,7 +2784,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.7.3"
+#define NQ_EA_VERSION "1.8.0"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -2739,6 +2888,7 @@ string NqJsonS(string key, string val);
 string NqJsonN(string key, double val, int digits);
 string NqJsonI(string key, long val);
 void   NqVolRegime();
+void   NqReadClock();
 int    NqVolGateBits();
 string NqVolClassText(int c);
 string NqGateAtX(int g, int nth);
@@ -2834,6 +2984,9 @@ int OnInit()
    NqRadarReset(g_rdUp);
    NqRadarReset(g_rdDn);
    g_macroDir = 0;
+   g_clkAuto = false;
+   g_clkText = "";
+   NqReadClock();
    g_volClass = NQ_VOL_UNKNOWN;
    g_volRatio = 0.0;
    g_volAvg = 0.0;
@@ -3270,12 +3423,11 @@ void NqRecompute()
    NqRunTrigger(g_s1, g_s5, true, g_P, g_sigs, g_nSig);
    NqFindPlans(g_s5, g_piv5, g_s5.np, g_P, g_plans, g_nPlans);
    // NY trap on M5, confirmed by the M5 NRTR (read-only plans)
-   NqRunNyTrap(g_s5, g_s5.dir, g_P, InpRangeStartHour * 60, InpNyStartHour * 60 + InpNyStartMin,
-               InpNyEndHour * 60 + InpNyEndMin, g_ny, g_nNy, g_nyState);
+   NqReadClock();
+   NqRunNyTrap(g_s5, g_s5.dir, g_P, g_clk.preS, g_clk.nyS, g_clk.nyE, g_ny, g_nNy, g_nyState);
    // session levels, breaks (M5 closes) and the day VWAP (M1)
-   NqRunLevels(g_s5, InpAsiaStartHour * 60, InpAsiaEndHour * 60, InpLondonStartHour * 60,
-               InpNyStartHour * 60 + InpNyStartMin, InpRangeStartHour * 60, InpNyStartHour * 60 + InpNyStartMin,
-               InpNyEndHour * 60 + InpNyEndMin, g_levels, g_brk, g_nBrk, g_resAbove, g_supBelow);
+   NqRunLevels(g_s5, g_clk.asiaS, g_clk.asiaE, g_clk.lonS, g_clk.nyS, g_clk.preS, g_clk.nyS, g_clk.nyE,
+               g_levels, g_brk, g_nBrk, g_resAbove, g_supBelow);
    NqCalcDayVwap(g_s1, g_vwap1);
    NqRunSwingBreaks(g_s5, g_piv5, g_s5.np, 24, g_sbrk, g_nSbrk);
    g_labelT = g_s1.t[g_s1.n - 1];
@@ -3372,6 +3524,47 @@ bool NqMacroBlocks(int planDir, int score)
    if(!InpMacroBlocks || g_macroDir == 0 || planDir == 0)
       return false;
    return g_macroDir == planDir;
+}
+
+
+//+------------------------------------------------------------------+
+//| THE CLOCK. AUTO: the session minutes come from the broker's live  |
+//| GMT offset and the US / EU daylight rules (engine: NqClockFromGmt)|
+//| so NY 09:30 is NY 09:30 on any broker in both seasons. MANUAL:    |
+//| the server-hour inputs, as before. The panel's NY SESSION line    |
+//| shows which is in force and the offset it measured.              |
+//+------------------------------------------------------------------+
+void NqReadClock()
+{
+   g_clkAuto = false;
+   g_clk.offsetMin = 0;
+   g_clk.usDst = false;
+   g_clk.euDst = false;
+   g_clk.nyS = InpNyStartHour * 60 + InpNyStartMin;
+   g_clk.nyE = InpNyEndHour * 60 + InpNyEndMin;
+   g_clk.lonS = InpLondonStartHour * 60;
+   g_clk.asiaS = InpAsiaStartHour * 60;
+   g_clk.asiaE = InpAsiaEndHour * 60;
+   g_clk.preS = InpRangeStartHour * 60;
+   g_clk.roll = InpRangeStartHour * 60;
+   g_clkText = "MANUAL server hours (InpClockAuto = false)";
+   if(!InpClockAuto)
+      return;
+   datetime s = TimeTradeServer();
+   datetime g = TimeGMT();
+   NqClock c;
+   bool ok = NqClockFromGmt(g, (long)s - (long)g, c);
+   int off = c.offsetMin;
+   string offT = "GMT";
+   offT = offT + ((off >= 0) ? "+" : "-") + IntegerToString(MathAbs(off) / 60) + ((MathAbs(off) % 60 != 0) ? ":30" : "");
+   if(!ok)
+   {
+      g_clkText = "AUTO FAILED - the sessions wrap the server day at " + offT + " - MANUAL inputs in use";
+      return;
+   }
+   g_clk = c;
+   g_clkAuto = true;
+   g_clkText = "AUTO  server " + offT + "  NY DST " + (c.usDst ? "on" : "off") + "  EU DST " + (c.euDst ? "on" : "off");
 }
 
 //+------------------------------------------------------------------+
@@ -4273,6 +4466,10 @@ string NqTelemetryJson()
               NqJsonS("account_mode", g_isDemo ? "demo" : "real") + "," + NqJsonI("magic", InpMagic) + "," +
               NqJsonI("ts_server", (long)nowS) + "," + NqJsonI("ts_gmt", (long)nowG) + "," +
               NqJsonI("server_offset_sec", (long)nowS - (long)nowG) + "," + NqJsonI("heartbeat_sec", g_telSec) + "," +
+              NqJsonS("clock", g_clkAuto ? "AUTO" : "MANUAL") + "," + NqJsonI("clock_offset_min", g_clk.offsetMin) + "," +
+              NqJsonB("ny_dst", g_clk.usDst) + "," + NqJsonB("eu_dst", g_clk.euDst) + "," + NqJsonI("ny_open_min", g_clk.nyS) + "," +
+              NqJsonI("ny_close_min", g_clk.nyE) + "," + NqJsonI("london_open_min", g_clk.lonS) + "," + NqJsonI("asia_open_min", g_clk.asiaS) + "," +
+              NqJsonI("rollover_min", g_clk.roll) + "," +
               NqJsonB("ready", g_ready) + "," + NqJsonB("fresh", ok && g_fresh) + "," + NqJsonS("data_reason", dataReason) + "," +
               NqJsonS("vol_regime", NqVolClassText(g_volClass)) + "," + NqJsonN("vol_ratio", g_volRatio, 2) + "," +
               NqJsonI("spike_dir", g_spikeDir) + "," + NqJsonN("spike_atr", g_spikeAtr, 1) + "," + NqJsonN("spike_x", g_spikeX, 2) + "," + NqJsonN("spike_retrace", g_spikeRetr, 2) + ",";
@@ -5595,11 +5792,11 @@ void NqDrawPanel()
    int n5 = ok ? g_s5.n : 0;
    double atr5 = (ok && n5 > 0) ? g_s5.atr[n5 - 1] : 0.0;
    int nowMod = NqMinuteOfDay(nowS);
-   int nyStart = InpNyStartHour * 60 + InpNyStartMin;
-   int nyEnd = InpNyEndHour * 60 + InpNyEndMin;
+   int nyStart = g_clk.nyS;
+   int nyEnd = g_clk.nyE;
    bool nyNow = (nowMod >= nyStart && nowMod < nyEnd);
-   string hhmmS = IntegerToString(InpNyStartHour, 2, '0') + ":" + IntegerToString(InpNyStartMin, 2, '0');
-   string hhmmE = IntegerToString(InpNyEndHour, 2, '0') + ":" + IntegerToString(InpNyEndMin, 2, '0');
+   string hhmmS = IntegerToString(nyStart / 60, 2, '0') + ":" + IntegerToString(nyStart % 60, 2, '0');
+   string hhmmE = IntegerToString(nyEnd / 60, 2, '0') + ":" + IntegerToString(nyEnd % 60, 2, '0');
    string nyT = "NY SESSION  " + hhmmS + "-" + hhmmE + "  ";
    if(nyNow)
       nyT = nyT + "INSIDE, " + NqHhMm((long)(nyEnd - nowMod) * 60) + " left";
@@ -5610,9 +5807,10 @@ void NqDrawPanel()
    bool sameDay = ok && g_nyState.day == NqDayOf(nowS);
    if(sameDay && g_nyState.nyOk)
       nyT = nyT + "   NY range " + NqPx(g_nyState.nyLo) + " - " + NqPx(g_nyState.nyHi);
+   nyT = nyT + "   clock " + g_clkText;
    NqLabel("ny1", kx, yr, nyT, cVal, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
    yr += rh;
-   string preT = "PRE-NY RANGE  " + IntegerToString(InpRangeStartHour, 2, '0') + ":00-" + hhmmS + "  ";
+   string preT = "PRE-NY RANGE  " + IntegerToString(g_clk.preS / 60, 2, '0') + ":" + IntegerToString(g_clk.preS % 60, 2, '0') + "-" + hhmmS + "  ";
    if(sameDay && g_nyState.preOk)
       preT = preT + "high " + NqPx(g_nyState.preHi) + "   low " + NqPx(g_nyState.preLo);
    else
