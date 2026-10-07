@@ -29,15 +29,40 @@ the build environment. The EA was therefore verified like this:
 it behaves on a real broker feed. **Press F7 in MetaEditor and do the manual checks below
 before relying on it.** If F7 reports anything, send the exact message.
 
-## Results (2026-09-30)
+## Results (2026-10-02)
 
 ```
+CRYPTO TWIN:      derived files match; engine block identical apart from the asset detector
+-- NRTR_QML_MetalScalper.mq5 --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 EA ENGINE TESTS:  98 checks passed, 0 failed
-EA TESTS:         140 checks passed, 0 failed
-MetaEditor F7:    NOT RUN (not available in the build environment)
+EA TESTS:         164 checks passed, 0 failed
+-- NRTR_QML_CryptoScalper.mq5 --
+EA SAFETY SCAN: PASS
+EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
+CRYPTO EA TESTS:  197 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
+                  BTC-sized market + an LTC 3-digit spec, plus the 6 crypto sections below)
+MetaEditor F7:    NOT RUN (not available in the build environment) - for BOTH files
 ```
+
+### Crypto twin (`tools/derive_crypto_ea.py`, `tests/test_ea_crypto.cpp`)
+
+Step 0 of `run_tests.sh` re-derives the crypto EA and its test from the metal twins and
+fails if the committed files differ, then strips the asset detector (and its defines and the
+one reason string) from both engine blocks and requires the rest to be **byte-identical**.
+So the 98 engine checks cover the crypto engine too, and a change to the metal EA reaches
+the crypto EA only by running the script, never by hand.
+
+| # | Case | Result |
+|---|---|---|
+| A1-A15 | The metal whole-EA sections on a BTC-sized market ($61,500, ~0.05 % per M1 bar, 1 coin per lot, tick value 0.01) and an LTC 3-digit spec: scalps, plans, one slot, REAL account, Algo switch, manual items untouched, daily cap, spread guard ($200 spread over 0.15 x ATR blocks), regime flip, restart identity, stale feed, `CRYPTO ONLY` on EURUSD, arrows, panel (9 rows: COIN PROFILE + VOL REGIME + 7), verdict, journal, telemetry (`source: NRTR_QML_CryptoScalper`, `ea_version: 1.1.5`), volatility regime, spike guard + EXIT WARNING | PASS |
+| C1 | Coin detector: BTC spellings (BTCUSD, #BTCUSD.m, XBTUSD, BITCOIN, btcusdt), ETH / LTC spellings incl. `ETH/USD` and LITECOIN, altcoins by ticker (SOL, DOGE, #XRPUSD.c, ADA); forex, metals, a non-dollar quote (ETHEUR), ETHW and an unknown coin refused; `InpCoinClass` forces the class | PASS |
+| C2 | Specialist profile: BTC raw risk and buffers; ETH buffers x1.25 at full risk; ALT half the risk money, buffers x1.5, impulse x1.25, radar plans not tradable; the COIN PROFILE panel row says so | PASS |
+| C3 | Spread cap in ATR: the cap equals 0.15 x ATR(M5) in points, a 600-point BTC spread passes, one point over the cap is SPREAD TOO WIDE | PASS |
+| C4 | BTC-lead filter: no BTC symbol at the broker = no lead (nothing invented); `#ETHUSD.m` finds `#BTCUSD.m` and reads its M15 NRTR; lead BEARISH blocks a weak UP break and not a DOWN one (and the mirror); no reading blocks nothing; BTC itself has no lead; the panel names the lead and its M15 reading; a lead typed by hand that the broker cannot serve is shown as `lead BTC (NO DATA - no lead filter)` and blocks nothing | PASS |
+| C5 | Journal: every line carries `engine: NQ-CRYPTO` and `coin: BTC` beside the unchanged platform keys and `signal_id: NQ:BTCUSD:...` | PASS |
+| C6 | Lead override (graded, not a master switch): lead BEARISH, own radar score 8 blocked, 9 and 10 allowed when the coin's own M15 context and M5 regime agree; own M15 against or M5 not on side = no override however high the score; lead agreeing = nothing to override | PASS |
 
 ### EA engine tests (`tests/test_ea_engine.cpp`)
 
@@ -68,10 +93,12 @@ MetaEditor F7:    NOT RUN (not available in the build environment)
 | A6 | Restart on the same day: same plans/signals, 378 panel + chart objects identical, no request sent, no duplicate orders afterwards | PASS |
 | A7 | Frozen feed: banner DATA STALE, nothing sent. EURUSD: nothing at all | PASS |
 | A8 | Arrows exactly on the candles with a strong one-sided vote, the wide white live one with its NEXT label when the vote is strong; 50 candles later every past arrow unchanged; hit-rate row shows % and n | PASS |
-| A9 | Panel: 7 engine rows, no key twice, every row has a value; board with TYPE/SIDE/ENTRY/SL/TP SENT/DIST/STATUS for 7 plan slots (incl. RADAR UP / DOWN), two RADAR score lines, a permanent SCALP M1 row whose live levels equal ask ∓ 1.5 / ± 1.0 ATR5 with TRIGGER NOW or the WAIT reason, LEVELS (with VWAP) and BREAK lines, level lines and the VWAP polyline on the chart, + 6 broker rows, NY session / pre-NY range / sweep-trap / slot lines, LAST UPDATE; a planted broker order and position appear as rows within one refresh with ticket, kind, NEAR and RUNNING; slot line reads TAKEN | PASS |
+| A9 | Panel: 8 engine rows (VOL REGIME + 7); MT5 draws at most 63 characters of a label, so no piece exceeds 63 and a longer text is split at spaces into side-by-side pieces with nothing lost, stale pieces removed; no key twice, every row has a value; board with TYPE/SIDE/ENTRY/SL/TP SENT/DIST/STATUS for 7 plan slots (incl. RADAR UP / DOWN), two RADAR score lines, a permanent SCALP M1 row whose live levels equal ask ∓ 1.5 / ± 1.0 ATR5 with TRIGGER NOW or the WAIT reason, LEVELS (with VWAP) and BREAK lines, level lines and the VWAP polyline on the chart, + 6 broker rows, NY session / pre-NY range / sweep-trap / slot lines, LAST UPDATE; a planted broker order and position appear as rows within one refresh with ticket, kind, NEAR and RUNNING; slot line reads TAKEN | PASS |
 | A11 | The verdict: no position → WAIT / PRICE NEAR / SCALP; a planted position with the regime → `HOLD #ticket`; against it → `EXIT #ticket - REGIME FLIPPED (you decide)` and the bot leaves it (InpPlanCloseOnFlip=false); a level within 0.5 ATR → `PRICE NEAR` banner and a NEAR marker object on the chart | PASS |
 | A12 | Journal: 172 events over the run, one JSON line each in `NQ_events_XAUUSD.jsonl` with the platform fields, first event of every plan is `armed`, at most one terminal event per plan, placed / filled / closed / cancelled all occur, statuses map to pending / executed / closed+win / closed+loss and never `approved`; one POST per line to the configured URL with `X-Brain-Secret` and JSON content type; the secret never appears in the log or a payload; with the platform down 14 events are written to the file and queued, then drained in order once it answers | PASS |
 | A13 | Telemetry (ANALYSIS ONLY): with the journal off and the telemetry URL set, exactly one snapshot per closed M1 candle (30 over 30 bars) to the telemetry URL, JSON, `X-Brain-Secret` in the header; the snapshot opens with `system: NQ-EA, kind: telemetry, mode: ANALYSIS_ONLY`, is balanced JSON and carries the label, source, version, symbol, metal, account mode, both clocks with `server_offset_sec` = 10800 on a +3 h simulated broker, candles with server stamps and EA-clock ages, m15 / m5 / m1 sections with reason arrays, the OBSERVED EA STATE block, scalp row, radar, NY, plans, account and record; no `event` key and no platform status vocabulary at the top level; the M1 age is under 60 s; without a new candle the timer sends one snapshot per 60 s, not one per tick; the secret never appears in the log; on a REAL account with demo-only on nothing is sent and the log says why once; with demo-only off the snapshot says `account_mode: real` | PASS |
+| A14 | Volatility regime: a class once the 24 h average exists and the VOL REGIME row shows the ratio; ATR(M5) at 0.3x the average = DEAD (gate bit), 1.0x = NORMAL (open), 1.8x = EXPANSION (open, stronger confirmation instead), 3.0x = EXTREME (gate bit, waiting for fresh structure); back to NORMAL with no new M5 swing = still closed; the gate names the regime after the engine's own reasons; stepping on, the first confirmed M5 swing after the extreme bar reopens the gate and it was closed every tick until then | PASS |
+| A15 | Spike guard: a normal hour spans a few ATR(M5) (so the ATR alone cannot define a spike); a crafted 15-ATR up-spike with the close 60 % back arms the warning; a 7.5-ATR hour does not; every plan kind in the spike's direction is blocked (pullback, radar, QML, NY trap), plans against the spike are not; a planted BUY with the regime still bullish reads `EXIT WARNING BUY #4343 - SPIKE REVERSAL ... 60% ... you decide` with the chart label `NQEA_A_WARN`; a SELL gets no warning; a bearish regime outranks it (plain `EXIT BUY - REGIME FLIPPED`) and the label is removed; spike gone = nothing armed. On the quiet synthetic markets the guard never fires (0 of 2861 ticks) | PASS |
 | A10 | Silver (3 digits, tick value 5): SL/TP on the 0.001 grid, lots from the real tick value; with every order rejected: rejections logged, a rejected scalp is not re-sent for the same trigger | PASS |
 
 ## Manual checks in MT5 (10 minutes)
@@ -85,3 +112,20 @@ MetaEditor F7:    NOT RUN (not available in the build environment)
 4. **Arrows:** watch one M1 candle close: the big white `NEXT` arrow must turn into a small
    green or red one and a new white `NEXT` arrow must appear on the new candle.
 5. Optional: attach to EURUSD. It must show **GOLD / SILVER ONLY**.
+6. **v1.7:** the `VOL REGIME` row must read `NORMAL  ATR5 1.0x its 24h avg` (or DEAD /
+   EXPANSION / EXTREME with its consequence) once the chart has a day of M5 history; on a
+   news spike the row must add `SPIKE UP/DOWN n ATR (x normal), n% back` and, with a
+   position in the spike direction once half of it is given back, the banner must flash
+   `EXIT WARNING ... SPIKE REVERSAL`. **Both files must be recompiled (F7).**
+
+### The crypto twin (same 10 minutes)
+
+1. **Compile** `NRTR_QML_CryptoScalper.mq5` with **F7**. Expect `0 errors, 0 warnings`.
+2. Attach to BTCUSD M1: the title must read `BTC  -  NRTR QML CRYPTO SCALPER` and the
+   `COIN PROFILE` row `BTC   risk x1.00   SL buf x1.00   spread <= 0.15 ATR   lead none`.
+3. Attach to ETHUSD (or any altcoin) M1: the row must name the class (`ETH` / `ALT`) and
+   the lead (`lead BTCUSD` in your broker's spelling) - if your broker has no BTC symbol it
+   must say `lead none`, never invent one.
+4. Attach to a coin AUTO does not know (`CRYPTO ONLY` banner): set `InpCoinClass = ALT` and
+   it must trade with the ALT profile (half risk, radar off).
+5. Attach to XAUUSD: it must show **CRYPTO ONLY** and send nothing.

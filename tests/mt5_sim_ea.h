@@ -79,7 +79,7 @@ enum { OBJPROP_CORNER = 1, OBJPROP_XDISTANCE, OBJPROP_YDISTANCE, OBJPROP_XSIZE, 
        OBJPROP_ZORDER, OBJPROP_ANCHOR, OBJPROP_TEXT, OBJPROP_FONT, OBJPROP_FONTSIZE, OBJPROP_TIME, OBJPROP_PRICE,
        OBJPROP_TOOLTIP, OBJPROP_STYLE, OBJPROP_RAY_RIGHT, OBJPROP_ARROWCODE };
 enum { CORNER_LEFT_UPPER = 0 };
-enum { ANCHOR_LEFT_UPPER = 0, ANCHOR_LEFT_LOWER, ANCHOR_CENTER, ANCHOR_UPPER, ANCHOR_LOWER, ANCHOR_TOP, ANCHOR_BOTTOM };
+enum { ANCHOR_LEFT_UPPER = 0, ANCHOR_LEFT_LOWER, ANCHOR_CENTER, ANCHOR_UPPER, ANCHOR_LOWER, ANCHOR_TOP, ANCHOR_BOTTOM, ANCHOR_LEFT };
 enum { BORDER_FLAT = 0 };
 enum { STYLE_SOLID = 0, STYLE_DASH, STYLE_DOT };
 enum { TIME_DATE = 1, TIME_MINUTES = 2, TIME_SECONDS = 4 };
@@ -170,7 +170,8 @@ struct SimState
    double contract = 100.0, leverage = 100.0;
    double bid = 0.0;
    std::vector<MqlRates> m1, m5, m15;   // full history, may extend past `now`
-   std::vector<MqlRates> macro15;       // optional M15 series of a second symbol (macro filter)
+   std::vector<MqlRates> macro15;       // optional M15 series of a second symbol (macro / lead filter)
+   std::string macroSym;                // its name ("" = any second symbol answers); SymbolSelect sees it only when macro15 is loaded
    datetime now = 0;
    bool copyFail = false;
    int accountMode = ACCOUNT_TRADE_MODE_DEMO;
@@ -216,13 +217,17 @@ inline int simVisible(ENUM_TIMEFRAMES tf)
    return k;
 }
 inline bool simIsMacro(const string &sym) { return sym != SIM.sym && sym != _Symbol; }
+// Market Watch: this symbol always; a second symbol only while a macro series is loaded (and named, if a name was given)
+inline bool SymbolSelect(const string &sym, bool) { return !simIsMacro(sym) || (!SIM.macro15.empty() && (SIM.macroSym.empty() || SIM.macroSym == sym)); }
+// a second symbol the broker does not serve (macroSym set to another name): no bars, no rates
+inline bool simMacroServed(const string &sym) { return SIM.macroSym.empty() || SIM.macroSym == sym; }
 inline int simVisibleMacro()
 {
    int k = 0;
    while(k < (int)SIM.macro15.size() && SIM.macro15[(size_t)k].time <= SIM.now) k++;
    return k;
 }
-inline int Bars(const string &sym, ENUM_TIMEFRAMES tf) { return simIsMacro(sym) ? simVisibleMacro() : simVisible(tf); }
+inline int Bars(const string &sym, ENUM_TIMEFRAMES tf) { return simIsMacro(sym) ? (simMacroServed(sym) ? simVisibleMacro() : 0) : simVisible(tf); }
 inline int iBarShift(const string &sym, ENUM_TIMEFRAMES tf, datetime t, bool exact = false)
 {
    (void)exact;
@@ -252,6 +257,7 @@ inline int CopyRates(const string &sym, ENUM_TIMEFRAMES tf, int start, int count
    if(SIM.copyFail) return -1;
    if(simIsMacro(sym))
    {
+      if(!simMacroServed(sym)) return -1;
       int vm = simVisibleMacro();
       if(start >= vm || count <= 0) return -1;
       int last = vm - 1 - start;
@@ -766,6 +772,8 @@ inline int ObjectsDeleteAll(long, const string &prefix, int = -1, int = -1)
       else ++it;
    return n;
 }
+inline bool TextSetFont(const string &, int, unsigned = 0, int = 0) { return true; }
+inline bool TextGetSize(const string &t, unsigned &w, unsigned &h) { w = (unsigned)t.size() * 7; h = 14; return true; }   // a fixed-pitch stand-in
 inline void ChartRedraw(long = 0) {}
 inline long long ChartGetInteger(long, int prop, int = 0) { return prop == CHART_WIDTH_IN_PIXELS ? 1400 : 900; }
 inline bool EventSetTimer(int) { return true; }
