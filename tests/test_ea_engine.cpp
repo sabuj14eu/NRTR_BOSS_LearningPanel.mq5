@@ -767,6 +767,9 @@ int main()
       // a broker on New York time (GMT-4 in summer): NY 09:30-16:00, London 03:00, Asia 18:00 wraps -> 00:00-03:00
       CHECK(NqClockFromGmt(T0, -4 * 3600, c) && c.nyS == 9 * 60 + 30 && c.nyE == 16 * 60 && c.lonS == 3 * 60 && c.asiaS == 0 && c.asiaE == 3 * 60 && c.roll == 17 * 60,
             "GMT-4: NY 09:30-16:00, London 03:00, Asia clamped, rollover 17:00");
+      CHECK(c.asiaS0 == 18 * 60 && c.asiaE0 == 3 * 60 && NqInWindow(19 * 60, c.asiaS0, c.asiaE0) && NqInWindow(60, c.asiaS0, c.asiaE0) &&
+            !NqInWindow(12 * 60, c.asiaS0, c.asiaE0) && NqInWindow(5 * 60, 60, 10 * 60) && !NqInWindow(10 * 60, 60, 10 * 60),
+            "the unclamped Asia window 18:00 -> 03:00 is kept and NqInWindow holds a wrap");
       // the week on the server clock: EET (rollover 00:00) opens Monday 00:00, closes Saturday 00:00
       int so = 0, uc = 0;
       CHECK(NqWeekPos(1, 0, 0, so, uc) && so == 0 && uc == 5 * 1440, "EET: Monday 00:00 is the week open, 5 days to the close");

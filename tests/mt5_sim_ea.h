@@ -233,6 +233,7 @@ struct SimState
    std::map<std::string, std::vector<MqlRates>> extra;
    // the economic calendar: values + their events + countries; calOk=false = the terminal has no calendar (every query fails)
    bool calOk = true;
+   int lastError = 0;                   // GetLastError()
    bool calFiller = true;               // a daily LOW filler event of a far country so a working calendar is never empty
    std::vector<MqlCalendarValue> cal;
    std::map<ulong, MqlCalendarEvent> calEv;
@@ -787,7 +788,7 @@ inline bool CalendarValueHistory(std::vector<MqlCalendarValue> &values, datetime
 {
    (void)country;
    values.clear();
-   if(!SIM.calOk) return false;
+   if(!SIM.calOk) { SIM.lastError = 5402; return false; }   // ERR_CALENDAR_NO_DATA
    for(const MqlCalendarValue &v : SIM.cal)
    {
       if(v.time < from || (to > 0 && v.time > to)) continue;
@@ -814,6 +815,8 @@ inline bool CalendarValueHistory(std::vector<MqlCalendarValue> &values, datetime
    }
    return true;
 }
+inline int GetLastError() { return SIM.lastError; }
+inline void ResetLastError() { SIM.lastError = 0; }
 inline bool CalendarEventById(ulong id, MqlCalendarEvent &ev)
 {
    if(!SIM.calOk) return false;

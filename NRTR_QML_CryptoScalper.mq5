@@ -33,7 +33,7 @@
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.20"
+#property version     "1.21"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -2196,6 +2196,11 @@ struct NqClock
    int      asiaE;        // = London open
    int      preS;         // pre-NY range start (the server day start)
    int      roll;         // the daily rollover (17:00 New York)
+   int      nyS0;         // the same minutes UNCLAMPED: a session may wrap the server midnight (start > end)
+   int      nyE0;
+   int      lonS0;
+   int      asiaS0;
+   int      asiaE0;
 };
 
 // civil date of a UTC timestamp (days since 1970-01-01)
@@ -2272,6 +2277,16 @@ bool NqEuDst(datetime utc)
    return (utc >= a && utc < b);
 }
 
+// inside a window of the day that may wrap midnight (start > end)
+bool NqInWindow(int mod, int s, int e)
+{
+   if(s == e)
+      return false;
+   if(s < e)
+      return (mod >= s && mod < e);
+   return (mod >= s || mod < e);
+}
+
 int NqServerMin(int utcMin, int offsetMin)
 {
    int m = (utcMin + offsetMin) % 1440;
@@ -2282,7 +2297,8 @@ int NqServerMin(int utcMin, int offsetMin)
 
 // the day's session minutes on the SERVER clock. false = the sessions wrap
 // the server day in a way the day-bound engine cannot hold (an exotic broker
-// clock): the caller falls back to its manual inputs and says so.
+// clock): the caller falls back to its manual inputs and says so. The *0 fields
+//    keep the true windows for callers that can hold a wrap (the forex session gate).
 bool NqClockFromGmt(datetime utcNow, long offsetSec, NqClock &c)
 {
    c.usDst = NqUsDst(utcNow);
@@ -2300,6 +2316,11 @@ bool NqClockFromGmt(datetime utcNow, long offsetSec, NqClock &c)
    c.asiaE = c.lonS;
    c.roll = NqServerMin(rollUtc, c.offsetMin);
    c.preS = 0;
+   c.nyS0 = c.nyS;                  // the true windows, kept for wrap-aware callers (the forex clock)
+   c.nyE0 = c.nyE;
+   c.lonS0 = c.lonS;
+   c.asiaS0 = c.asiaS;
+   c.asiaE0 = c.asiaE;
    if(c.nyE <= c.nyS)
       c.nyE = 1440;                 // NY runs into the server midnight: it ends with the day
    if(c.asiaS >= c.asiaE)
@@ -2864,7 +2885,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.2.0"
+#define NQ_EA_VERSION "1.2.1"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -3623,6 +3644,11 @@ void NqReadClock()
    g_clk.asiaE = InpAsiaEndHour * 60;
    g_clk.preS = InpRangeStartHour * 60;
    g_clk.roll = InpRangeStartHour * 60;
+   g_clk.nyS0 = g_clk.nyS;
+   g_clk.nyE0 = g_clk.nyE;
+   g_clk.lonS0 = g_clk.lonS;
+   g_clk.asiaS0 = g_clk.asiaS;
+   g_clk.asiaE0 = g_clk.asiaE;
    g_clkText = "MANUAL server hours (InpClockAuto = false)";
    if(!InpClockAuto)
       return;

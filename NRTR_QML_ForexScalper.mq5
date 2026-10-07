@@ -15,8 +15,9 @@
 //|     WITNESSES that speak for ONE currency: oil for CAD / NOK /   |
 //|     MXN, gold for AUD, a 10-year bond (price or yield) and the   |
 //|     dollar index for USD, and the calendar's own reading of the  |
-//|     releases of the last hours (NEWS VOTE, counted never         |
-//|     weighted). They form a MACRO VOTE per direction: a strong    |
+//|     releases of the last hours (NEWS VOTE). They form a MACRO    |
+//|     VOTE per direction (strength 0/1/2 by grade, every other     |
+//|     voter 1): a strong                                           |
 //|     vote AGAINST a trade blocks it unless the pair's OWN         |
 //|     structure is A+. A witness the broker does not serve is      |
 //|     NO DATA and votes nothing - nothing is ever invented.        |
@@ -2231,6 +2232,11 @@ struct NqClock
    int      asiaE;        // = London open
    int      preS;         // pre-NY range start (the server day start)
    int      roll;         // the daily rollover (17:00 New York)
+   int      nyS0;         // the same minutes UNCLAMPED: a session may wrap the server midnight (start > end)
+   int      nyE0;
+   int      lonS0;
+   int      asiaS0;
+   int      asiaE0;
 };
 
 // civil date of a UTC timestamp (days since 1970-01-01)
@@ -2307,6 +2313,16 @@ bool NqEuDst(datetime utc)
    return (utc >= a && utc < b);
 }
 
+// inside a window of the day that may wrap midnight (start > end)
+bool NqInWindow(int mod, int s, int e)
+{
+   if(s == e)
+      return false;
+   if(s < e)
+      return (mod >= s && mod < e);
+   return (mod >= s || mod < e);
+}
+
 int NqServerMin(int utcMin, int offsetMin)
 {
    int m = (utcMin + offsetMin) % 1440;
@@ -2317,7 +2333,8 @@ int NqServerMin(int utcMin, int offsetMin)
 
 // the day's session minutes on the SERVER clock. false = the sessions wrap
 // the server day in a way the day-bound engine cannot hold (an exotic broker
-// clock): the caller falls back to its manual inputs and says so.
+// clock): the caller falls back to its manual inputs and says so. The *0 fields
+//    keep the true windows for callers that can hold a wrap (the forex session gate).
 bool NqClockFromGmt(datetime utcNow, long offsetSec, NqClock &c)
 {
    c.usDst = NqUsDst(utcNow);
@@ -2335,6 +2352,11 @@ bool NqClockFromGmt(datetime utcNow, long offsetSec, NqClock &c)
    c.asiaE = c.lonS;
    c.roll = NqServerMin(rollUtc, c.offsetMin);
    c.preS = 0;
+   c.nyS0 = c.nyS;                  // the true windows, kept for wrap-aware callers (the forex clock)
+   c.nyE0 = c.nyE;
+   c.lonS0 = c.lonS;
+   c.asiaS0 = c.asiaS;
+   c.asiaE0 = c.asiaE;
    if(c.nyE <= c.nyS)
       c.nyE = 1440;                 // NY runs into the server midnight: it ends with the day
    if(c.asiaS >= c.asiaE)
@@ -2769,7 +2791,7 @@ input ENUM_NQ_PAIR   InpPairClass        = NQ_PAIR_AUTO_SEL; // Pair class: AUTO
 input bool           InpSpecialist       = true;        // Apply the class profile (risk x, SL buffers x, min impulse x, radar / scalp on-off); false = raw inputs
 input group "Currency strength + macro witnesses (oil, gold, bonds, the dollar index, the news vote)"
 input bool           InpMacroGate        = true;        // A strong macro vote AGAINST a trade blocks it (false = show the vote, gate nothing)
-input int            InpMacroBlockLevel  = 2;           // ... strong = the vote against is at least this (counted votes, never weighted)
+input int            InpMacroBlockLevel  = 2;           // ... strong = the vote against is at least this (strength counts 0/1/2 by grade, every other voter 1)
 input int            InpMacroOverrideScore = 9;         // The pair's OWN A+ structure overrides it: M15 context + M5 regime agree, radar score at least this; 11 = never
 input int            InpStrengthBars     = 16;          // Currency strength: move over N closed M15 bars (16 = 4 h), in ATR(M15) units
 input double         InpStrengthWeak     = 1.0;         // Base-minus-quote strength difference at least this = WEAK vote (1)
@@ -2950,6 +2972,7 @@ int      g_evImpact[];  // the calendar's reading once released: +1 positive for
 bool     g_evTop[];     // top tier (FOMC, rate decisions, NFP, CPI ...)
 int      g_nEv;
 bool     g_newsOk;      // the calendar answered with events: from here "no event" means no event
+int      g_newsErr;     // GetLastError() of the last failed calendar call (0 = none)
 bool     g_newsTester;  // the Strategy Tester has no calendar
 bool     g_newsBlock;   // inside a guarded window right now
 bool     g_newsUnknown;
@@ -3045,7 +3068,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.0.0"
+#define NQ_EA_VERSION "1.0.1"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -3314,6 +3337,7 @@ int OnInit()
    ArrayResize(g_evName, 0);
    g_nEv = 0;
    g_newsOk = false;
+   g_newsErr = 0;
    g_newsTester = false;
    g_newsBlock = false;
    g_newsUnknown = false;
@@ -3893,6 +3917,11 @@ void NqReadClock()
    g_clk.asiaE = InpAsiaEndHour * 60;
    g_clk.preS = InpRangeStartHour * 60;
    g_clk.roll = InpRangeStartHour * 60;
+   g_clk.nyS0 = g_clk.nyS;
+   g_clk.nyE0 = g_clk.nyE;
+   g_clk.lonS0 = g_clk.lonS;
+   g_clk.asiaS0 = g_clk.asiaS;
+   g_clk.asiaE0 = g_clk.asiaE;
    g_clkText = "MANUAL server hours (InpClockAuto = false)";
    if(!InpClockAuto)
       return;
@@ -4468,7 +4497,8 @@ string NqSpell(string pair)
 //| THE MACRO VOTE for a direction d (+1 = buy the base). Voters:    |
 //| currency strength (1 or 2), each witness that speaks for one of   |
 //| the pair's currencies (1), and the calendar's reading of the      |
-//| releases of the last hours (1 each). Counted, never weighted. A   |
+//| releases of the last hours (1 each). Strength contributes 0 / 1 / |
+//| 2 by its grade; every other voter contributes 1 or nothing. A     |
 //| witness without data votes nothing. Positive supports d, negative |
 //| is against it.                                                    |
 //+------------------------------------------------------------------+
@@ -4771,11 +4801,17 @@ void NqReadCalendar()
       return;
    datetime now = TimeTradeServer();
    MqlCalendarValue vals[];
-   if(!CalendarValueHistory(vals, now - 86400, now + 2 * 86400, NULL, NULL))
-      return;
+   ResetLastError();
+   // the reference declares the call bool; the array is the authority either way: an empty
+   // answer (a failed call, an error code, no values) is UNKNOWN, never "no news"
+   bool okCall = CalendarValueHistory(vals, now - 86400, now + 2 * 86400, NULL, NULL);
    int n = ArraySize(vals);
-   if(n <= 0)
+   if(!okCall || n <= 0)
+   {
+      g_newsErr = GetLastError();
       return;
+   }
+   g_newsErr = 0;
    g_newsOk = true;
    for(int i = 0; i < n && g_nEv < 400; i++)
    {
@@ -4830,7 +4866,7 @@ void NqNewsState()
    if(!g_newsOk)
    {
       g_newsUnknown = true;
-      g_newsText = "UNKNOWN - the calendar answered nothing";
+      g_newsText = "UNKNOWN - the calendar answered nothing" + ((g_newsErr != 0) ? (" (error " + IntegerToString(g_newsErr) + ")") : "");
       g_newsText = g_newsText + (g_newsUnknownBlocks ? " - not trading blind (InpNewsUnknownBlocks)" : " - trading anyway (InpNewsUnknownBlocks = false)");
       return;
    }
@@ -4916,13 +4952,15 @@ void NqSessionScan(datetime now)
 {
    int mod = NqMinuteOfDay(now);
    g_dow = NqDow(now);
+   // the true windows (they may wrap the server midnight on a broker west of UTC): NY first, then
+   // London up to the NY open, then Asia up to the London open - a minute belongs to one session
    int open = 0;
-   if(mod >= g_clk.asiaS && mod < g_clk.asiaE)
-      open |= 1;
-   if(mod >= g_clk.lonS && mod < g_clk.nyS)
-      open |= 2;
-   if(mod >= g_clk.nyS && mod < g_clk.nyE)
+   if(NqInWindow(mod, g_clk.nyS0, g_clk.nyE0))
       open |= 4;
+   else if(NqInWindow(mod, g_clk.lonS0, g_clk.nyS0))
+      open |= 2;
+   else if(NqInWindow(mod, g_clk.asiaS0, g_clk.lonS0))
+      open |= 1;
    g_sessOpen = open;
    g_homeMask = NqHomeMask(g_base) | NqHomeMask(g_quote);
    g_homeOpen = ((g_homeMask & open) != 0);
@@ -5329,6 +5367,8 @@ void NqEvaluate()
    NqSpikeScan();
    g_gate |= NqVolGateBits();   // DEAD / EXTREME volatility close the gate for NEW entries (named by NqGateAtX)
    NqSessionScan(now);           // home sessions, the rollover window, the week's edges
+   if(g_newsGuard && !g_newsTester && (long)now - (long)g_newsReadT >= 60)
+      NqReadCalendar();          // the calendar is re-read every minute on the timer too, not only on a new candle
    NqNewsState();                // the calendar's verdict for this minute
    g_gate |= NqForexGateBits();  // news / clock / portfolio bits (named by NqGateAtX)
 
@@ -7331,7 +7371,7 @@ void NqDrawPanel()
                  "   tilt " + ((NqTiltNow() > 0) ? "BUY" : ((NqTiltNow() < 0) ? "SELL" : "none")) + (g_sessionTilt ? "" : " (off)") +
                  "   NY " + IntegerToString(g_clk.nyS / 60, 2, '0') + ":" + IntegerToString(g_clk.nyS % 60, 2, '0') + "-" + IntegerToString(g_clk.nyE / 60, 2, '0') + ":" +
                  IntegerToString(g_clk.nyE % 60, 2, '0') + "  London " + IntegerToString(g_clk.lonS / 60, 2, '0') + ":" + IntegerToString(g_clk.lonS % 60, 2, '0') +
-                 "  Asia " + IntegerToString(g_clk.asiaS / 60, 2, '0') + ":" + IntegerToString(g_clk.asiaS % 60, 2, '0') +
+                 "  Asia " + IntegerToString(g_clk.asiaS0 / 60, 2, '0') + ":" + IntegerToString(g_clk.asiaS0 % 60, 2, '0') +
                  "  rollover " + IntegerToString((g_clkAuto ? g_clk.roll : InpRolloverHour * 60) / 60, 2, '0') + ":" + IntegerToString((g_clkAuto ? g_clk.roll : InpRolloverHour * 60) % 60, 2, '0') +
                  (g_rollover ? " NOW" : "") + "   " + g_clkText + ((g_weekText == "") ? "" : ("   " + g_weekText)) +
                  ((g_portfolioPos > 0) ? ("   portfolio " + IntegerToString(g_portfolioPos) + " pos " + g_expText) : "") +

@@ -76,8 +76,9 @@ banner reads **FOREX ONLY**. Magic `180917`; journal `engine: NQ-FOREX`; telemet
 
 ### A pair is two currencies: the MACRO VOTE
 
-Every voter is counted, never weighted. `+` supports the direction, `-` is against it; a voter
-without data votes nothing and the panel says `NO DATA`. The `MACRO VOTE` row shows the vote for
+A bounded vote count: currency strength contributes 0, 1 or 2 by its grade, every other voter
+contributes 1 or nothing. `+` supports the direction, `-` is against it; a voter without data
+votes nothing and the panel says `NO DATA`. The `MACRO VOTE` row shows the vote for
 BUY and for SELL with every voter named.
 
 | Voter | Measured how | Votes |
@@ -111,8 +112,11 @@ the row says `NO DATA` and nothing votes.
 
 ### News: the MT5 economic calendar
 
-One query per closed M1 candle over yesterday .. +2 days, kept for the pair's **two
-currencies** at MODERATE and HIGH importance. **Times are the broker's server time**, like
+One query per closed M1 candle **and every 60 s on the timer** over yesterday .. +2 days, kept
+for the pair's **two currencies** at MODERATE and HIGH importance; the guard windows themselves
+are evaluated every second from the cached events. The array the terminal fills is the
+authority: a failed call, an error code or an empty answer is UNKNOWN (the row shows the error
+code), never "no news". **Times are the broker's server time**, like
 everything else on the panel (the row shows the next event's time so you can check it against
 the broker's calendar window).
 
@@ -138,7 +142,8 @@ the broker's calendar window).
 
 Sessions are defined where they live and converted with the broker's **live GMT offset**
 (`TimeTradeServer - TimeGMT`, two witnesses) plus the computed US and EU daylight rules - see
-**The clock** below; it is the same AUTO clock the metal and crypto EAs use since v1.8.0 / v1.2.0.
+**The clock** below; it is the same AUTO clock the metal and crypto EAs use since v1.8.0 / v1.2.0 (sessions that wrap
+the server midnight are held as wraps by the gate since 1.0.1 / 1.8.1 / 1.2.1).
 On top of it, forex-only:
 
 | Rule | Default | Gate / action |
@@ -383,14 +388,19 @@ and EU daylight rules (engine `NqClockFromGmt`, tested at the switch instants):
 |---|---|---|---|
 | New York | 09:30-16:00 New York | 16:30-23:00 | 13:30-20:00 |
 | London | 08:00 London to the NY open | 10:00-16:30 | 07:00-13:30 |
-| Asia | 22:00 UTC (the Sydney / Tokyo book) to the London open | 01:00-10:00 | 00:00-07:00 (clamped to the server day) |
+| Asia | 22:00 UTC (the Sydney / Tokyo book) to the London open | 01:00-10:00 | 22:00 -> 07:00 (the day-bound levels use 00:00-07:00) |
 | Rollover | 17:00 New York | 00:00 | 21:00 |
 | Pre-NY range | from the server day start | 00:00-16:30 | 00:00-13:30 |
 
 The `NY SESSION` line says what is in force: `clock AUTO  server GMT+3  NY DST on  EU DST on`.
-`InpClockAuto = false` uses the server-hour inputs as before; if the derived sessions wrap the
-server day in a way the day-bound engine cannot hold (an exotic broker clock), the line says
-`AUTO FAILED ... MANUAL inputs in use`. Telemetry carries `clock`, `clock_offset_min`, `ny_dst`,
+On a broker west of UTC the Asian session wraps the server midnight: the **session levels and
+the NY trap** (day-bound by design) use the part after midnight, while the **forex session gate,
+tilt and session name** use the true wrapped window (`NqInWindow`). `InpClockAuto = false` uses
+the server-hour inputs as before; if the derived sessions wrap the server day in a way the
+day-bound engine cannot hold, the line says `AUTO FAILED ... MANUAL inputs in use`. `TimeTradeServer()`
+is the terminal's estimate of the server clock and `TimeGMT()` comes from the computer's clock,
+so a PC whose clock is wrong shifts the AUTO sessions: the `NY SESSION` line shows the measured
+offset so it can be checked once against the broker. Telemetry carries `clock`, `clock_offset_min`, `ny_dst`,
 `eu_dst` and the derived minutes. In the two or three weeks a year when the US and EU switch on
 different Sundays the London open and the NY open are an hour apart from their summer distance -
 and the AUTO clock follows each of them.

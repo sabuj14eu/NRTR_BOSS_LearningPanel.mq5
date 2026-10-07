@@ -855,7 +855,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_ForexScalper\"", "\"ea_version\":\"1.0.0\"", "\"strength\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"htf\":{", "\"smart_exit\":{", "\"portfolio\":{",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_ForexScalper\"", "\"ea_version\":\"1.0.1\"", "\"strength\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"htf\":{", "\"smart_exit\":{", "\"portfolio\":{",
                            "\"symbol\":\"EURUSD\"", "\"asset_class\":\"forex\"", "\"pair_class\":\"MAJOR\"", "\"base\":\"EUR\"", "\"quote\":\"USD\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"clock\":\"AUTO\"", "\"clock_offset_min\":180", "\"ny_dst\":true", "\"ny_open_min\":990", "\"london_open_min\":600", "\"asia_open_min\":60", "\"rollover_min\":0", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
@@ -1189,6 +1189,25 @@ int main()
       CHECK(g_weekEdge && g_weekText.find("WEEKEND") == 0, "Sunday 20:00: still the weekend");
       NqSessionScan(fri + 19 * 3600 + 30 * 60);
       CHECK(g_weekFriday, "Friday 19:30 UTC = 90 min before the 21:00 close: FRIDAY STOP");
+      OnDeinit(0);
+
+      // a broker on New York time (GMT-4 in summer): Asia wraps the server midnight (18:00 -> 03:00) and is held as a wrap
+      load(jpy, "USDJPY", "USD", 3, 0.001, 0.66);
+      SIM.profit = "JPY";
+      SIM.contract = 100000.0 / 150.25;
+      SIM.gmtOffsetSec = -4 * 3600;
+      startAt(START);
+      relax();
+      g_homeOnly = true;
+      CHECK(g_clkAuto && g_clk.nyS == 9 * 60 + 30 && g_clk.asiaS0 == 18 * 60 && g_clk.asiaE0 == 3 * 60 && g_clk.asiaS == 0,
+            "GMT-4: NY 09:30, Asia 18:00 -> 03:00 kept unclamped (the day-bound levels use 00:00 -> 03:00)");
+      NqSessionScan(fri + 19 * 3600);
+      CHECK(g_sessOpen == 1 && g_homeOpen && NqSessionName() == "ASIA", "19:00 server = Asia (after the NY close): USDJPY's home is open");
+      NqSessionScan(fri + 3600);
+      CHECK(g_sessOpen == 1 && g_homeOpen, "01:00 server = still Asia");
+      NqSessionScan(fri + 5 * 3600);
+      CHECK(g_sessOpen == 2 && !g_homeOpen, "05:00 server = London: USDJPY's home closed");
+      CHECK(lbl("v_e0h").find("Asia 18:00") != std::string::npos, "the SESSION row shows the true Asia open");
       SIM.gmtOffsetSec = 3 * 3600;
       OnDeinit(0);
    }
@@ -1282,11 +1301,37 @@ int main()
       CHECK(bankedA && keptB && reason, "the window opens: the +0.5R BUY is banked with the reason, the losing SELL keeps its SL");
       SIM.pos.clear();
       SIM.cal.clear();
-      // no calendar at all
+      // the calendar is re-read on the timer, not only on a new candle: an event added between candles is known within a minute
+      simAddEvent("USD", SIM.now + 10 * 60, CALENDAR_IMPORTANCE_HIGH, "Fed Chair Speaks");
+      g_newsReadT = SIM.now - 61;   // the last read is a minute old
+      SIM.now += 30;                // 30 s into the forming candle: no new bar
+      OnTimer();
+      CHECK(g_newsBlock && g_newsWhy.find("USD Fed Chair Speaks") == 0 && g_seen1 == SIM.m1[START + 12].time,
+            "no new candle, the last read a minute old: the timer re-read found the event and closed the gate");
+      SIM.now -= 30;
+      SIM.cal.clear();
+      // the calendar call FAILS (the terminal has no calendar / an error): UNKNOWN with the error code, the gate closed, nothing placed
       SIM.calOk = false;
       stepTo(START + 13);
-      CHECK(!g_newsOk && g_newsUnknown && (g_gate & NQ_K_NEWS_UNKNOWN) != 0 && lbl("v_e0n").find("UNKNOWN") == 0 &&
-            NqGateAtX(g_gate, 0).find("NEWS UNKNOWN") != std::string::npos, "the calendar answers nothing: NEWS UNKNOWN closes the gate and says so");
+      CHECK(!g_newsOk && g_newsUnknown && g_newsErr == 5402 && (g_gate & NQ_K_NEWS_UNKNOWN) != 0 && lbl("v_e0n").find("UNKNOWN") == 0 &&
+            lbl("v_e0n").find("error 5402") != std::string::npos && NqGateAtX(g_gate, 0).find("NEWS UNKNOWN") != std::string::npos,
+            "a failed calendar call: NEWS UNKNOWN with the error code closes the gate and says so");
+      {
+         size_t sentB = SIM.sent.size();
+         run(START + 14, START + 200);
+         int opened = 0;
+         for(size_t k = sentB; k < SIM.sent.size(); k++)
+            if(SIM.sent[k].action == TRADE_ACTION_PENDING || (SIM.sent[k].action == TRADE_ACTION_DEAL && SIM.sent[k].position == 0)) opened++;
+         CHECK(opened == 0, "186 candles with the calendar failing: no new order of any kind");
+      }
+      // the call succeeds but returns no values at all: UNKNOWN as well (an empty answer is not "no news")
+      SIM.calOk = true;
+      SIM.calFiller = false;
+      stepTo(START + 201);
+      CHECK(!g_newsOk && g_newsUnknown && (g_gate & NQ_K_NEWS_UNKNOWN) != 0, "an empty calendar answer is UNKNOWN too");
+      SIM.calFiller = true;
+      SIM.calOk = false;
+      stepTo(START + 202);
       g_newsUnknownBlocks = false;
       NqNewsState();
       CHECK(g_newsUnknown && (NqForexGateBits() & NQ_K_NEWS_UNKNOWN) == 0 && g_newsText.find("trading anyway") != std::string::npos, "InpNewsUnknownBlocks = false: trade blind, said plainly");
