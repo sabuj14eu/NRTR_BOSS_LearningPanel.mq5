@@ -77,7 +77,7 @@ HEADER = '''//+-----------------------------------------------------------------
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.32"
+#property version     "1.33"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -410,7 +410,7 @@ def derive_ea(m: str) -> str:
             '   yr += rh;\n'
             '   string volT = "---";\n')
     # 14. version + helper functions (after NqReadAccount's spread read block: append before NqEvaluate's doc comment)
-    t = rep(t, '#define NQ_EA_VERSION "1.9.2"', '#define NQ_EA_VERSION "1.3.2"')
+    t = rep(t, '#define NQ_EA_VERSION "1.9.3"', '#define NQ_EA_VERSION "1.3.3"')
     t = rep(t, "// account view (this EA's magic, this symbol)\n", "// account view (this EA's magic, this symbol)\n")
     t = rep(t, "\nvoid NqReadAccount()\n{\n", PROFILE_FUNCS + "\nvoid NqReadAccount()\n{\n")
     # 15. renames
@@ -435,7 +435,7 @@ def derive_test(s: str) -> str:
     t = rep(t, 'find("GOLD / SILVER ONLY")', 'find("CRYPTO ONLY")')
     t = rep(t, '"\\"metal\\":\\"GOLD\\""', '"\\"coin\\":\\"BTC\\""')
     t = rep(t, '"\\"source\\":\\"NRTR_QML_MetalScalper\\""', '"\\"source\\":\\"NRTR_QML_CryptoScalper\\""')
-    t = rep(t, '"\\"ea_version\\":\\"1.9.2\\""', '"\\"ea_version\\":\\"1.3.2\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
+    t = rep(t, '"\\"ea_version\\":\\"1.9.3\\""', '"\\"ea_version\\":\\"1.3.3\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
     t = rep(t, 'CHECK(rows == 12, "12 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, VOL REGIME + the 7 engine rows)");', 'CHECK(rows == 13, "13 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, COIN PROFILE, VOL REGIME + the 7 engine rows)");')
     t = rep(t, "   SIM.tickValue = tickValue;\n", "   SIM.tickValue = tickValue;\n   SIM.contract = 1.0;   // crypto CFD: one coin per lot\n")
     # price offsets of the hand-made broker items, scaled from a $4,150 metal to a $61,500 coin

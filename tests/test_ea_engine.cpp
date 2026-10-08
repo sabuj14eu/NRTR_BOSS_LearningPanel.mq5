@@ -35,6 +35,7 @@ static NqParams params(double tick, int digits)
    P.pbSlBufAtr = 0.2;
    P.planTp1R = 1.0;
    P.planTp2R = 2.0;
+   P.planMinRiskAtr = 0.0;   // the geometry tests check the structural stops as they are; E14 proves the floor
    P.fcMinScore = 2;
    P.tick = tick;
    P.digits = digits;
@@ -781,6 +782,55 @@ int main()
       CHECK(NqWeekPos(1, 30, 21 * 60, so, uc) && so == 3 * 60 + 30, "UTC: Monday 00:30 is 3h30 after the Sunday open");
    }
    end("E13");
+
+   begin("E14 the risk floor: a structural stop inside the noise is pushed out to planMinRiskAtr x ATR, TP1 / TP2 follow; never pulled in");
+   {
+      NqParams P = params(0.01, 2);
+      P.planMinRiskAtr = 1.0;
+      double sl = 4117.29, risk = 1.80;
+      NqFloorRisk(NQ_BUY, 4119.09, 3.26, P, sl, risk);
+      CHECK(near(sl, 4115.83, 1e-9) && near(risk, 3.26, 1e-9), "gold 2026-10-08: a 1.80 QML stop with ATR 3.26 becomes 3.26 (SL 4115.83)");
+      sl = 4127.40; risk = 6.70;
+      NqFloorRisk(NQ_SELL, 4120.70, 3.26, P, sl, risk);
+      CHECK(near(sl, 4127.40, 1e-9) && near(risk, 6.70, 1e-9), "a 6.70 stop is wider than the floor: untouched");
+      sl = 4121.0; risk = 1.0;
+      NqFloorRisk(NQ_SELL, 4120.0, 3.26, P, sl, risk);
+      CHECK(near(sl, 4123.26, 1e-9) && near(risk, 3.26, 1e-9), "a SELL stop is pushed up");
+      P.planMinRiskAtr = 0.0;
+      sl = 4117.29; risk = 1.80;
+      NqFloorRisk(NQ_BUY, 4119.09, 3.26, P, sl, risk);
+      CHECK(near(sl, 4117.29, 1e-9) && near(risk, 1.80, 1e-9), "0 = off: the structural stop as it is");
+      // on a crafted bearish QML the floor widens the stop and the targets, the entry stays at the shoulder
+      P.planMinRiskAtr = 1.0;
+      NqSeries s;
+      std::vector<SBar> bars;
+      double base = 100.0;
+      for(int i = 0; i < 60; i++) bars.push_back({T0 + i * 300, base, base + 0.5, base - 0.5, base});
+      bars[20] = {T0 + 20 * 300, base, base + 2.0, base - 0.2, base + 1.5};   // left shoulder A
+      bars[26] = {T0 + 26 * 300, base, base + 0.3, base - 2.0, base - 1.0};   // neck B
+      bars[32] = {T0 + 32 * 300, base, base + 2.3, base - 0.2, base + 1.8};   // head C (only 0.3 above A)
+      for(int i = 36; i < 60; i++) bars[i] = {T0 + i * 300, base - 2.4, base - 2.0, base - 3.5, base - 3.0};   // the break below B
+      fill(s, bars, 300);
+      std::vector<NqPivot> piv;
+      NqSeries ctx;
+      NqSeriesResize(ctx, 0);
+      ctx.sec = 900;
+      NqRunRegime(s, piv, ctx, P);
+      std::vector<NqPlan> plans;
+      int nPlans = 0;
+      NqFindPlans(s, piv, s.np, P, plans, nPlans);
+      int k = NqLatestPlan(plans, nPlans, NQ_PLAN_QML);
+      CHECK(k >= 0 && plans[(size_t)k].dir == NQ_SELL, "a bearish QML plan was created");
+      if(k >= 0)
+      {
+         const NqPlan &q = plans[(size_t)k];
+         double atr = s.atr[q.idx];
+         CHECK(near(q.entry, base + 2.0, 1e-9) && q.risk >= atr - 1e-9 && near(q.sl, q.entry + q.risk, 1e-9) &&
+               near(q.tp1, q.entry - q.risk, 1e-9) && near(q.tp2, q.entry - 2.0 * q.risk, 1e-9),
+               "entry at the shoulder, the stop at least one ATR away, TP1 = 1R and TP2 = 2R of the widened R");
+      }
+   }
+   end("E14");
 
    std::printf("\nEA ENGINE TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;

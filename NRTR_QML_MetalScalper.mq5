@@ -33,7 +33,7 @@
 //|  Personal tool. No network, no Telegram, no DLL, no files.       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.92"
+#property version     "1.93"
 #property description "Gold/Silver: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar plans, macro vote (DXY, bond, USD news, H4/H1), news guard, smart exit."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -169,6 +169,7 @@ struct NqParams
    double   pbSlBufAtr;     // SL buffer beyond the pullback swing (x ATR5)
    double   planTp1R;
    double   planTp2R;
+   double   planMinRiskAtr; // a plan's stop at least this many ATR away (0 = the structural stop as it is)
    int      fcMinScore;     // |score| needed for a forecast arrow
    double   tick;
    int      digits;
@@ -894,6 +895,20 @@ void NqQmlCandReset(NqQmlCand &c)
    c.deadline = -1;
 }
 
+// a structural stop closer than planMinRiskAtr x ATR is inside the market's noise: it is
+// pushed OUT to the floor (never in), and R follows, so TP1 / TP2 (1R / 2R) widen with it.
+// 2026-10-08, gold: a QML stop 1.80 USD away with ATR(M5) 3.26 - a coin toss with costs. 0 = off.
+void NqFloorRisk(int dir, double entry, double atr, const NqParams &P, double &sl, double &risk)
+{
+   if(P.planMinRiskAtr <= 0.0 || atr <= 0.0 || risk <= 0.0)
+      return;
+   double minRisk = P.planMinRiskAtr * atr;
+   if(risk >= minRisk)
+      return;
+   sl = (dir > 0) ? NqRoundTick(entry - minRisk, P.tick, P.digits, -1) : NqRoundTick(entry + minRisk, P.tick, P.digits, 1);
+   risk = NormalizeDouble(MathAbs(entry - sl), P.digits);
+}
+
 void NqPlanClose(NqPlan &p, int status, int at)
 {
    p.status = status;
@@ -1047,6 +1062,7 @@ void NqFindPlans(const NqSeries &s, const NqPivot &piv[], int np, const NqParams
                double entry = NqRoundTick(lo + P.pbRetrace * (hiP - lo), P.tick, P.digits, 0);
                double sl = NqRoundTick(lo - P.pbSlBufAtr * atr, P.tick, P.digits, -1);
                double risk = NormalizeDouble(entry - sl, P.digits);
+               NqFloorRisk(NQ_BUY, entry, s.atr[t], P, sl, risk);
                if(risk > 0.0 && s.c[t] > entry)
                {
                   NqPlan pl;
@@ -1105,6 +1121,7 @@ void NqFindPlans(const NqSeries &s, const NqPivot &piv[], int np, const NqParams
                double entry = NqRoundTick(hiP - P.pbRetrace * (hiP - lo), P.tick, P.digits, 0);
                double sl = NqRoundTick(hiP + P.pbSlBufAtr * atr, P.tick, P.digits, 1);
                double risk = NormalizeDouble(sl - entry, P.digits);
+               NqFloorRisk(NQ_SELL, entry, s.atr[t], P, sl, risk);
                if(risk > 0.0 && s.c[t] < entry)
                {
                   NqPlan pl;
@@ -1139,6 +1156,7 @@ void NqFindPlans(const NqSeries &s, const NqPivot &piv[], int np, const NqParams
             double entry = NqRoundTick(cb.shoulder, P.tick, P.digits, 0);
             double sl = NqRoundTick(cb.head + P.qmlSlBufAtr * s.atr[t], P.tick, P.digits, 1);
             double risk = NormalizeDouble(sl - entry, P.digits);
+            NqFloorRisk(NQ_SELL, entry, s.atr[t], P, sl, risk);
             if(risk > 0.0 && s.c[t] < entry)
             {
                NqPlan pl;
@@ -1173,6 +1191,7 @@ void NqFindPlans(const NqSeries &s, const NqPivot &piv[], int np, const NqParams
             double entry = NqRoundTick(cu.shoulder, P.tick, P.digits, 0);
             double sl = NqRoundTick(cu.head - P.qmlSlBufAtr * s.atr[t], P.tick, P.digits, -1);
             double risk = NormalizeDouble(entry - sl, P.digits);
+            NqFloorRisk(NQ_BUY, entry, s.atr[t], P, sl, risk);
             if(risk > 0.0 && s.c[t] > entry)
             {
                NqPlan pl;
@@ -1344,6 +1363,7 @@ void NqRunNyTrap(const NqSeries &s, const int &conf[], const NqParams &P, int ra
             double entry = NqRoundTick(y.preHi, P.tick, P.digits, 0);
             double sl = NqRoundTick(y.sweepHi + P.qmlSlBufAtr * s.atr[t], P.tick, P.digits, 1);
             double risk = NormalizeDouble(sl - entry, P.digits);
+            NqFloorRisk(NQ_SELL, entry, s.atr[t], P, sl, risk);
             if(risk > 0.0 && s.c[t] < entry)
             {
                NqPlan pl;
@@ -1388,6 +1408,7 @@ void NqRunNyTrap(const NqSeries &s, const int &conf[], const NqParams &P, int ra
             double entry = NqRoundTick(y.preLo, P.tick, P.digits, 0);
             double sl = NqRoundTick(y.sweepLo - P.qmlSlBufAtr * s.atr[t], P.tick, P.digits, -1);
             double risk = NormalizeDouble(entry - sl, P.digits);
+            NqFloorRisk(NQ_BUY, entry, s.atr[t], P, sl, risk);
             if(risk > 0.0 && s.c[t] > entry)
             {
                NqPlan pl;
@@ -1909,6 +1930,7 @@ void NqRunRadar(const NqSeries &s, const NqPivot &piv[], int np, const double &r
             sl = (dir > 0) ? NqRoundTick(entry - P.scalpSlAtr * atr, P.tick, P.digits, -1)
                            : NqRoundTick(entry + P.scalpSlAtr * atr, P.tick, P.digits, 1);
          double risk = NormalizeDouble(MathAbs(entry - sl), P.digits);
+         NqFloorRisk(dir, entry, atr, P, sl, risk);
          bool sideOk = (dir > 0) ? (entry > s.c[t]) : (entry < s.c[t]);
          if(risk <= 0.0 || !sideOk)
             continue;
@@ -2698,6 +2720,7 @@ input double         InpPbSlBufAtr       = 0.2;         // Pullback SL buffer be
 input double         InpPlanTp1R         = 1.0;         // Plan TP1 (R)
 input double         InpPlanTp2R         = 2.0;         // Plan TP2 (R)
 input bool           InpPlanUseTp2       = false;       // Limit order TP = TP2 instead of TP1
+input double         InpPlanMinRiskAtr   = 1.0;         // A plan's stop at least x ATR away (a structural stop inside the noise is pushed out; TP1/TP2 follow); 0 = off
 input bool           InpTradeQml         = true;        // Trade M5 QML plans
 input bool           InpTradePullback    = true;        // Trade M5 pullback plans
 input bool           InpTradeNyTrap      = true;        // Trade NY trap plans
@@ -2910,7 +2933,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.9.2"
+#define NQ_EA_VERSION "1.9.3"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -3052,7 +3075,7 @@ int OnInit()
       InpSwingStrength < 1 || InpSwingStrength > 20 || InpHistoryDays < 3 || InpScalpSlAtr <= 0.0 ||
       InpScalpTpAtr <= 0.0 || InpScalpValidBars < 1 || InpScalpTimeStop < 1 || InpQmlSlBufAtr < 0.0 ||
       InpQmlWaitBars < 1 || InpPlanValidBars < 1 || InpPbRetrace <= 0.0 || InpPbRetrace >= 1.0 ||
-      InpPbMinImpulseAtr < 0.0 || InpPbSlBufAtr < 0.0 || InpPlanTp1R <= 0.0 || InpPlanTp2R <= 0.0 ||
+      InpPbMinImpulseAtr < 0.0 || InpPbSlBufAtr < 0.0 || InpPlanTp1R <= 0.0 || InpPlanTp2R <= 0.0 || InpPlanMinRiskAtr < 0.0 ||
       InpRiskPct <= 0.0 || InpRiskPct > 5.0 || InpDailyLossCapPct < 0.0 || InpMaxOpenPositions < 0 ||
       InpMaxTradesPerDay < 0 || InpMaxSpreadPoints < 0 ||
       InpMacroBlockLevel < 1 || InpMacroOverrideScore < 0 || InpMacroOverrideScore > 11 || InpHtfBars < 50 || InpHtfChochBars < 0 ||
@@ -3106,6 +3129,7 @@ int OnInit()
    g_P.pbSlBufAtr = InpPbSlBufAtr;
    g_P.planTp1R = InpPlanTp1R;
    g_P.planTp2R = InpPlanTp2R;
+   g_P.planMinRiskAtr = InpPlanMinRiskAtr;
    g_P.fcMinScore = InpForecastMinScore;
    g_P.tick = g_tick;
    g_P.digits = g_digits;

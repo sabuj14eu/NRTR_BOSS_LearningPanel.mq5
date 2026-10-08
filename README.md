@@ -343,6 +343,15 @@ NO NY  ->  RANGE BUILDING  ->  SWEPT  ->  RETURNED INSIDE  ->  TRAP CONFIRMED  -
 * The sweep alone never decides anything. One trap per side per session; an unfilled plan
   expires when the session ends. Both sides are shown on the board with their state.
 
+### The risk floor (v1.9.3 / 1.3.3 / 1.0.4, engine)
+
+A structural stop can land inside the market's noise: a QML head 1.6 USD above its shoulder gives
+a 1.80 USD stop on gold with ATR(M5) at 3.26, and TP1 = 1R inherits it (seen 2026-10-08). `InpPlanMinRiskAtr`
+(1.0) pushes such a stop **out** to one ATR of the plan's timeframe (M5 for M5 plans, M15 for
+swing plans) and TP1 / TP2 follow as 1R / 2R of the widened R; a stop already wider than the
+floor is untouched, and a stop is never pulled in. The lot is sized from the widened R, so the
+money risk stays at `InpRiskPct`.
+
 ### Lifetime and the slot
 
 * M5 plans live 72 M5 bars (6 h), swing plans 96 M15 bars (24 h), NY plans until the
@@ -636,6 +645,7 @@ Every order is printed to the **Experts** log, e.g.
 | Telemetry URL / every N s / demo only | empty / 60 / on | see the telemetry section; empty = off |
 | Pullback retrace / min impulse / SL buffer | 50 % / 2 × ATR5 / 0.2 × ATR5 | |
 | Plan TP1 / TP2 | 1R / 2R | |
+| Plan minimum risk | 1.0 x ATR | a structural stop (QML head, pullback swing, NY sweep, radar swing) closer than this is pushed out to the floor, never in; TP1 / TP2 follow the widened R; 0 = off |
 | Bias arrow: votes needed / arrows drawn | 3 / last 300 candles | strong, one-sided votes only |
 | History used | 8 days | |
 | Panel layout | SPLIT | the trading board (title, verdict, plans, orders, positions) top-left and the INFORMATION DESK (the engine rows: H4/H1, macro vote, news, week, volatility, M15/M5/M1) in its own block at the bottom middle, so the chart stays in full view; ONE = the former single column. **Click the board's title to fold it to its banner, click the desk's header to fold the desk** (click again to unfold). The board is compact: an empty plan slot is one line and only the broker rows that exist are drawn. On a short chart the desk moves beside the board when it fits |

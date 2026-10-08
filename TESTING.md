@@ -37,17 +37,17 @@ before relying on it.** If F7 reports anything, send the exact message.
 ```
 CRYPTO TWIN:      derived files match; engine block identical apart from the asset detector
 FOREX EA:         engine block identical to the metal EA apart from the asset detector
--- NRTR_QML_MetalScalper.mq5 (v1.9.2) --
+-- NRTR_QML_MetalScalper.mq5 (v1.9.3) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-EA ENGINE TESTS:  116 checks passed, 0 failed   (E13 = the clock)
+EA ENGINE TESTS:  122 checks passed, 0 failed   (E13 = the clock, E14 = the risk floor)
 EA TESTS:         246 checks passed, 0 failed   (A1-A15 + A10 with the v1.9 gates relaxed, plus M1-M5)
--- NRTR_QML_CryptoScalper.mq5 (v1.3.2) --
+-- NRTR_QML_CryptoScalper.mq5 (v1.3.3) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 CRYPTO EA TESTS:  280 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
                   BTC-sized market + an LTC 3-digit spec, plus the 6 crypto sections below)
--- NRTR_QML_ForexScalper.mq5 (v1.0.3) --
+-- NRTR_QML_ForexScalper.mq5 (v1.0.4) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 FOREX EA TESTS:   315 checks passed, 0 failed   (the 15 whole-EA sections on a EURUSD
@@ -134,6 +134,7 @@ the crypto EA only by running the script, never by hand.
 | E12 | Impulse radar on a crafted rise under the previous-day high: every component measured (compression 2, proximity 2, momentum 1, M15 1, efficiency ≥ 1), READY at score ≥ 7 within 1 ATR arms a BUY STOP at level + 0.15 ATR with SL below and TP1 above; 2+ ATR away is FAR; an earlier plan at a passed level is dropped; the break bar fills the stop and TP1 follows; a spike that closes back below the level is a FALSE BREAK; falling pressure cancels an unfilled plan; nearest active levels per bar are causal | PASS |
 | E11 | Session levels on two crafted days: previous-day high/low active all day, Asia / London / pre-NY / NY highs and lows become active when their session ends; exactly one BREAKOUT per level on the first M5 close through it; day VWAP = running mean of typical price under constant volume, reset at midnight | PASS |
 | E13 | The clock: 2026 US / EU daylight instants to the second, the October gap where they differ; sessions on the server clock for GMT+3 summer (the former hard-coded defaults come out exactly), GMT+2 winter, GMT+0, GMT+5:30, GMT-4 (Asia clamped for the day-bound levels, the true 18:00 -> 03:00 window kept and `NqInWindow` holds the wrap); the week's position for an EET and a UTC broker | PASS |
+| E14 | The risk floor: a 1.80 stop with ATR 3.26 becomes 3.26 (BUY and SELL sides), a wider stop is untouched, 0 = off; on a crafted bearish QML whose head is 0.3 above the shoulder the plan's entry stays at the shoulder, the stop is at least one ATR away and TP1 / TP2 are 1R / 2R of the widened R | PASS |
 | E10 | NY trap state machine on a crafted server day: pre-NY range, sweep, return, plan armed only on the confirmation bar (SELL LIMIT at the swept high, SL beyond the extreme), filled and TP1; sweep + return without confirmation is not a trade; an unfilled plan expires at the session end; next day starts fresh; distance in ATR units | PASS |
 
 ### Whole-EA tests (`tests/test_ea.cpp`, gold-like and silver-like synthetic markets)
