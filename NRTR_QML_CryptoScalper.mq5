@@ -33,7 +33,7 @@
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.30"
+#property version     "1.31"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -2710,6 +2710,12 @@ enum ENUM_NQ_COIN
    NQ_COIN_ALT_SEL  = 4    // ALTCOIN specialist (any other coin)
 };
 
+enum ENUM_NQ_LAYOUT
+{
+   NQ_LAYOUT_SPLIT = 0,   // Trading board top-left, INFORMATION DESK bottom-middle: the chart stays in full view
+   NQ_LAYOUT_ONE   = 1    // One column: the engine table above the board (the former layout)
+};
+
 enum ENUM_NQ_BOND
 {
    NQ_BOND_AUTO  = 0,   // AUTO: NOTE/BOND/BUND/ZN = a price, US10Y / YIELD = a yield
@@ -2855,7 +2861,8 @@ input int            InpForecastMinScore = 3;           // Votes needed for a bi
 input int            InpArrowBars        = 300;         // Arrows drawn on the last N candles
 input group "Display"
 input double         InpPanelScale       = 1.0;         // Panel size (0.7 - 1.6)
-input ENUM_NQ_CORNER InpPanelCorner      = NQ_TOP_LEFT; // Panel position
+input ENUM_NQ_CORNER InpPanelCorner      = NQ_TOP_LEFT; // Panel position (the trading board)
+input ENUM_NQ_LAYOUT InpPanelLayout      = NQ_LAYOUT_SPLIT; // Panel layout: SPLIT = trading board top-left + information desk bottom-middle; ONE = one column
 input int            InpPanelX           = 12;          // Panel X offset (px)
 input int            InpPanelY           = 24;          // Panel Y offset (px)
 input bool           InpDrawChart        = true;        // Draw arrows / structure / levels
@@ -2979,7 +2986,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.3.0"
+#define NQ_EA_VERSION "1.3.1"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -6726,9 +6733,11 @@ void NqDrawPanel()
    int rowsBot = 8 + 1 + 8 * 2 + NQ_BOARD_BROKER_ROWS + 2;   // NY/level/radar lines, header, plan + scalp rows, broker rows, footer
    int tTopH = rh + 3 + rowsTop * rh + 4;
    int tBotH = rh + 3 + rowsBot * rh + 8;
-   int H = pad * 2 + (int)MathRound(rh * 1.4) + rh + 4 + bannerH + 4 + 2 * rh + tTopH + 6 + tBotH + 4 + rh;
+   bool split = (InpPanelLayout == NQ_LAYOUT_SPLIT);   // the engine rows become an INFORMATION DESK at the bottom middle
+   int H = pad * 2 + (int)MathRound(rh * 1.4) + rh + 4 + bannerH + 4 + 2 * rh + (split ? 0 : tTopH + 6) + tBotH + 4 + rh;
 
    int ch = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS, 0);
+   int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0);
    int ox = InpPanelX;
    int oy = InpPanelY;
    if(InpPanelCorner == NQ_BOTTOM_LEFT)
@@ -6752,6 +6761,12 @@ void NqDrawPanel()
    color cDim = NQ_RGB(95, 105, 120);
 
    NqRect("bg", ox, oy, W, H, cBg, cMetal);
+   int xInfo = split ? (int)MathMax(0, (cw - W) / 2) : ox;
+   int yInfo = split ? (int)MathMax(0, ch - (tTopH + 2 * pad) - 4) : oy;
+   if(split)
+      NqRect("bgI", xInfo, yInfo, W, tTopH + 2 * pad, cBg, cMetal);
+   else if(ObjectFind(0, NQ_PFX_P + "bgI") >= 0)
+      ObjectsDeleteAll(0, NQ_PFX_P + "bgI");
 
    bool ok = (g_coin != NQ_COIN_NONE && g_ready && g_s15.n > 0 && g_s5.n > 0 && g_s1.n > 0);
    int i15 = ok ? g_s15.n - 1 : 0;
@@ -6834,14 +6849,18 @@ void NqDrawPanel()
    NqLabel("r2", ox + pad, y, (r2 == "") ? " " : ("            " + r2), cVal, fs, "Arial", ANCHOR_LEFT_UPPER);
    y += rh;
 
-   // ---------------- TOP TABLE: engine ----------------
-   int tx = ox + pad;
+   // ---------------- the engine table: the INFORMATION DESK (bottom middle in SPLIT, here in ONE) ----------------
+   int txB = ox + pad;
    int TW = W - 2 * pad;
+   int tx = split ? xInfo + pad : txB;
+   int yI = split ? yInfo + pad : y;
    int kx = tx + kOff;
    int vx = tx + vOff;
-   NqRect("t1", tx, y, TW, tTopH, cTbl, cDim);
-   NqLabel("h1", kx, y + 3, "ENGINE   M15 " + NqSymArrow() + " M5 " + NqSymArrow() + " M1", cMetal, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
-   int yr = y + rh + 3;
+   NqRect("t1", tx, yI, TW, tTopH, cTbl, cDim);
+   string hdr = split ? "INFORMATION DESK   " : "";
+   hdr = hdr + "ENGINE   M15 " + NqSymArrow() + " M5 " + NqSymArrow() + " M1";
+   NqLabel("h1", kx, yI + 3, hdr, cMetal, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
+   int yr = yI + rh + 3;
 
    int ctx = ok ? g_s15.ctx[i15] : 0;
    string ctxT = "---";
@@ -7003,9 +7022,13 @@ void NqDrawPanel()
          hitT = hitT + "  - arrows need an M1/M5/M15 chart";
    }
    NqRow("e7", kx, vx, yr, "BIAS HIT RATE", hitT, cVal, cKey, fs);
-   y += tTopH + 6;
+   if(!split)
+      y += tTopH + 6;
+   tx = txB;                 // back to the trading board's column
+   kx = tx + kOff;
+   vx = tx + vOff;
 
-   // ---------------- BOTTOM: NY TRAP + PENDING ORDER BOARD ----------------
+   // ---------------- the TRADING BOARD: NY TRAP + PENDING ORDERS (top-left) ----------------
    NqRect("t2", tx, y, TW, tBotH, cTbl, cDim);
    NqLabel("h2", kx, y + 3, "NY TRAP  +  PENDING ORDER BOARD   (live, every second)", cMetal, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
    yr = y + rh + 3;

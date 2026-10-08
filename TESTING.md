@@ -37,17 +37,17 @@ before relying on it.** If F7 reports anything, send the exact message.
 ```
 CRYPTO TWIN:      derived files match; engine block identical apart from the asset detector
 FOREX EA:         engine block identical to the metal EA apart from the asset detector
--- NRTR_QML_MetalScalper.mq5 (v1.9.0) --
+-- NRTR_QML_MetalScalper.mq5 (v1.9.1) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 EA ENGINE TESTS:  116 checks passed, 0 failed   (E13 = the clock)
-EA TESTS:         233 checks passed, 0 failed   (A1-A15 + A10 with the v1.9 gates relaxed, plus M1-M5)
--- NRTR_QML_CryptoScalper.mq5 (v1.3.0) --
+EA TESTS:         234 checks passed, 0 failed   (A1-A15 + A10 with the v1.9 gates relaxed, plus M1-M5)
+-- NRTR_QML_CryptoScalper.mq5 (v1.3.1) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-CRYPTO EA TESTS:  267 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
+CRYPTO EA TESTS:  268 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
                   BTC-sized market + an LTC 3-digit spec, plus the 6 crypto sections below)
--- NRTR_QML_ForexScalper.mq5 (v1.0.1) --
+-- NRTR_QML_ForexScalper.mq5 (v1.0.2) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 FOREX EA TESTS:   303 checks passed, 0 failed   (the 15 whole-EA sections on a EURUSD
@@ -147,7 +147,7 @@ the crypto EA only by running the script, never by hand.
 | A6 | Restart on the same day: same plans/signals, 378 panel + chart objects identical, no request sent, no duplicate orders afterwards | PASS |
 | A7 | Frozen feed: banner DATA STALE, nothing sent. EURUSD: nothing at all | PASS |
 | A8 | Arrows exactly on the candles with a strong one-sided vote, the wide white live one with its NEXT label when the vote is strong; 50 candles later every past arrow unchanged; hit-rate row shows % and n | PASS |
-| A9 | Panel: 8 engine rows (VOL REGIME + 7); MT5 draws at most 63 characters of a label, so no piece exceeds 63 and a longer text is split at spaces into side-by-side pieces with nothing lost, stale pieces removed; no key twice, every row has a value; board with TYPE/SIDE/ENTRY/SL/TP SENT/DIST/STATUS for 7 plan slots (incl. RADAR UP / DOWN), two RADAR score lines, a permanent SCALP M1 row whose live levels equal ask ∓ 1.5 / ± 1.0 ATR5 with TRIGGER NOW or the WAIT reason, LEVELS (with VWAP) and BREAK lines, level lines and the VWAP polyline on the chart, + 6 broker rows, NY session / pre-NY range / sweep-trap / slot lines, LAST UPDATE; a planted broker order and position appear as rows within one refresh with ticket, kind, NEAR and RUNNING; slot line reads TAKEN | PASS |
+| A9 | Panel: the engine rows; SPLIT layout = the INFORMATION DESK block below the trading board and centred (`bgI`), the engine table inside it, `h1` reads INFORMATION DESK; MT5 draws at most 63 characters of a label, so no piece exceeds 63 and a longer text is split at spaces into side-by-side pieces with nothing lost, stale pieces removed; no key twice, every row has a value; board with TYPE/SIDE/ENTRY/SL/TP SENT/DIST/STATUS for 7 plan slots (incl. RADAR UP / DOWN), two RADAR score lines, a permanent SCALP M1 row whose live levels equal ask ∓ 1.5 / ± 1.0 ATR5 with TRIGGER NOW or the WAIT reason, LEVELS (with VWAP) and BREAK lines, level lines and the VWAP polyline on the chart, + 6 broker rows, NY session / pre-NY range / sweep-trap / slot lines, LAST UPDATE; a planted broker order and position appear as rows within one refresh with ticket, kind, NEAR and RUNNING; slot line reads TAKEN | PASS |
 | A11 | The verdict: no position → WAIT / PRICE NEAR / SCALP; a planted position with the regime → `HOLD #ticket`; against it → `EXIT #ticket - REGIME FLIPPED (you decide)` and the bot leaves it (InpPlanCloseOnFlip=false); a level within 0.5 ATR → `PRICE NEAR` banner and a NEAR marker object on the chart | PASS |
 | A12 | Journal: 172 events over the run, one JSON line each in `NQ_events_XAUUSD.jsonl` with the platform fields, first event of every plan is `armed`, at most one terminal event per plan, placed / filled / closed / cancelled all occur, statuses map to pending / executed / closed+win / closed+loss and never `approved`; one POST per line to the configured URL with `X-Brain-Secret` and JSON content type; the secret never appears in the log or a payload; with the platform down 14 events are written to the file and queued, then drained in order once it answers | PASS |
 | A13 | Telemetry (ANALYSIS ONLY): with the journal off and the telemetry URL set, exactly one snapshot per closed M1 candle (30 over 30 bars) to the telemetry URL, JSON, `X-Brain-Secret` in the header; the snapshot opens with `system: NQ-EA, kind: telemetry, mode: ANALYSIS_ONLY`, is balanced JSON and carries the label, source, version, symbol, metal, account mode, both clocks with `server_offset_sec` = 10800 on a +3 h simulated broker, candles with server stamps and EA-clock ages, m15 / m5 / m1 sections with reason arrays, the OBSERVED EA STATE block, scalp row, radar, NY, plans, account and record; no `event` key and no platform status vocabulary at the top level; the M1 age is under 60 s; without a new candle the timer sends one snapshot per 60 s, not one per tick; the secret never appears in the log; on a REAL account with demo-only on nothing is sent and the log says why once; with demo-only off the snapshot says `account_mode: real` | PASS |

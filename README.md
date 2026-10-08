@@ -632,7 +632,8 @@ Every order is printed to the **Experts** log, e.g.
 | Plan TP1 / TP2 | 1R / 2R | |
 | Bias arrow: votes needed / arrows drawn | 3 / last 300 candles | strong, one-sided votes only |
 | History used | 8 days | |
-| Panel size / corner / X / Y | 1.0 / top-left / 12 / 24 | bottom-left is the other option |
+| Panel layout | SPLIT | the trading board (title, verdict, plans, orders, positions) top-left and the INFORMATION DESK (the engine rows: H4/H1, macro vote, news, week, volatility, M15/M5/M1) in its own block at the bottom middle, so the chart stays in full view; ONE = the former single column |
+| Panel size / corner / X / Y | 1.0 / top-left / 12 / 24 | the trading board's position; bottom-left is the other option |
 
 ## Why it cannot repaint
 

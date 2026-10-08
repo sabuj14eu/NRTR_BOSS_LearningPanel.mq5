@@ -568,6 +568,13 @@ int main()
       CHECK(lbl("h1").find("ENGINE") != std::string::npos && lbl("h2").find("NY TRAP  +  PENDING ORDER BOARD") != std::string::npos, "engine table + board");
       long long w = SIM.objs["NQEA_P_bg"].i[OBJPROP_XSIZE];
       CHECK(w < 800, "single column");
+      // SPLIT layout (default): the information desk sits in its own block at the bottom middle, the board top-left
+      // (the simulated chart is 1400 x 900: the desk sits at the bottom edge, centred; on a short chart it may overlap the board)
+      CHECK(SIM.objs.count("NQEA_P_bgI") == 1 && SIM.objs["NQEA_P_bgI"].i[OBJPROP_XDISTANCE] > 100 &&
+            SIM.objs["NQEA_P_bgI"].i[OBJPROP_YDISTANCE] + SIM.objs["NQEA_P_bgI"].i[OBJPROP_YSIZE] <= 900 &&
+            SIM.objs["NQEA_P_t1"].i[OBJPROP_YDISTANCE] > SIM.objs["NQEA_P_bgI"].i[OBJPROP_YDISTANCE] &&
+            SIM.objs["NQEA_P_t1"].i[OBJPROP_YDISTANCE] > SIM.objs["NQEA_P_t2"].i[OBJPROP_YDISTANCE] && lbl("h1").find("INFORMATION DESK") == 0,
+            "SPLIT: the INFORMATION DESK block is centred at the bottom edge with the engine table inside it, under the trading board's table");
       // the board: 5 plan rows with 7 columns + a detail line, 6 broker rows, NY lines, footer
       bool boardOk = true;
       const char *types[7] = {"QML M5", "PULLBACK M5", "NY TRAP", "SWING QML", "SWING PB", "RADAR UP", "RADAR DOWN"};
@@ -845,7 +852,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.9.0\"", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.9.1\"", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
                            "\"symbol\":\"XAUUSD\"", "\"metal\":\"GOLD\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"clock\":\"AUTO\"", "\"clock_offset_min\":180", "\"ny_dst\":true", "\"ny_open_min\":990", "\"london_open_min\":600", "\"asia_open_min\":60", "\"rollover_min\":0", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
