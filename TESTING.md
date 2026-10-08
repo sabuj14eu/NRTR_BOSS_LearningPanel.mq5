@@ -37,20 +37,20 @@ before relying on it.** If F7 reports anything, send the exact message.
 ```
 CRYPTO TWIN:      derived files match; engine block identical apart from the asset detector
 FOREX EA:         engine block identical to the metal EA apart from the asset detector
--- NRTR_QML_MetalScalper.mq5 (v1.9.1) --
+-- NRTR_QML_MetalScalper.mq5 (v1.9.2) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 EA ENGINE TESTS:  116 checks passed, 0 failed   (E13 = the clock)
-EA TESTS:         234 checks passed, 0 failed   (A1-A15 + A10 with the v1.9 gates relaxed, plus M1-M5)
--- NRTR_QML_CryptoScalper.mq5 (v1.3.1) --
+EA TESTS:         246 checks passed, 0 failed   (A1-A15 + A10 with the v1.9 gates relaxed, plus M1-M5)
+-- NRTR_QML_CryptoScalper.mq5 (v1.3.2) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-CRYPTO EA TESTS:  268 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
+CRYPTO EA TESTS:  280 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
                   BTC-sized market + an LTC 3-digit spec, plus the 6 crypto sections below)
--- NRTR_QML_ForexScalper.mq5 (v1.0.2) --
+-- NRTR_QML_ForexScalper.mq5 (v1.0.3) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-FOREX EA TESTS:   303 checks passed, 0 failed   (the 15 whole-EA sections on a EURUSD
+FOREX EA TESTS:   315 checks passed, 0 failed   (the 15 whole-EA sections on a EURUSD
                   5-digit market + a USDJPY 3-digit spec, plus the 9 forex sections below)
 MetaEditor F7:    NOT RUN (not available in the build environment) - for ALL THREE files
 ```
@@ -93,6 +93,7 @@ gate and smart exit off) so the engine's behaviour is checked as before.
 | M2 | Smart exit on gold: bank +0.30R on an agreed-then-flipped regime (the verdict said so first), cut -0.30R under water, a scalp keeps its own flip rule, a reversal plan whose regime never agreed is left alone, the +0.7R lock by one SLTP request never loosened, the M1 turn at +0.6R banked and +0.3R kept, smart exit off = the human decides | PASS |
 | M3 | The Friday stop: order pulled, +0.2R BUY banked, losing SELL kept; the portfolio: positions on other charts counted, two = `PORTFOLIO FULL` closes the gate, the WEEK / SMART row shows it | PASS |
 | M4 | H1 / H4 on a 40-day gold market: EMA200 ready, the row, BOS / CHoCH / BREAK classification, the context voters, a fresh H1 CHoCH, no H1 / H4 = NO DATA and no vote | PASS |
+| M6 (F10 on forex) | Compact board: a detail line exactly for the slots that hold a plan, broker rows only as many as there are; a click on the desk header folds the desk to its header (a click on a split piece unfolds), a click on the title folds the board to its banner and a refresh keeps it, a click elsewhere does nothing; the SL guard: a BUY position without a stop gets the plan's SL and TP1 by one SLTP request (logged), one whose price is already beyond the stop is closed with the reason | PASS |
 | M5 | The week's edges and the rollover on the server clock: Friday 22:30 = FRIDAY STOP, 19:00 open, 23:50 = rollover, Monday 00:30 = first hour, Saturday = weekend, guards off = nothing | PASS |
 
 The crypto twin's C4 / C6 keep their meaning: the lead is a voter of weight 2, so a lead

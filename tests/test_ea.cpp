@@ -583,9 +583,10 @@ int main()
          std::string id = "bp" + std::to_string(q);
          if(lbl((id + "0").c_str()) != types[q]) boardOk = false;
          for(int c = 1; c <= 6; c++) if(lbl((id + std::to_string(c)).c_str()) == "<missing>") boardOk = false;
-         if(lbl((id + "d").c_str()) == "<missing>") boardOk = false;
+         NqPlan plq;
+         if(NqSlotPlan(q, plq) && lbl((id + "d").c_str()) == "<missing>") boardOk = false;   // compact: the detail line only for a slot that holds a plan
       }
-      for(int i = 0; i < 6; i++) if(lbl(("bb" + std::to_string(i) + "0").c_str()) == "<missing>") boardOk = false;
+      if(lbl("bb00") == "<missing>") boardOk = false;
       CHECK(boardOk, "board rows: TYPE SIDE ENTRY SL TP DIST STATUS for 5 plan slots + 6 broker rows");
       // the scalp row is always there with live levels
       {
@@ -852,7 +853,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.9.1\"", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.9.2\"", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
                            "\"symbol\":\"XAUUSD\"", "\"metal\":\"GOLD\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"clock\":\"AUTO\"", "\"clock_offset_min\":180", "\"ny_dst\":true", "\"ny_open_min\":990", "\"london_open_min\":600", "\"asia_open_min\":60", "\"rollover_min\":0", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
@@ -1430,6 +1431,86 @@ int main()
       OnDeinit(0);
    }
    end("M5");
+
+
+   begin("M6 compact board, click-to-fold blocks, the SL guard: a position without a stop gets the plan's stop back or is closed");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      relax();
+      run(START + 1, START + 300);
+      // compact: an empty plan slot has no detail line, a filled one has; broker rows only as many as there are
+      int withDetail = 0, withoutDetail = 0, badDetail = 0;
+      for(int q = 0; q < NQ_PLAN_SLOTS; q++)
+      {
+         NqPlan pl;
+         bool has = NqSlotPlan(q, pl);
+         bool det = lbl(("bp" + std::to_string(q) + "d").c_str()) != "<missing>";
+         if(has && det) withDetail++;
+         else if(!has && !det) withoutDetail++;
+         else badDetail++;
+      }
+      CHECK(badDetail == 0 && withDetail + withoutDetail == NQ_PLAN_SLOTS, "a detail line exactly for the slots that hold a plan");
+      int brokerRows = 0;
+      for(int i = 0; i < 6; i++) if(lbl(("bb" + std::to_string(i) + "0").c_str()) != "<missing>") brokerRows++;
+      CHECK(brokerRows == std::max(1, std::min(6, (int)SIM.ord.size() + (int)SIM.pos.size())), "broker rows = the orders and positions there are, at least one line");
+      // fold the desk: the engine rows go, the header stays and says unfold; unfold brings them back
+      CHECK(lbl("k_e1") == "M15 CONTEXT" && lbl("h1").find("(click: fold)") != std::string::npos, "the desk is open");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "NQEA_P_h1");
+      CHECK(g_deskCollapsed && lbl("k_e1") == "<missing>" && lbl("h1").find("(click: unfold)") != std::string::npos && lbl("t2") != "<missing>",
+            "click on the desk header: folded to its header, the board untouched");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "NQEA_P_h1~1");
+      CHECK(!g_deskCollapsed && lbl("k_e1") == "M15 CONTEXT", "a click on a piece of the header unfolds it");
+      // fold the board: the banner and the reasons stay, the tables and the footer go
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "NQEA_P_title");
+      CHECK(g_boardCollapsed && lbl("state") != "<missing>" && lbl("r1") != "<missing>" && lbl("t2") == "<missing>" && lbl("bf1") == "<missing>" &&
+            lbl("f1") == "<missing>" && lbl("title").find("(click: unfold)") != std::string::npos && lbl("t1") != "<missing>",
+            "click on the title: the board folds to its banner, the desk stays");
+      OnTimer();
+      CHECK(lbl("t2") == "<missing>" && lbl("state") != "<missing>", "a refresh keeps it folded");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "NQEA_P_title");
+      CHECK(!g_boardCollapsed && lbl("t2") != "<missing>" && lbl("bf1") != "<missing>", "a second click unfolds it");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "NQEA_P_v_e1");
+      CHECK(!g_boardCollapsed && !g_deskCollapsed, "a click elsewhere does nothing");
+      // the SL guard
+      int kp = -1;
+      for(int k = g_nPlans - 1; k >= 0; k--) if(g_plans[(size_t)k].dir > 0 && g_plans[(size_t)k].sl > 0.0) { kp = k; break; }
+      CHECK(kp >= 0, "a BUY plan exists in the history");
+      if(kp >= 0)
+      {
+         const NqPlan &pp = g_plans[(size_t)kp];
+         double keepBid = SIM.bid;
+         SIM.pos.clear();
+         SIM.ord.clear();
+         SimPos p;
+         p.ticket = 9301; p.sym = SIM.sym; p.type = POSITION_TYPE_BUY; p.vol = 0.10; p.open = pp.entry; p.sl = 0; p.tp = 0;
+         p.time = SIM.now - 600; p.magic = InpMagic; p.comment = NqPlanComment(pp);
+         SIM.pos.push_back(p);
+         SIM.bid = pp.sl + pp.risk * 0.5;   // above the plan's stop: the stop is restored
+         size_t before = SIM.sent.size();
+         NqTrade();
+         bool restored = false;
+         for(size_t k = before; k < SIM.sent.size(); k++)
+            if(SIM.sent[k].action == TRADE_ACTION_SLTP && SIM.sent[k].position == 9301 && near(SIM.sent[k].sl, pp.sl, 1e-9) && near(SIM.sent[k].tp, pp.tp1, 1e-9)) restored = true;
+         bool logged = false;
+         for(const std::string &l : SIM.log) if(l.find("SL MISSING: the plan's stop") != std::string::npos) logged = true;
+         CHECK(restored && logged && !SIM.pos.empty() && near(SIM.pos[0].sl, pp.sl, 1e-9), "no stop at the broker: the plan's SL and TP1 are restored by one SLTP request, logged");
+         SIM.pos.clear();
+         p.ticket = 9302;
+         SIM.pos.push_back(p);
+         SIM.bid = pp.sl - pp.risk * 0.5;   // already beyond the stop: closed now
+         NqTrade();
+         bool gone = true;
+         for(const SimPos &q2 : SIM.pos) if(q2.ticket == 9302) gone = false;
+         bool said = false;
+         for(const std::string &l : SIM.log) if(l.find("SL MISSING and the price is already beyond") != std::string::npos) said = true;
+         CHECK(gone && said, "no stop and the price beyond it: closed with the reason");
+         SIM.bid = keepBid;
+      }
+      SIM.pos.clear();
+      OnDeinit(0);
+   }
+   end("M6");
 
    std::printf("\nEA TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;

@@ -594,6 +594,12 @@ no news calendar - the spike is the evidence, the human decides.
 Per order the EA also refuses (and says why) when the SL/TP sit inside the broker's stops
 level, when the minimum lot would risk more than the allowance, or when free margin is short.
 
+**SL guard (v1.9.2 / 1.3.2 / 1.0.3).** A position of this EA that has **no stop at the broker**
+(a server that stripped it, a hand edit) gets its plan's stop (and TP1 when it has no TP) back
+by one SL/TP request at the next closed M1 candle, logged `SL MISSING: the plan's stop ...
+restored`; if the price is already beyond that stop the position is closed at once (`SL MISSING
+and the price is already beyond the plan's stop ... - closing`). A position never runs naked.
+
 Every order is printed to the **Experts** log, e.g.
 `NQ MARKET BUY 0.10 SL 4149.10 TP 4157.10 | M5 BULLISH, M1 NRTR realigned + candle closed
 10:36, ATR5 3.20, risk 0.50% = 50.00 USD -> lot 0.10 | OK retcode 10009 deal 123`.
@@ -632,7 +638,7 @@ Every order is printed to the **Experts** log, e.g.
 | Plan TP1 / TP2 | 1R / 2R | |
 | Bias arrow: votes needed / arrows drawn | 3 / last 300 candles | strong, one-sided votes only |
 | History used | 8 days | |
-| Panel layout | SPLIT | the trading board (title, verdict, plans, orders, positions) top-left and the INFORMATION DESK (the engine rows: H4/H1, macro vote, news, week, volatility, M15/M5/M1) in its own block at the bottom middle, so the chart stays in full view; ONE = the former single column |
+| Panel layout | SPLIT | the trading board (title, verdict, plans, orders, positions) top-left and the INFORMATION DESK (the engine rows: H4/H1, macro vote, news, week, volatility, M15/M5/M1) in its own block at the bottom middle, so the chart stays in full view; ONE = the former single column. **Click the board's title to fold it to its banner, click the desk's header to fold the desk** (click again to unfold). The board is compact: an empty plan slot is one line and only the broker rows that exist are drawn. On a short chart the desk moves beside the board when it fits |
 | Panel size / corner / X / Y | 1.0 / top-left / 12 / 24 | the trading board's position; bottom-left is the other option |
 
 ## Why it cannot repaint

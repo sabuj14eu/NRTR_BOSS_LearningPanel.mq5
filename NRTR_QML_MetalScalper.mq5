@@ -33,7 +33,7 @@
 //|  Personal tool. No network, no Telegram, no DLL, no files.       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.91"
+#property version     "1.92"
 #property description "Gold/Silver: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar plans, macro vote (DXY, bond, USD news, H4/H1), news guard, smart exit."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -2904,11 +2904,13 @@ double   g_spikeNorm;  // a normal InpSpikeBars-bar range: the average over the 
 double   g_spikeRetr;  // share of the spike the latest close has given back (0..1)
 bool     g_spikeWarn;  // retrace >= InpSpikeRetrace: EXIT WARNING for a position in the spike direction
 bool     g_warnOn;     // the verdict is an EXIT WARNING right now (chart marker)
+bool     g_boardCollapsed;   // the trading board folded to its banner (click the title)
+bool     g_deskCollapsed;    // the information desk folded to its header (click the header)
 bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.9.1"
+#define NQ_EA_VERSION "1.9.2"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -3191,6 +3193,8 @@ int OnInit()
    g_spikeRetr = 0.0;
    g_spikeWarn = false;
    g_warnOn = false;
+   g_boardCollapsed = false;
+   g_deskCollapsed = false;
    g_newBar5 = false;
    ArrayResize(g_sbrk, 0);
    g_nSbrk = 0;
@@ -3265,6 +3269,19 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 {
    if(id == CHARTEVENT_CHART_CHANGE)
    {
+      NqDrawPanel();
+      ChartRedraw(0);
+   }
+   // a click on the board's title folds the board to its banner; a click on the desk's header folds the desk
+   if(id == CHARTEVENT_OBJECT_CLICK)
+   {
+      if(sparam == NQ_PFX_P + "title" || StringFind(sparam, NQ_PFX_P + "title~") == 0)
+         g_boardCollapsed = !g_boardCollapsed;
+      else if(sparam == NQ_PFX_P + "h1" || StringFind(sparam, NQ_PFX_P + "h1~") == 0)
+         g_deskCollapsed = !g_deskCollapsed;
+      else
+         return;
+      ObjectsDeleteAll(0, NQ_PFX_P);
       NqDrawPanel();
       ChartRedraw(0);
    }
@@ -4538,6 +4555,30 @@ double NqPosR(double open, double sl, double px, int pdir, string cmt)
    return (px - open) * pdir / risk;
 }
 
+// the stop (and TP when the position has none) a position SHOULD carry, from its plan or scalp record; 0 = unknown
+double NqPlanSlOf(string cmt, double &tp)
+{
+   if(StringFind(cmt, NQ_CMT_SCALP) == 0)
+   {
+      long t = StringToInteger(StringSubstr(cmt, StringLen(NQ_CMT_SCALP)));
+      for(int k = g_nSig - 1; k >= 0; k--)
+      {
+         if((long)g_s1.t[g_sigs[k].idx] != t)
+            continue;
+         if(tp <= 0.0)
+            tp = g_sigs[k].tp;
+         return g_sigs[k].sl;
+      }
+      return 0.0;
+   }
+   NqPlan p;
+   if(!NqPlanByComment(cmt, p))
+      return 0.0;
+   if(tp <= 0.0)
+      tp = InpPlanUseTp2 ? p.tp2 : p.tp1;
+   return p.sl;
+}
+
 bool NqRegimeAgreedSince(datetime opened, int pdir)
 {
    for(int i = g_s5.n - 1; i >= 0; i--)
@@ -5786,6 +5827,28 @@ void NqTrade()
          }
       }
       bool isScalp = (StringFind(cmt, NQ_CMT_SCALP) == 0);
+      // SL GUARD: a position of ours without a stop (a broker that stripped it, a hand edit) gets the plan's
+      // stop back; if the price is already beyond it, the position is closed now
+      if(g_fresh && PositionGetDouble(POSITION_SL) <= 0.0)
+      {
+         double tpWant = PositionGetDouble(POSITION_TP);
+         double want = NqPlanSlOf(cmt, tpWant);
+         if(want > 0.0)
+         {
+            double pxG = (pdir > 0) ? SymbolInfoDouble(g_sym, SYMBOL_BID) : SymbolInfoDouble(g_sym, SYMBOL_ASK);
+            bool beyond = (pdir > 0) ? (pxG <= want) : (pxG >= want);
+            if(beyond)
+            {
+               NqClosePosition(tk, "SL MISSING and the price is already beyond the plan's stop " + NqPx(want) + " - closing");
+               continue;
+            }
+            double minDistG = g_stopsLevel * g_point;
+            bool legal = (pdir > 0) ? (want < pxG - minDistG) : (want > pxG + minDistG);
+            if(legal)
+               NqModifySl(tk, want, tpWant, "SL MISSING: the plan's stop " + NqPx(want) + " restored");
+            PositionSelectByTicket(tk);
+         }
+      }
       if(g_fresh && NqSmartExit(tk, pdir, cmt, isScalp, reg5))
          continue;
       if(!isScalp)
@@ -6531,11 +6594,21 @@ void NqDrawPanel()
    int vOff = (int)MathRound(122 * sc);
    int bannerH = (int)MathRound(38 * sc);
    int rowsTop = 12;
-   int rowsBot = 8 + 1 + 8 * 2 + NQ_BOARD_BROKER_ROWS + 2;   // NY/level/radar lines, header, plan + scalp rows, broker rows, footer
-   int tTopH = rh + 3 + rowsTop * rh + 4;
-   int tBotH = rh + 3 + rowsBot * rh + 8;
+   // compact board: an empty plan slot is one line, broker rows only as many as there are (at least one)
+   int slotLines = 0;
+   for(int q = 0; q < NQ_PLAN_SLOTS; q++)
+   {
+      NqPlan plq;
+      slotLines += (g_ready && NqSlotPlan(q, plq)) ? 2 : 1;
+   }
+   int brokerRows = (int)MathMax(1, (int)MathMin(NQ_BOARD_BROKER_ROWS, g_pendCount + g_openCount));
+   int rowsBot = 8 + 1 + slotLines + 2 + brokerRows + 2;   // NY/level/radar lines, header, plan rows, scalp row, broker rows, footer
+   bool deskOpen = !g_deskCollapsed;
+   bool boardOpen = !g_boardCollapsed;
+   int tTopH = deskOpen ? (rh + 3 + rowsTop * rh + 4) : (rh + 6);
+   int tBotH = boardOpen ? (rh + 3 + rowsBot * rh + 8) : 0;
    bool split = (InpPanelLayout == NQ_LAYOUT_SPLIT);   // the engine rows become an INFORMATION DESK at the bottom middle
-   int H = pad * 2 + (int)MathRound(rh * 1.4) + rh + 4 + bannerH + 4 + 2 * rh + (split ? 0 : tTopH + 6) + tBotH + 4 + rh;
+   int H = pad * 2 + (int)MathRound(rh * 1.4) + rh + 4 + bannerH + 4 + 2 * rh + (split ? 0 : tTopH + 6) + (boardOpen ? tBotH + 4 + rh : 0);
 
    int ch = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS, 0);
    int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS, 0);
@@ -6558,6 +6631,12 @@ void NqDrawPanel()
    NqRect("bg", ox, oy, W, H, cBg, cMetal);
    int xInfo = split ? (int)MathMax(0, (cw - W) / 2) : ox;
    int yInfo = split ? (int)MathMax(0, ch - (tTopH + 2 * pad) - 4) : oy;
+   if(split && yInfo < oy + H + 4 && xInfo < ox + W + 4)
+   {
+      int xr = ox + W + 8;      // a short chart: the desk goes beside the board when it fits, else it overlaps (fold one of them)
+      if(xr + W <= cw - 60)
+         xInfo = xr;
+   }
    if(split)
       NqRect("bgI", xInfo, yInfo, W, tTopH + 2 * pad, cBg, cMetal);
    else if(ObjectFind(0, NQ_PFX_P + "bgI") >= 0)
@@ -6577,6 +6656,7 @@ void NqDrawPanel()
    if(g_metal == NQ_METAL_SILVER)
       title = "SILVER  -  NRTR QML SCALPER";
    title = title + "   v" + NQ_EA_VERSION;   // the build on the chart, so the real file is recognisable
+   title = title + (boardOpen ? "   (click: fold)" : "   (click: unfold)");
    NqLabel("title", ox + pad, y, title, cMetal, fsT, "Arial Black", ANCHOR_LEFT_UPPER);
    y += (int)MathRound(rh * 1.4);
    double bid = SymbolInfoDouble(g_sym, SYMBOL_BID);
@@ -6649,9 +6729,11 @@ void NqDrawPanel()
    int vx = tx + vOff;
    NqRect("t1", tx, yI, TW, tTopH, cTbl, cDim);
    string hdr = split ? "INFORMATION DESK   " : "";
-   hdr = hdr + "ENGINE   M15 " + NqSymArrow() + " M5 " + NqSymArrow() + " M1";
+   hdr = hdr + "ENGINE   M15 " + NqSymArrow() + " M5 " + NqSymArrow() + " M1" + (deskOpen ? "   (click: fold)" : "   (click: unfold)");
    NqLabel("h1", kx, yI + 3, hdr, cMetal, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
    int yr = yI + rh + 3;
+   if(deskOpen)
+   {
 
    int ctx = ok ? g_s15.ctx[i15] : 0;
    string ctxT = "---";
@@ -6806,6 +6888,7 @@ void NqDrawPanel()
          hitT = hitT + "  - arrows need an M1/M5/M15 chart";
    }
    NqRow("e7", kx, vx, yr, "BIAS HIT RATE", hitT, cVal, cKey, fs);
+   }
    if(!split)
       y += tTopH + 6;
    tx = txB;                 // back to the trading board's column
@@ -6813,6 +6896,8 @@ void NqDrawPanel()
    vx = tx + vOff;
 
    // ---------------- the TRADING BOARD: NY TRAP + PENDING ORDERS (top-left) ----------------
+   if(!boardOpen)
+      return;
    NqRect("t2", tx, y, TW, tBotH, cTbl, cDim);
    NqLabel("h2", kx, y + 3, "NY TRAP  +  PENDING ORDER BOARD   (live, every second)", cMetal, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
    yr = y + rh + 3;
@@ -7125,8 +7210,13 @@ void NqDrawPanel()
       NqLabel(id + "5", cx5, yr, vD, nearRow ? clrWhite : cVal, fs, nearRow ? "Arial Black" : "Arial", ANCHOR_LEFT_UPPER);
       NqLabel(id + "6", cx6, yr, stT, cSt, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
       yr += rh;
-      NqLabel(id + "d", cx1, yr, det, cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
-      yr += rh;
+      if(k >= 0)
+      {
+         NqLabel(id + "d", cx1, yr, det, cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
+         yr += rh;
+      }
+      else if(ObjectFind(0, NQ_PFX_P + id + "d") >= 0)
+         ObjectsDeleteAll(0, NQ_PFX_P + id + "d");
    }
 
    // SCALP row: always visible with the levels a scalp would use RIGHT NOW,
@@ -7254,15 +7344,17 @@ void NqDrawPanel()
       yr += rh;
       shown++;
    }
-   for(int i = shown; i < NQ_BOARD_BROKER_ROWS; i++)
+   if(shown == 0)
    {
-      string id = "bb" + IntegerToString(i);
-      string txt = (i == shown) ? ((shown == 0) ? "no broker orders or positions for this EA" : " ") : " ";
-      NqLabel(id + "0", cx0, yr, txt, cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
+      NqLabel("bb00", cx0, yr, "no broker orders or positions for this EA", cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
       for(int c = 1; c <= 6; c++)
-         NqLabel(id + IntegerToString(c), cx1, yr, " ", cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
+         NqLabel("bb0" + IntegerToString(c), cx1, yr, " ", cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
       yr += rh;
+      shown = 1;
    }
+   for(int i = shown; i < NQ_BOARD_BROKER_ROWS; i++)
+      if(ObjectFind(0, NQ_PFX_P + "bb" + IntegerToString(i) + "0") >= 0)
+         ObjectsDeleteAll(0, NQ_PFX_P + "bb" + IntegerToString(i));
 
    // footer: today's plan lifecycle counts (M5 auto plans) + account + last update
    int cCan = 0;
