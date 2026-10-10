@@ -62,6 +62,8 @@ HEADER = '''//+-----------------------------------------------------------------
 //|     the broker's BTC symbol, found automatically.                 |
 //|   * 24/7: crypto never closes, so the session clock only shapes  |
 //|     the levels (Asia / London / NY), it never stops the bot.     |
+//|     v1.3.4: the WEEKEND IS OPEN (InpWeekendTrading, default   |
+//|     on); the Friday stop and the week-open guard default to 0.  |
 //|                                                                  |
 //|  M15 = CONTEXT ONLY        (EMA200 + NRTR: shades, never gates)  |
 //|   M5 = REGIME + STRUCTURE  (NRTR + confirmed HH/HL or LH/LL)     |
@@ -77,7 +79,7 @@ HEADER = '''//+-----------------------------------------------------------------
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.15"
+#property version     "1.34"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -256,20 +258,13 @@ string NqResolveLead()
 // radar only: the alts follow BTC, so a break the lead's M15 NRTR points AGAINST
 // is blocked (an INVERSE lead, DXY-like, blocks when it points the SAME way).
 // NOT a master switch: a coin's OWN A+ structure overrides it - the radar score
-// at least InpLeadOverrideScore AND its own M15 context AND its own M5 regime on
-// the side of the trade. Weak setups stay blocked. The gate (spread, risk, the
-// volatility regime) is applied before any order regardless.
+// at least InpMacroOverrideScore AND its own M15 context AND its own M5 regime on
+// the side of the trade. v1.3: the lead is a voter of weight 2 in the MACRO VOTE
+// (with the bond, the USD news, H4 / H1); this is the vote's verdict for a break.
 bool NqLeadBlocks(int planDir, int score)
 {
-   if(!InpMacroBlocks || g_macroDir == 0 || planDir == 0)
-      return false;
-   bool against = InpMacroInverse ? (g_macroDir == planDir) : (g_macroDir == -planDir);
-   if(!against)
-      return false;
-   if(InpLeadOverrideScore <= 10 && score >= InpLeadOverrideScore && g_s15.n > 0 && g_s5.n > 0 &&
-      g_s15.ctx[g_s15.n - 1] == planDir && g_s5.regime[g_s5.n - 1] == planDir)
-      return false;
-   return true;
+   string w = "";
+   return NqMacroBlocks(planDir, score, true, w);
 }
 
 // the spread cap in points: the input when set, else x ATR(M5) (a BTC spread
@@ -323,12 +318,10 @@ def derive_ea(m: str) -> str:
                'input group "Coin specialist (BTC / ETH / LTC / ALT - the profile follows the class)"\n'
                "input ENUM_NQ_COIN   InpCoinClass        = NQ_COIN_AUTO_SEL; // Coin class: AUTO detects it; set ALT to trade a coin AUTO does not know\n"
                "input bool           InpSpecialist       = true;        // Apply the class profile (risk x, SL buffers x, min impulse x, radar on/off); false = raw inputs\n"
-               "input int            InpLeadOverrideScore = 9;         // Lead against: the coin's OWN A+ structure overrides it at this radar score (M15 context + M5 regime must agree); 11 = never\n")
-    t = rep_re(t, r'input string\s+InpMacroSymbol\s+= "";\s+// Macro filter symbol \(e\.g\. USDX / DXY\); empty = off\n'
-                  r'input bool\s+InpMacroBlocks\s+= true;\s+// Block a radar order when the macro symbol\'s M15 NRTR points the same way\n',
-               'input string         InpMacroSymbol      = "";          // BTC-lead symbol; empty = AUTO (the broker\'s BTC symbol for ETH/LTC/ALT, none for BTC); "-" = off\n'
-               'input bool           InpMacroBlocks      = true;        // Block a radar order when the lead\'s M15 NRTR points AGAINST the break (alts follow BTC)\n'
-               'input bool           InpMacroInverse     = false;       // The lead moves INVERSELY (e.g. DXY): block when it points the SAME way instead\n')
+               "")
+    t = rep(t, 'input string         InpMacroSymbol      = "";          // Dollar index witness; empty = AUTO (USDX / DXY / USDOLLAR ...), "-" = off\n',
+               'input string         InpMacroSymbol      = "";          // BTC-lead symbol (votes double); empty = AUTO (the broker\'s BTC symbol for ETH/LTC/ALT, none for BTC); "-" = off\n'
+               'input bool           InpMacroInverse     = false;       // The lead moves INVERSELY (e.g. DXY): its vote is flipped\n')
     t = rep_re(t, r'input int\s+InpMaxSpreadPoints\s+= 50;\s+// Max spread \(points\)\n',
                'input int            InpMaxSpreadPoints  = 0;           // Max spread (points); 0 = the ATR rule below (crypto spreads are hundreds of points)\n'
                'input double         InpMaxSpreadAtr     = 0.0;         // Max spread as x ATR(M5); 0 = the class profile (BTC 0.15, ETH 0.20, LTC 0.25, ALT 0.30)\n')
@@ -341,7 +334,6 @@ def derive_ea(m: str) -> str:
     t = rep(t, "int      g_metal;\n",
             "int      g_coin;\n"
             "string   g_coinName;   // BTC / ETH / LTC / ALT\n"
-            "string   g_macroSym;   // the lead symbol in force (\"\" = none)\n"
             "double   g_profRisk;   // class profile: risk multiplier (<= 1, never widens)\n"
             "double   g_profBuf;    // SL-buffer multiplier (>= 1)\n"
             "double   g_profImp;    // pullback min-impulse multiplier (>= 1)\n"
@@ -350,15 +342,19 @@ def derive_ea(m: str) -> str:
     t = rep(t, 'string NqJsonI(string key, long val);\n',
             'string NqJsonI(string key, long val);\n'
             'void   NqSetProfile();\nstring NqResolveLead();\nint    NqMaxSpreadPts();\n')
-    t = rep(t, "bool   NqMacroBlocks(int planDir, int score);\n", "bool   NqLeadBlocks(int planDir, int score);\n")
+    t = rep(t, "bool   NqMacroBlocks(int dir, int score, bool isRadar, string &why);\n", "bool   NqMacroBlocks(int dir, int score, bool isRadar, string &why);\nbool   NqLeadBlocks(int planDir, int score);\n")
     # 8. OnInit
     t = rep(t, "InpMaxTradesPerDay < 0 || InpMaxSpreadPoints < 0 ||",
-            "InpMaxTradesPerDay < 0 || InpMaxSpreadPoints < 0 || InpMaxSpreadAtr < 0.0 || InpLeadOverrideScore < 0 || InpLeadOverrideScore > 11 ||")
+            "InpMaxTradesPerDay < 0 || InpMaxSpreadPoints < 0 || InpMaxSpreadAtr < 0.0 ||")
     t = rep(t, "   g_metal = NqMetalOf(g_sym, SymbolInfoString(g_sym, SYMBOL_CURRENCY_BASE),\n"
                "                       SymbolInfoString(g_sym, SYMBOL_CURRENCY_PROFIT));\n   NqReadSpec();\n",
             "   g_coin = NqCoinOf(g_sym, SymbolInfoString(g_sym, SYMBOL_CURRENCY_BASE),\n"
             "                     SymbolInfoString(g_sym, SYMBOL_CURRENCY_PROFIT), (int)InpCoinClass);\n"
-            "   NqSetProfile();\n   g_macroSym = NqResolveLead();\n   NqReadSpec();\n")
+            "   NqSetProfile();\n   NqReadSpec();\n")
+    t = rep(t, '   g_macroSym = NqResolveWitness(InpMacroSymbol, "USDX,DXY,USDOLLAR,DX,USDIDX,USIDX,DOLLAR,USDINDEX,USDOLLARINDEX", true);\n',
+            '   g_macroSym = NqResolveLead();   // the BTC lead takes the macro slot (DXY is not a crypto witness)\n')
+    t = rep(t, '   v += NqWitnessVote(d, "DXY", g_macroSym, g_macroDir, -1, 1, why);\n',
+            '   v += NqWitnessVote(d, "lead", g_macroSym, g_macroDir, InpMacroInverse ? -1 : 1, 2, why);   // the alts follow BTC: the lead counts double\n')
     t = rep(t, "   g_P.qmlSlBufAtr = InpQmlSlBufAtr;\n", "   g_P.qmlSlBufAtr = InpQmlSlBufAtr * g_profBuf;      // class profile: wider, never tighter\n")
     t = rep(t, "   g_P.pbMinImpulseAtr = InpPbMinImpulseAtr;\n", "   g_P.pbMinImpulseAtr = InpPbMinImpulseAtr * g_profImp;\n")
     t = rep(t, "   g_P.pbSlBufAtr = InpPbSlBufAtr;\n", "   g_P.pbSlBufAtr = InpPbSlBufAtr * g_profBuf;\n")
@@ -372,31 +368,15 @@ def derive_ea(m: str) -> str:
             "   g_gate = NqRiskGate(InpScalpAuto || InpPendingAuto, g_isDemo, InpAllowRealAccount, tradeAllowed,\n"
             "                       g_spreadPts, maxSpr, dayTotal,")
     # 11. lead symbol
-    t = rep(t, "// macro filter: the M15 NRTR direction of another symbol (e.g. the dollar index)\n",
-            "// lead filter: the M15 NRTR direction of the lead symbol (BTC for the alts)\n")
-    t = rep(t, '   g_macroDir = 0;\n   if(InpMacroSymbol == "")\n      return;\n', '   g_macroDir = 0;\n   if(g_macroSym == "")\n      return;\n')
-    t = rep(t, "   if(!NqLoadSym(InpMacroSymbol, PERIOD_M15, m, why))\n", "   if(!NqLoadSym(g_macroSym, PERIOD_M15, m, why))\n")
-    t = rep(t, "            // macro filter (radar only): the dollar index moving with the metal's intended break is a block\n"
-               "            int rdScore = (pl.dir > 0) ? g_rdUp.score : g_rdDn.score;\n"
-               "            if(isStop && NqMacroBlocks(pl.dir, rdScore))\n"
-               "            {\n"
-               '               g_note = "RADAR: MACRO AGAINST (" + InpMacroSymbol + " M15 NRTR " + NqDirText(g_macroDir) + ")";\n',
-            "            // lead filter (radar only): the alts follow BTC - a break the lead points against is a block,\n"
-            "            // unless the coin's OWN structure is A+ (radar score, M15 context and M5 regime all agree)\n"
-            "            int rdScore = (pl.dir > 0) ? g_rdUp.score : g_rdDn.score;\n"
-            "            if(isStop && NqLeadBlocks(pl.dir, rdScore))\n"
-            "            {\n"
-            '               g_note = "RADAR: LEAD AGAINST (" + g_macroSym + " M15 NRTR " + NqDirText(g_macroDir) + ") - own structure " +\n'
-            '                        IntegerToString(rdScore) + "/10, needs " + IntegerToString(InpLeadOverrideScore) + " + M15 + M5";\n')
-    t = rep(t, '      string mac = (InpMacroSymbol == "") ? "" : ("   macro " + InpMacroSymbol + " " + ((g_macroDir == 0) ? "n/a" : NqDirText(g_macroDir)));\n',
-            '      string mac = (g_macroSym == "") ? "" : ("   lead " + g_macroSym + " " + ((g_macroDir == 0) ? "n/a" : NqDirText(g_macroDir)));\n')
+    t = rep(t, "// the dollar-index witness: the M15 NRTR direction of the resolved symbol\n",
+            "// the lead witness: the M15 NRTR direction of the lead symbol (BTC for the alts)\n")
     t = rep(t, "      return InpTradeRadar;\n", "      return InpTradeRadar && g_profRadar;   // the class profile can switch breakout stops off\n")
     # 12. journal + telemetry
     t = rep(t, '              NqJsonS("ea_version", NQ_EA_VERSION) + "," + NqJsonS("symbol", g_sym) + "," +\n'
-               '              NqJsonS("vol_regime",',
+               '              NqJsonS("h4_ctx",',
             '              NqJsonS("ea_version", NQ_EA_VERSION) + "," + NqJsonS("symbol", g_sym) + "," +\n'
             '              NqJsonS("engine", "NQ-CRYPTO") + "," + NqJsonS("coin", g_coinName) + "," +\n'
-            '              NqJsonS("vol_regime",')
+            '              NqJsonS("h4_ctx",')
     t = rep(t, '   string metal = (g_metal == NQ_METAL_GOLD) ? "GOLD" : ((g_metal == NQ_METAL_SILVER) ? "SILVER" : "NONE");\n', "")
     t = rep(t, 'NqJsonS("source", "NRTR_QML_MetalScalper")', 'NqJsonS("source", "NRTR_QML_CryptoScalper")')
     t = rep(t, 'NqJsonS("symbol", g_sym) + "," + NqJsonS("metal", metal) + "," +',
@@ -421,7 +401,7 @@ def derive_ea(m: str) -> str:
             '   if(g_coin == NQ_COIN_LTC)\n      title = "LTC  -  NRTR QML CRYPTO SCALPER";\n'
             '   if(g_coin == NQ_COIN_ALT)\n      title = "ALTCOIN  -  NRTR QML CRYPTO SCALPER";\n')
     t = rep(t, '   title = title + "   v" + NQ_EA_VERSION;', '   title = title + "   v" + NQ_EA_VERSION;')
-    t = rep(t, "   int rowsTop = 8;\n", "   int rowsTop = 9;\n")
+    t = rep(t, "   int rowsTop = 12;\n", "   int rowsTop = 13;\n")
     t = rep(t, '   string volT = "---";\n',
             '   string sprT = (InpMaxSpreadPoints > 0) ? (IntegerToString(InpMaxSpreadPoints) + " pts")\n'
             '                 : (DoubleToString((InpMaxSpreadAtr > 0.0) ? InpMaxSpreadAtr : g_profSpread, 2) + " ATR");\n'
@@ -432,19 +412,28 @@ def derive_ea(m: str) -> str:
             '   yr += rh;\n'
             '   string volT = "---";\n')
     # 14. version + helper functions (after NqReadAccount's spread read block: append before NqEvaluate's doc comment)
-    t = rep(t, '#define NQ_EA_VERSION "1.7.3"', '#define NQ_EA_VERSION "1.1.5"')
-    t = rep(t, "// macro filter (radar only). Metals: the dollar index moving the SAME way as the\n"
-               "// intended break is a block. The score is unused here; the crypto twin grades it.\n"
-               "bool NqMacroBlocks(int planDir, int score)\n{\n"
-               "   if(!InpMacroBlocks || g_macroDir == 0 || planDir == 0)\n      return false;\n"
-               "   return g_macroDir == planDir;\n}\n\n", "")
+    t = rep(t, '#define NQ_EA_VERSION "1.9.4"', '#define NQ_EA_VERSION "1.3.4"')
+    # 14b. v1.3.4 - the weekend is OPEN: crypto never closes, so the metal's WEEKEND block must not
+    #      apply; the Friday stop and the week-open guard are off unless the operator sets them
+    #      (a broker that closes crypto at the weekend). Nothing else of the week logic changes.
+    t = rep(t, 'input group "Week edges + rollover (from the AUTO clock: the week opens / closes at 17:00 New York)"\n',
+            'input group "Week edges + rollover (crypto trades 24/7: the WEEKEND IS OPEN; Friday / Monday guards are off unless you set them)"\n'
+            'input bool           InpWeekendTrading   = true;        // Crypto trades the weekend: no WEEKEND block (false = treat the weekend as closed, as a metal does)\n')
+    t = rep(t, 'input int            InpFridayStopMin    = 120;         // No new trade in the last N minutes before the Friday close; resting orders are pulled then\n',
+            'input int            InpFridayStopMin    = 0;           // 0 = no Friday stop (24/7). N > 0: no new trade in the last N minutes before the Friday 17:00 NY close; resting orders are pulled then\n')
+    t = rep(t, 'input int            InpWeekOpenGuardMin = 60;          // No new trade in the first N minutes after the week opens\n',
+            'input int            InpWeekOpenGuardMin = 0;           // 0 = no week-open guard (24/7). N > 0: no new trade in the first N minutes after the Sunday 17:00 NY open\n')
+    t = rep(t, '   if(!NqWeekPos(g_dow, mod, roll, sinceOpen, untilClose))\n   {\n      g_weekEdge = true;\n      g_weekText = "WEEKEND (the week opens Sunday 17:00 New York)";\n   }\n   else if(untilClose <= InpFridayStopMin)\n',
+            '   if(!NqWeekPos(g_dow, mod, roll, sinceOpen, untilClose))\n   {\n      // v1.3.4: crypto trades the weekend - the metal\'s WEEKEND block applies only when the operator says so\n'
+            '      if(!InpWeekendTrading)\n      {\n         g_weekEdge = true;\n         g_weekText = "WEEKEND (InpWeekendTrading = false: treated as closed, as a metal)";\n      }\n'
+            '      else\n         g_weekText = "WEEKEND - OPEN (crypto trades 24/7)";\n   }\n   else if(InpFridayStopMin > 0 && untilClose <= InpFridayStopMin)\n')
     t = rep(t, "// account view (this EA's magic, this symbol)\n", "// account view (this EA's magic, this symbol)\n")
     t = rep(t, "\nvoid NqReadAccount()\n{\n", PROFILE_FUNCS + "\nvoid NqReadAccount()\n{\n")
     # 15. renames
     t = t.replace("g_metal", "g_coin").replace("NQ_METAL_NONE", "NQ_COIN_NONE")
     # 16. comment wording
     t = rep(t, "the metal's intended break", "the coin's intended break", count=t.count("the metal's intended break"))
-    for bad in ("NQ_METAL", "NqMetalOf", "GOLD / SILVER", 'InpMacroSymbol == ""', "XAUUSD", "XAGUSD", "NqMacroBlocks"):
+    for bad in ("NQ_METAL", "NqMetalOf", "GOLD / SILVER", 'InpMacroSymbol == ""', "XAUUSD", "XAGUSD"):
         if bad in t:
             raise SystemExit(f"leftover metal token in the crypto EA: {bad}")
     return t
@@ -462,8 +451,8 @@ def derive_test(s: str) -> str:
     t = rep(t, 'find("GOLD / SILVER ONLY")', 'find("CRYPTO ONLY")')
     t = rep(t, '"\\"metal\\":\\"GOLD\\""', '"\\"coin\\":\\"BTC\\""')
     t = rep(t, '"\\"source\\":\\"NRTR_QML_MetalScalper\\""', '"\\"source\\":\\"NRTR_QML_CryptoScalper\\""')
-    t = rep(t, '"\\"ea_version\\":\\"1.7.3\\""', '"\\"ea_version\\":\\"1.1.5\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
-    t = rep(t, 'CHECK(rows == 8, "8 engine rows (VOL REGIME + the 7 engine rows)");', 'CHECK(rows == 9, "9 engine rows (COIN PROFILE + VOL REGIME + the 7 engine rows)");')
+    t = rep(t, '"\\"ea_version\\":\\"1.9.4\\""', '"\\"ea_version\\":\\"1.3.4\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
+    t = rep(t, 'CHECK(rows == 12, "12 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, VOL REGIME + the 7 engine rows)");', 'CHECK(rows == 13, "13 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, COIN PROFILE, VOL REGIME + the 7 engine rows)");')
     t = rep(t, "   SIM.tickValue = tickValue;\n", "   SIM.tickValue = tickValue;\n   SIM.contract = 1.0;   // crypto CFD: one coin per lot\n")
     # price offsets of the hand-made broker items, scaled from a $4,150 metal to a $61,500 coin
     # a crypto CFD: 1 lot = 1 coin, so a 0.01 tick is worth 0.01 (not 1.0 as on a 100 oz gold lot)
@@ -476,10 +465,21 @@ def derive_test(s: str) -> str:
     t = rep(t, "mo.price = SIM.bid - 50;", "mo.price = SIM.bid - 5000;")
     t = rep(t, "ps.sl = SIM.bid - 5; ps.tp = SIM.bid + 5;", "ps.sl = SIM.bid - 500; ps.tp = SIM.bid + 500;")
     t = rep(t, "so.price = SIM.bid + 0.10; so.sl = SIM.bid + 6; so.tp = SIM.bid - 4;", "so.price = SIM.bid + 10.0; so.sl = SIM.bid + 600; so.tp = SIM.bid - 400;")
+    # the v1.9 M sections plant a limit $2 away and a $1 stop: on a $61,500 coin the bar itself fills / stops them first
+    t = rep(t, "so.price = SIM.bid - 2.0; so.sl = SIM.bid - 3.0; so.tp = SIM.bid - 1.0;", "so.price = SIM.bid - 2000.0; so.sl = SIM.bid - 3000.0; so.tp = SIM.bid - 1000.0;", 2)
+    t = rep(t, "p.open = nb.close - 0.5; p.sl = p.open - 1.0; p.tp = p.open + 3.0;", "p.open = nb.close - 50.0; p.sl = p.open - 100.0; p.tp = p.open + 300.0;")
+    t = rep(t, "l.open = nb.close - 0.5; l.sl = l.open + 1.0; l.tp = l.open - 3.0;", "l.open = nb.close - 50.0; l.sl = l.open + 100.0; l.tp = l.open - 300.0;")
     t = rep(t, "Market silver = makeMarket(5, 60.9, 0.001, 0.006, (int)DAYS);", "Market silver = makeMarket(5, 112.9, 0.001, 0.05, (int)DAYS);")
     t = t.replace("XAGUSD", "LTCUSD").replace('"XAG"', '"LTC"')
     t = t.replace("silver", "ltc").replace("gold,", "btc,").replace("Market gold", "Market btc").replace("(gold)", "(btc)")
     t = rep(t, "A10 ltc spec (3 digits, tick value 5)", "A10 LTC spec (3 digits, tick value 5)")
+    # v1.3.4: the week's edges on crypto defaults - the weekend is OPEN, no Friday stop, no week-open guard
+    t = rep(t, 'CHECK(g_weekEdge && g_weekFriday && g_weekText.find("FRIDAY STOP") == 0 && (NqMetalGateBits() & NQ_K_WEEK_EDGE) != 0, "Friday 22:30 = 90 min before the close: FRIDAY STOP");',
+            'CHECK(!g_weekEdge && !g_weekFriday && g_weekText == "" && (NqMetalGateBits() & NQ_K_WEEK_EDGE) == 0, "Friday 22:30: OPEN (InpFridayStopMin = 0 on crypto: no Friday stop, nothing pulled)");')
+    t = rep(t, 'CHECK(g_weekEdge && !g_weekFriday && g_weekText.find("FIRST 60 MIN") == 0, "Monday 00:30: the first hour of the week");',
+            'CHECK(!g_weekEdge && !g_weekFriday && g_weekText == "", "Monday 00:30: OPEN (InpWeekOpenGuardMin = 0 on crypto)");')
+    t = rep(t, 'CHECK(g_weekEdge && g_weekText.find("WEEKEND") == 0, "Saturday 01:00: weekend");',
+            'CHECK(!g_weekEdge && !g_weekFriday && g_weekText == "WEEKEND - OPEN (crypto trades 24/7)" && (NqMetalGateBits() & NQ_K_WEEK_EDGE) == 0, "Saturday 01:00: WEEKEND - OPEN, no WEEK EDGE bit (v1.3.4)");')
     # crypto-only checks before the summary
     t = rep(t, '   std::printf("\\nEA TESTS: %d checks passed, %d failed\\n", g_pass, g_fail);\n', CRYPTO_CHECKS +
             '   std::printf("\\nCRYPTO EA TESTS: %d checks passed, %d failed\\n", g_pass, g_fail);\n')
@@ -577,6 +577,7 @@ CRYPTO_CHECKS = r'''
 
       load(eth, "#ETHUSD.m", "ETH", 2, 0.01, 0.01);
       SIM.macro15 = toRates(btc.m15);
+      SIM.macroSym = "#BTCUSD.m";   // the broker serves exactly this second symbol (the bond lookup must not find it)
       startAt(START);
       run(START + 1, START + 16);
       CHECK(g_macroSym == "#BTCUSD.m", "lead = this symbol's spelling with BTC in place of ETH");
@@ -600,7 +601,7 @@ CRYPTO_CHECKS = r'''
       startAt(START);
       run(START + 1, START + 16);
       g_macroSym = "BTC";
-      NqReadMacro();
+      NqReadWitnesses();
       OnTimer();
       CHECK(g_macroDir == 0 && lbl("v_e0").find("lead BTC (NO DATA - no lead filter)") != std::string::npos && !NqLeadBlocks(1, 0),
             "a lead the broker has no data for is shown as NO DATA on the COIN PROFILE row and blocks nothing");
@@ -610,6 +611,7 @@ CRYPTO_CHECKS = r'''
 
       load(btc, "BTCUSD", "BTC", 2, 0.01, 1.0);
       SIM.macro15 = toRates(btc.m15);
+      SIM.macroSym = "BTCUSD";
       startAt(START);
       CHECK(g_macroSym == "", "BTC itself has no lead");
       OnDeinit(0);
@@ -653,6 +655,7 @@ CRYPTO_CHECKS = r'''
       Market eth = makeMarket(11, 2450.0, 0.01, 1.2, (int)DAYS);
       load(eth, "#ETHUSD.m", "ETH", 2, 0.01, 0.01);
       SIM.macro15 = toRates(btc.m15);
+      SIM.macroSym = "#BTCUSD.m";
       startAt(START);
       run(START + 1, START + 16);
       size_t i15 = (size_t)g_s15.n - 1, i5 = (size_t)g_s5.n - 1;
@@ -670,6 +673,28 @@ CRYPTO_CHECKS = r'''
       SIM.macro15.clear();
    }
    end("C6");
+
+   begin("C7 the weekend is OPEN (v1.3.4): on a Saturday clock with the clock guards ON nothing week-related gates, the WEEK row says so, the rollover window still does");
+   {
+      load(btc, "BTCUSD", "BTC", 2, 0.01, 0.01);
+      startAt(START);
+      relax();
+      g_clockGuards = true;
+      datetime fri = T0 + 3 * 86400;   // T0 is Tuesday 2026-09-01: Friday the 4th
+      NqSessionScan(fri + 86400 + 15 * 3600);   // Saturday 15:00 server
+      CHECK(!g_weekEdge && (NqMetalGateBits() & (NQ_K_WEEK_EDGE | NQ_K_ROLLOVER)) == 0 && g_weekText == "WEEKEND - OPEN (crypto trades 24/7)", "Saturday 15:00: no WEEK EDGE, no ROLLOVER - open for business");
+      NqSessionScan(fri + 2 * 86400 + 23 * 3600 + 55 * 60);   // Sunday 23:55 server = 5 min before the 00:00 server rollover (17:00 NY on this clock)
+      CHECK(g_rollover && (NqMetalGateBits() & NQ_K_ROLLOVER) != 0 && !g_weekEdge, "Sunday 23:55: the rollover window still gates (the swap), the weekend itself does not");
+      SIM.now = fri + 86400 + 15 * 3600;
+      NqSessionScan(SIM.now);
+      NqDrawPanel();
+      std::string wk = lbl("v_e0h");
+      std::printf("    WEEK / SMART row: [%s]\n", wk.c_str());
+      CHECK(wk.find("WEEKEND - OPEN") != std::string::npos && wk.find("FRIDAY STOP") == std::string::npos, "the WEEK / SMART row reads WEEKEND - OPEN");
+      g_clockGuards = false;
+      OnDeinit(0);
+   }
+   end("C7");
 '''
 
 

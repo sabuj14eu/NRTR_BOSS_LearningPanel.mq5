@@ -35,6 +35,7 @@ static NqParams params(double tick, int digits)
    P.pbSlBufAtr = 0.2;
    P.planTp1R = 1.0;
    P.planTp2R = 2.0;
+   P.planMinRiskAtr = 0.0;   // the geometry tests check the structural stops as they are; E14 proves the floor
    P.fcMinScore = 2;
    P.tick = tick;
    P.digits = digits;
@@ -731,6 +732,105 @@ int main()
       CHECK(k5 >= 0 && pl5[(size_t)k5].status == NQ_PL_INVALID && pl5[(size_t)k5].fillIdx < 0, "pressure failed (score < 5) cancels the unfilled plan");
    }
    end("E12");
+
+   begin("E13 the clock: US / EU daylight rules, sessions on the server clock from the GMT offset, the week's position");
+   {
+      // 2026: US DST 8 Mar 07:00 UTC .. 1 Nov 06:00 UTC; EU DST 29 Mar 01:00 UTC .. 25 Oct 01:00 UTC
+      int y = 0, m = 0, d = 0;
+      NqCivil(T0, y, m, d);
+      CHECK(y == 2026 && m == 9 && d == 1 && NqDow(T0) == 2, "civil date of T0 = 2026-09-01, a Tuesday");
+      CHECK(NqSundayOf(2026, 3, 2) == 8 && NqSundayOf(2026, 11, 1) == 1 && NqSundayOf(2026, 3, 0) == 29 && NqSundayOf(2026, 10, 0) == 25,
+            "second Sunday of March 2026 = 8th, first of November = 1st, last of March = 29th, last of October = 25th");
+      datetime usOn = (datetime)(NqDaysFromCivil(2026, 3, 8) * 86400 + 7 * 3600), usOff = (datetime)(NqDaysFromCivil(2026, 11, 1) * 86400 + 6 * 3600);
+      datetime euOn = (datetime)(NqDaysFromCivil(2026, 3, 29) * 86400 + 3600), euOff = (datetime)(NqDaysFromCivil(2026, 10, 25) * 86400 + 3600);
+      CHECK(!NqUsDst(usOn - 1) && NqUsDst(usOn) && NqUsDst(usOff - 1) && !NqUsDst(usOff) && NqUsDst(T0) && !NqUsDst(T0 - 200 * 86400),
+            "US daylight time switches at exactly the rule's instants; on in August, off in February");
+      CHECK(!NqEuDst(euOn - 1) && NqEuDst(euOn) && NqEuDst(euOff - 1) && !NqEuDst(euOff) && NqEuDst(T0), "EU daylight time likewise");
+      // between the EU and US switches (26 Oct .. 1 Nov 2026) the two rules differ: London is back on GMT, New York still on EDT
+      datetime gap = euOff + 86400;
+      CHECK(NqUsDst(gap) && !NqEuDst(gap), "the October gap: US DST on, EU DST off");
+      NqClock c;
+      // an EET broker in summer (GMT+3): the metal EA's historical defaults come out exactly
+      CHECK(NqClockFromGmt(T0, 3 * 3600, c) && c.offsetMin == 180 && c.nyS == 16 * 60 + 30 && c.nyE == 23 * 60 && c.lonS == 10 * 60 &&
+            c.asiaS == 60 && c.asiaE == 10 * 60 && c.roll == 0 && c.preS == 0,
+            "GMT+3 in summer: NY 16:30-23:00, London 10:00, Asia 01:00, rollover 00:00 (the former hard-coded defaults)");
+      // the same broker in winter (GMT+2, both DST off): the NY open is still 16:30 server
+      datetime winter = (datetime)(NqDaysFromCivil(2026, 1, 15) * 86400 + 12 * 3600);
+      CHECK(NqClockFromGmt(winter, 2 * 3600, c) && c.nyS == 16 * 60 + 30 && c.nyE == 23 * 60 && c.lonS == 10 * 60 && c.asiaS == 0 && c.roll == 0,
+            "GMT+2 in winter: NY still 16:30-23:00 server, London 10:00; Asia (22:00 UTC = 00:00) starts with the server day");
+      // a UTC broker in summer: NY 13:30-20:00, London 07:00, Asia wraps midnight -> clamped to the day start, rollover 21:00
+      CHECK(NqClockFromGmt(T0, 0, c) && c.nyS == 13 * 60 + 30 && c.nyE == 20 * 60 && c.lonS == 7 * 60 && c.asiaS == 0 && c.asiaE == 7 * 60 && c.roll == 21 * 60,
+            "GMT+0 in summer: NY 13:30-20:00, London 07:00, Asia clamped to 00:00-07:00, rollover 21:00");
+      // the October gap on an EET broker: London opens 10:00 (GMT+2 + 08:00 GMT), NY opens 15:30 (EDT 09:30 = 13:30 UTC + 2)
+      CHECK(NqClockFromGmt(gap, 2 * 3600, c) && c.lonS == 10 * 60 && c.nyS == 15 * 60 + 30, "the October gap: London 10:00 and NY 15:30 on a GMT+2 server");
+      // a half-hour broker clock is kept (GMT+5:30)
+      CHECK(NqClockFromGmt(T0, 5 * 3600 + 1800, c) && c.offsetMin == 330 && c.nyS == 19 * 60, "GMT+5:30: the offset is kept to the half hour, NY opens 19:00");
+      // a broker on New York time (GMT-4 in summer): NY 09:30-16:00, London 03:00, Asia 18:00 wraps -> 00:00-03:00
+      CHECK(NqClockFromGmt(T0, -4 * 3600, c) && c.nyS == 9 * 60 + 30 && c.nyE == 16 * 60 && c.lonS == 3 * 60 && c.asiaS == 0 && c.asiaE == 3 * 60 && c.roll == 17 * 60,
+            "GMT-4: NY 09:30-16:00, London 03:00, Asia clamped, rollover 17:00");
+      CHECK(c.asiaS0 == 18 * 60 && c.asiaE0 == 3 * 60 && NqInWindow(19 * 60, c.asiaS0, c.asiaE0) && NqInWindow(60, c.asiaS0, c.asiaE0) &&
+            !NqInWindow(12 * 60, c.asiaS0, c.asiaE0) && NqInWindow(5 * 60, 60, 10 * 60) && !NqInWindow(10 * 60, 60, 10 * 60),
+            "the unclamped Asia window 18:00 -> 03:00 is kept and NqInWindow holds a wrap");
+      // the week on the server clock: EET (rollover 00:00) opens Monday 00:00, closes Saturday 00:00
+      int so = 0, uc = 0;
+      CHECK(NqWeekPos(1, 0, 0, so, uc) && so == 0 && uc == 5 * 1440, "EET: Monday 00:00 is the week open, 5 days to the close");
+      CHECK(!NqWeekPos(0, 23 * 60, 0, so, uc) && !NqWeekPos(6, 10, 0, so, uc), "EET: Sunday 23:00 and Saturday 00:10 are the weekend");
+      CHECK(NqWeekPos(5, 22 * 60, 0, so, uc) && uc == 120, "EET: Friday 22:00 is 120 min before the close");
+      // a UTC broker (rollover 21:00): the week opens Sunday 21:00 and closes Friday 21:00
+      CHECK(NqWeekPos(0, 21 * 60, 21 * 60, so, uc) && so == 0 && !NqWeekPos(0, 20 * 60 + 59, 21 * 60, so, uc), "UTC: the week opens Sunday 21:00, not a minute before");
+      CHECK(NqWeekPos(5, 20 * 60, 21 * 60, so, uc) && uc == 60 && !NqWeekPos(5, 21 * 60, 21 * 60, so, uc), "UTC: Friday 20:00 is 60 min before the close; 21:00 is the weekend");
+      CHECK(NqWeekPos(1, 30, 21 * 60, so, uc) && so == 3 * 60 + 30, "UTC: Monday 00:30 is 3h30 after the Sunday open");
+   }
+   end("E13");
+
+   begin("E14 the risk floor: a structural stop inside the noise is pushed out to planMinRiskAtr x ATR, TP1 / TP2 follow; never pulled in");
+   {
+      NqParams P = params(0.01, 2);
+      P.planMinRiskAtr = 1.0;
+      double sl = 4117.29, risk = 1.80;
+      NqFloorRisk(NQ_BUY, 4119.09, 3.26, P, sl, risk);
+      CHECK(near(sl, 4115.83, 1e-9) && near(risk, 3.26, 1e-9), "gold 2026-10-08: a 1.80 QML stop with ATR 3.26 becomes 3.26 (SL 4115.83)");
+      sl = 4127.40; risk = 6.70;
+      NqFloorRisk(NQ_SELL, 4120.70, 3.26, P, sl, risk);
+      CHECK(near(sl, 4127.40, 1e-9) && near(risk, 6.70, 1e-9), "a 6.70 stop is wider than the floor: untouched");
+      sl = 4121.0; risk = 1.0;
+      NqFloorRisk(NQ_SELL, 4120.0, 3.26, P, sl, risk);
+      CHECK(near(sl, 4123.26, 1e-9) && near(risk, 3.26, 1e-9), "a SELL stop is pushed up");
+      P.planMinRiskAtr = 0.0;
+      sl = 4117.29; risk = 1.80;
+      NqFloorRisk(NQ_BUY, 4119.09, 3.26, P, sl, risk);
+      CHECK(near(sl, 4117.29, 1e-9) && near(risk, 1.80, 1e-9), "0 = off: the structural stop as it is");
+      // on a crafted bearish QML the floor widens the stop and the targets, the entry stays at the shoulder
+      P.planMinRiskAtr = 1.0;
+      NqSeries s;
+      std::vector<SBar> bars;
+      double base = 100.0;
+      for(int i = 0; i < 60; i++) bars.push_back({T0 + i * 300, base, base + 0.5, base - 0.5, base});
+      bars[20] = {T0 + 20 * 300, base, base + 2.0, base - 0.2, base + 1.5};   // left shoulder A
+      bars[26] = {T0 + 26 * 300, base, base + 0.3, base - 2.0, base - 1.0};   // neck B
+      bars[32] = {T0 + 32 * 300, base, base + 2.3, base - 0.2, base + 1.8};   // head C (only 0.3 above A)
+      for(int i = 36; i < 60; i++) bars[i] = {T0 + i * 300, base - 2.4, base - 2.0, base - 3.5, base - 3.0};   // the break below B
+      fill(s, bars, 300);
+      std::vector<NqPivot> piv;
+      NqSeries ctx;
+      NqSeriesResize(ctx, 0);
+      ctx.sec = 900;
+      NqRunRegime(s, piv, ctx, P);
+      std::vector<NqPlan> plans;
+      int nPlans = 0;
+      NqFindPlans(s, piv, s.np, P, plans, nPlans);
+      int k = NqLatestPlan(plans, nPlans, NQ_PLAN_QML);
+      CHECK(k >= 0 && plans[(size_t)k].dir == NQ_SELL, "a bearish QML plan was created");
+      if(k >= 0)
+      {
+         const NqPlan &q = plans[(size_t)k];
+         double atr = s.atr[q.idx];
+         CHECK(near(q.entry, base + 2.0, 1e-9) && q.risk >= atr - 1e-9 && near(q.sl, q.entry + q.risk, 1e-9) &&
+               near(q.tp1, q.entry - q.risk, 1e-9) && near(q.tp2, q.entry - 2.0 * q.risk, 1e-9),
+               "entry at the shoulder, the stop at least one ATR away, TP1 = 1R and TP2 = 2R of the widened R");
+      }
+   }
+   end("E14");
 
    std::printf("\nEA ENGINE TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;

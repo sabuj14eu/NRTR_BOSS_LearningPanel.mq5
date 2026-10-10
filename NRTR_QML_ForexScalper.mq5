@@ -1,41 +1,78 @@
 //+------------------------------------------------------------------+
-//|                                       NRTR_QML_MetalScalper.mq5  |
-//|        Gold / Silver scalp + pending-order EA  (MT5 DEMO)        |
+//|                                       NRTR_QML_ForexScalper.mq5  |
+//|    FOREX scalp + pending-order EA for ANY currency pair  (MT5)    |
+//|                                                                  |
+//|  Built on the ENGINE of NRTR_QML_MetalScalper.mq5 (M15 context,  |
+//|  M5 regime + structure, M1 trigger, QML / pullback / NY trap /   |
+//|  radar plans, one slot per chart, risk gate, auto lot, journal,  |
+//|  telemetry). tools/check_forex_engine.py proves the engine block |
+//|  is byte-identical to the metal EA's. The ASSET LAYER is written |
+//|  for forex, because a pair is not a metal and not a coin:        |
+//|                                                                  |
+//|   * A PAIR IS TWO CURRENCIES. The macro filter is a CURRENCY     |
+//|     STRENGTH reading built from the broker's own USD majors      |
+//|     (every currency against the basket, in ATR units) plus       |
+//|     WITNESSES that speak for ONE currency: oil for CAD / NOK /   |
+//|     MXN, gold for AUD, a 10-year bond (price or yield) and the   |
+//|     dollar index for USD, and the calendar's own reading of the  |
+//|     releases of the last hours (NEWS VOTE). They form a MACRO    |
+//|     VOTE per direction (strength 0/1/2 by grade, every other     |
+//|     voter 1): a strong                                           |
+//|     vote AGAINST a trade blocks it unless the pair's OWN         |
+//|     structure is A+. A witness the broker does not serve is      |
+//|     NO DATA and votes nothing - nothing is ever invented.        |
+//|   * NEWS moves forex more than structure does. The MT5 economic  |
+//|     calendar (built in: no network, no DLL) is read for the      |
+//|     pair's two currencies. HIGH-impact events close the gate     |
+//|     from N min before to N min after (wider for the top tier:    |
+//|     FOMC, rate decisions, NFP, CPI, central-bank pressers), pull |
+//|     resting orders and bank a position that is already in       |
+//|     profit. A calendar that answers nothing is NEWS UNKNOWN,     |
+//|     which is not "no news": by default the EA does not trade     |
+//|     blind.                                                       |
+//|   * THE CLOCK IS THE HEARTBEAT: 24/5, but liquidity lives in     |
+//|     sessions. Sessions are defined where they live (New York,    |
+//|     London, the Asian book) and converted with the broker's     |
+//|     LIVE GMT offset + daylight rules (engine NqClockFromGmt), so |
+//|     the server hour is right on any broker in both seasons. A    |
+//|     pair trades in the HOME SESSION of one of its currencies    |
+//|     (Asia: JPY AUD NZD; London: EUR GBP CHF; NY: USD CAD), never |
+//|     through the daily rollover, never into the Friday close      |
+//|     (orders pulled, profits banked) or the first hour of the     |
+//|     week.                                                        |
+//|   * SESSION TILT (the operator's observation, switchable):       |
+//|     Asia leans BUY, New York leans SELL; a trade against the     |
+//|     tilt needs strong confirmation. Every journal line records   |
+//|     the session and the tilt, so the hypothesis can be judged on |
+//|     evidence (n >= 100) instead of memory.                       |
+//|   * SMART EXIT (intelligent management): a bias change against a |
+//|     position that is in profit banks it before the TP; a flip   |
+//|     under water cuts it before the SL; a profit lock moves the   |
+//|     SL above entry once a threshold is reached (never loosened). |
+//|   * PIPS, not points: JPY pairs have 3 digits, the rest 5. The   |
+//|     spread cap is x ATR(M5) or pips; the panel speaks pips.      |
+//|   * PAIR CLASS profile: MAJOR / CROSS / EXOTIC - exotics get     |
+//|     half the risk, wider buffers, no breakout stops, no scalps.  |
+//|   * PORTFOLIO: one EA per chart, one magic across charts; a cap  |
+//|     on positions across pairs and on same-direction exposure to  |
+//|     one currency (two USD longs are one bet taken twice).        |
 //|                                                                  |
 //|  M15 = CONTEXT ONLY        (EMA200 + NRTR: shades, never gates)  |
 //|   M5 = REGIME + STRUCTURE  (NRTR + confirmed HH/HL or LH/LL)     |
 //|         -> BULLISH / BEARISH / CHOP-UNKNOWN                      |
 //|   M1 = ENTRY TRIGGER       (NRTR realign + CLOSED candle)        |
 //|         -> BUY / SELL / WAIT                                     |
-//|   RISK ENGINE  -> AUTO LOT  -> MT5 (demo by default)             |
+//|   RISK ENGINE  -> AUTO LOT  -> MT5                               |
 //|                                                                  |
-//|  Two ways to trade, both from CLOSED candles only:               |
-//|   1. AUTO SCALP: market order on the M1 trigger. SL 1.5 x ATR5,  |
-//|      TP 1.0 x ATR5 (the validated small-R ladder), time stop.    |
-//|   2. PENDING ORDER PLAN: QML (Quasimodo) reversal limit orders   |
-//|      and 50% pullback limit orders in the M5 regime. Set them    |
-//|      and go to work; the EA can place/cancel them for you.       |
-//|                                                                  |
-//|  FORECAST ARROW: every candle gets an arrow with the forecast    |
-//|  for the NEXT candle. It is a forecast, so its hit rate is       |
-//|  measured and shown. n < 20 is luck, ~100 to judge.              |
-//|                                                                  |
-//|  SPIKE GUARD + VOLATILITY REGIME (news days, v1.7): ATR(M5)      |
-//|  against its own average gates NEW entries (DEAD / EXTREME =     |
-//|  none, EXPANSION = stronger confirmation); a spike of 4+ ATR     |
-//|  inside an hour blocks pullback / scalp / breakout entries in    |
-//|  its own direction (a retrace of a spike is not a pullback) and  |
-//|  flashes EXIT WARNING on a position once half of it is given     |
-//|  back. Closing is never blocked; only opening is.                |
-//|                                                                  |
-//|  Supported symbols: Gold (XAUUSD / GOLD) and Silver (XAGUSD /    |
-//|  SILVER), any broker prefix/suffix. Nothing else.                |
-//|  Personal tool. No network, no Telegram, no DLL, no files.       |
+//|  Supported symbols: any pair of two ISO currency codes, any      |
+//|  broker prefix or suffix (EURUSD.m, #GBPJPY, AUD/USD, mUSDCAD).  |
+//|  Personal tool. No Telegram, no DLL. Network = the two optional  |
+//|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.94"
-#property description "Gold/Silver: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
-#property description "Auto scalp + QML/pullback/NY-trap/radar plans, macro vote (DXY, bond, USD news, H4/H1), news guard, smart exit."
+#property version     "1.05"
+#property description "Any forex pair: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
+#property description "Currency strength + oil/gold/bond/DXY witnesses + MT5 calendar news guard, home sessions, session tilt, smart exit."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
 #property strict
 
@@ -145,10 +182,11 @@
 #define NQ_RD_NEAR     3   // within 1 ATR, score 5-6
 #define NQ_RD_READY    4   // score >= 7 within 1 ATR: plan armed
 
-// supported metals
-#define NQ_METAL_NONE   0
-#define NQ_METAL_GOLD   1
-#define NQ_METAL_SILVER 2
+// supported pair classes (the specialist profile follows the class)
+#define NQ_PAIR_NONE   0
+#define NQ_PAIR_MAJOR  1
+#define NQ_PAIR_CROSS  2
+#define NQ_PAIR_EXOTIC 3
 
 struct NqParams
 {
@@ -2377,33 +2415,92 @@ bool NqIsFresh(datetime last1, int sec1, datetime last5, int sec5, datetime last
    return true;
 }
 
-//--- Gold / Silver only. Broker prefixes/suffixes are fine (XAUUSD.m, #XAGUSD).
-int NqMetalOf(string name, string base, string profitCcy)
+//--- FOREX only: a pair of two ISO-4217 currency codes, any broker prefix or
+//    suffix (EURUSD.m, #GBPJPY, AUD/USD, mUSDCAD). The name is read first
+//    (the first 6-letter run that is two codes), then the broker's base /
+//    profit currencies. Metals (XAU...), crypto, indices and a single
+//    currency are refused. forced = a class the user vouches for
+//    (InpPairClass): it overrides the class, it never invents the
+//    currencies. bOut / qOut receive the base and quote codes.
+bool NqIsCcy(string c)
+{
+   if(StringLen(c) != 3)
+      return false;
+   string list = ",USD,EUR,GBP,JPY,AUD,NZD,CAD,CHF,SEK,NOK,DKK,PLN,HUF,CZK,RON,TRY,ZAR,MXN,BRL,CNH,CNY,HKD,SGD,THB,ILS,RUB,"
+                 "INR,KRW,TWD,PHP,IDR,MYR,COP,CLP,PEN,ARS,SAR,AED,KWD,QAR,BHD,OMR,ISK,BGN,HRK,RSD,UAH,KZT,VND,EGP,NGN,KES,MAD,";
+   return StringFind(list, "," + c + ",") >= 0;
+}
+
+bool NqIsG8(string c)
+{
+   return StringFind(",USD,EUR,GBP,JPY,AUD,NZD,CAD,CHF,", "," + c + ",") >= 0;
+}
+
+// the first 6-letter run of the (upper-case, letters-only) name that reads as two codes
+bool NqPairFromName(string name, string &bOut, string &qOut)
 {
    string u = name;
    StringToUpper(u);
+   string letters = "";
    int len = StringLen(u);
-   int p = 0;
-   while(p < len)
+   for(int i = 0; i < len; i++)
    {
-      ushort ch = StringGetCharacter(u, p);
+      ushort ch = StringGetCharacter(u, i);
       if(ch >= 'A' && ch <= 'Z')
-         break;
-      p++;
+         letters = letters + ShortToString(ch);
    }
-   if(p > 0)
-      u = StringSubstr(u, p);
+   int n = StringLen(letters);
+   for(int p = 0; p + 6 <= n; p++)
+   {
+      string b = StringSubstr(letters, p, 3);
+      string q = StringSubstr(letters, p + 3, 3);
+      if(b != q && NqIsCcy(b) && NqIsCcy(q))
+      {
+         bOut = b;
+         qOut = q;
+         return true;
+      }
+   }
+   return false;
+}
+
+int NqPairClassOf(string b, string q)
+{
+   if(b == "" || q == "" || b == q)
+      return NQ_PAIR_NONE;
+   if(NqIsG8(b) && NqIsG8(q))
+      return (b == "USD" || q == "USD") ? NQ_PAIR_MAJOR : NQ_PAIR_CROSS;
+   return NQ_PAIR_EXOTIC;
+}
+
+int NqPairOf(string name, string base, string profitCcy, int forced, string &bOut, string &qOut)
+{
+   bOut = "";
+   qOut = "";
    string b = base;
    StringToUpper(b);
    string q = profitCcy;
    StringToUpper(q);
-   if(q != "" && q != "USD")
-      return NQ_METAL_NONE;
-   if(StringFind(u, "XAU") == 0 || StringFind(u, "GOLD") == 0 || b == "XAU")
-      return NQ_METAL_GOLD;
-   if(StringFind(u, "XAG") == 0 || StringFind(u, "SILVER") == 0 || b == "XAG")
-      return NQ_METAL_SILVER;
-   return NQ_METAL_NONE;
+   if(!NqPairFromName(name, bOut, qOut))
+   {
+      if(NqIsCcy(b) && NqIsCcy(q) && b != q)
+      {
+         bOut = b;
+         qOut = q;
+      }
+      else if(forced != NQ_PAIR_NONE && StringLen(b) == 3 && StringLen(q) == 3 && b != q)
+      {
+         bOut = b;      // the user vouches for the symbol: the broker's words as they are
+         qOut = q;
+         return forced;
+      }
+      else
+         return NQ_PAIR_NONE;
+   }
+   int cls = NqPairClassOf(bOut, qOut);
+   if(forced == NQ_PAIR_MAJOR || forced == NQ_PAIR_CROSS || forced == NQ_PAIR_EXOTIC)
+      return forced;
+   return cls;
 }
 
 //--- text helpers (ASCII source; symbols built from code points)
@@ -2494,7 +2591,7 @@ string NqReasonName(int bit)
 {
    switch(bit)
    {
-      case NQ_R_UNSUPPORTED:     return "GOLD / SILVER ONLY";
+      case NQ_R_UNSUPPORTED:     return "FOREX ONLY - A CURRENCY PAIR (EURUSD, GBPJPY, USDTRY ...)";
       case NQ_R_STALE:           return "DATA STALE / MARKET CLOSED";
       case NQ_R_NO_DATA:         return "MISSING DATA - NOT ENOUGH HISTORY";
       case NQ_R_NO_HIGHER_BAR:   return "NO CLOSED M5 BAR YET";
@@ -2671,11 +2768,26 @@ enum ENUM_NQ_LAYOUT
    NQ_LAYOUT_ONE   = 1    // One column: the engine table above the board (the former layout)
 };
 
+enum ENUM_NQ_PAIR
+{
+   NQ_PAIR_AUTO_SEL   = 0,   // AUTO: detect from the symbol (broker base/profit currency, then the name)
+   NQ_PAIR_MAJOR_SEL  = 1,   // MAJOR specialist (USD against EUR GBP JPY AUD NZD CAD CHF)
+   NQ_PAIR_CROSS_SEL  = 2,   // CROSS specialist (two of the eight, no USD)
+   NQ_PAIR_EXOTIC_SEL = 3    // EXOTIC specialist (any other currency: TRY ZAR MXN SEK NOK PLN ...)
+};
+
 enum ENUM_NQ_BOND
 {
    NQ_BOND_AUTO  = 0,   // AUTO: NOTE/BOND/BUND/ZN = a price, US10Y / YIELD = a yield
-   NQ_BOND_PRICE = 1,   // The bond symbol is a PRICE (up = yields down = metal up)
-   NQ_BOND_YIELD = 2    // The bond symbol is a YIELD (up = metal down)
+   NQ_BOND_PRICE = 1,   // The bond symbol is a PRICE (up = yields down = USD weaker)
+   NQ_BOND_YIELD = 2    // The bond symbol is a YIELD (up = USD stronger)
+};
+
+enum ENUM_NQ_TILT
+{
+   NQ_TILT_NONE = 0,    // no lean
+   NQ_TILT_BUY  = 1,    // leans BUY: a SELL needs strong confirmation
+   NQ_TILT_SELL = 2     // leans SELL: a BUY needs strong confirmation
 };
 
 // volatility regime (terminal layer; the engine never sees it)
@@ -2687,9 +2799,10 @@ enum ENUM_NQ_BOND
 // two gate bits beyond the engine's NQ_K_* (named by NqGateAtX, OR-ed into g_gate after the engine's gate)
 #define NQ_K_VOL_DEAD    0x800
 #define NQ_K_VOL_EXTREME 0x1000
-// v1.9 gate bits (news, the week, the portfolio) - named by NqGateAtX after the regime bits
+// forex gate bits (news, the clock, the portfolio) - named by NqGateAtX after the regime bits
 #define NQ_K_NEWS         0x2000
 #define NQ_K_NEWS_UNKNOWN 0x4000
+#define NQ_K_HOME         0x8000
 #define NQ_K_ROLLOVER     0x10000
 #define NQ_K_WEEK_EDGE    0x20000
 #define NQ_K_PORTFOLIO    0x40000
@@ -2701,6 +2814,58 @@ input int            InpEmaSlow          = 200;         // M15 context EMA
 input int            InpEmaFast          = 20;          // Fast EMA (M1 filter + forecast)
 input int            InpSwingStrength    = 3;           // Structure lookback: bars each side of a swing
 input int            InpHistoryDays      = 8;           // History used (days)
+input group "Forex specialist (MAJOR / CROSS / EXOTIC - the profile follows the class)"
+input ENUM_NQ_PAIR   InpPairClass        = NQ_PAIR_AUTO_SEL; // Pair class: AUTO detects it; force one to trade a symbol AUTO cannot read
+input bool           InpSpecialist       = true;        // Apply the class profile (risk x, SL buffers x, min impulse x, radar / scalp on-off); false = raw inputs
+input group "Currency strength + macro witnesses (oil, gold, bonds, the dollar index, the news vote)"
+input bool           InpMacroGate        = true;        // A strong macro vote AGAINST a trade blocks it (false = show the vote, gate nothing)
+input int            InpMacroBlockLevel  = 2;           // ... strong = the vote against is at least this (strength counts 0/1/2 by grade, every other voter 1)
+input int            InpMacroOverrideScore = 9;         // The pair's OWN A+ structure overrides it: M15 context + M5 regime agree, radar score at least this; 11 = never
+input int            InpStrengthBars     = 16;          // Currency strength: move over N closed M15 bars (16 = 4 h), in ATR(M15) units
+input double         InpStrengthWeak     = 1.0;         // Base-minus-quote strength difference at least this = WEAK vote (1)
+input double         InpStrengthStrong   = 2.0;         // ... at least this = STRONG vote (2)
+input string         InpOilSymbol        = "";          // Oil witness (CAD NOK MXN); empty = AUTO (XTIUSD / USOIL / WTI / BRENT ...), "-" = off
+input string         InpGoldSymbol       = "";          // Gold witness (AUD); empty = AUTO (XAUUSD / GOLD), "-" = off
+input string         InpBondSymbol       = "";          // US 10-year bond witness (USD); empty = AUTO (USTNOTE / TNOTE / US10Y ...), "-" = off
+input ENUM_NQ_BOND   InpBondKind         = NQ_BOND_AUTO; // The bond symbol is a PRICE (up = USD weaker) or a YIELD (up = USD stronger)
+input string         InpDxySymbol        = "";          // Dollar index witness (USD); empty = AUTO (USDX / DXY / USDOLLAR), "-" = off
+input int            InpHtfBars          = 400;         // Closed H1 / H4 bars loaded for the higher-timeframe witnesses (EMA200 needs 200+)
+input int            InpHtfChochBars     = 12;          // An H1 CHoCH within the last N H1 bars votes its direction (fresh change of character); 0 = off
+input int            InpNewsVoteHours    = 4;           // Releases of the last N hours vote for their currency (the calendar's own POSITIVE / NEGATIVE reading); 0 = off
+input group "News guard (the MT5 economic calendar - built in, no network, no DLL)"
+input bool           InpNewsGuard        = true;        // Close the gate around HIGH-impact events of the pair's two currencies and pull resting orders
+input int            InpNewsBeforeMin    = 30;          // ... from N minutes before the event
+input int            InpNewsAfterMin     = 30;          // ... to N minutes after it
+input int            InpNewsTopBeforeMin = 60;          // TOP TIER (FOMC, rate decisions, NFP, CPI, GDP, central-bank pressers): from N minutes before
+input int            InpNewsTopAfterMin  = 60;          // ... to N minutes after
+input double         InpNewsBankProfitR  = 0.2;         // When a window opens, a position at least this many R in profit is closed (banked); 0 = never
+input bool           InpNewsMediumBlocks = false;       // MODERATE-impact events close the gate too (false = shown only)
+input bool           InpNewsUnknownBlocks = true;       // A calendar that answers nothing = NEWS UNKNOWN = no new trade (false = trade blind, at your choice)
+input group "Forex clock (home sessions, rollover, the week's edges; times come from the AUTO clock or the server hours above)"
+input bool           InpHomeSessionOnly  = true;        // New trades only while a home session of one of the pair's currencies is open (Asia: JPY AUD NZD; London: EUR GBP CHF; NY: USD CAD)
+input int            InpRolloverHour     = 0;           // Daily rollover server hour, used only when InpClockAuto = false (AUTO = 17:00 New York)
+input int            InpRolloverGuardMin = 15;          // No new trade from N minutes before the rollover to N minutes after (spreads widen)
+input int            InpFridayStopMin    = 120;         // No new trade in the last N minutes before the Friday close; resting orders are pulled then
+input bool           InpWeekendFlat      = true;        // At the Friday stop close every position that is in profit (losers keep their SL unless the next input)
+input double         InpWeekendMinProfitR = 0.0;        // ... in profit = at least this many R (0 = any non-negative result)
+input bool           InpWeekendCloseLosers = false;     // At the Friday stop close losing positions too (no weekend gap risk at all)
+input int            InpWeekOpenGuardMin = 60;          // No new trade in the first N minutes after the week opens (Sunday 17:00 New York)
+input group "Session tilt (your observation: Asia leans BUY, New York leans SELL; the opposite only with strong confirmation)"
+input bool           InpSessionTilt      = true;        // Apply the tilt (false = record only: every journal line still carries session + tilt)
+input ENUM_NQ_TILT   InpAsiaTilt         = NQ_TILT_BUY; // Asia session leans
+input ENUM_NQ_TILT   InpLondonTilt       = NQ_TILT_NONE; // London session leans
+input ENUM_NQ_TILT   InpNyTilt           = NQ_TILT_SELL; // New York session leans
+input int            InpTiltOverrideScore = 8;          // Against the tilt: M15 context + M5 regime with the trade, macro vote not against, a radar break needs this score
+input group "Smart exit (intelligent management: bank on a bias change, lock profit, never wait for the SL blindly)"
+input bool           InpSmartExit        = true;        // Manage open positions on bias changes (below) instead of leaving everything to the SL / TP
+input double         InpSmartFlipProfitR = 0.1;         // M5 regime flipped against a position at least this many R in profit: close and bank it
+input bool           InpSmartFlipCutLoss = true;        // M5 regime flipped against a position under water: close now (a smaller loss than the SL); false = the SL decides
+input double         InpSmartM1ProfitR   = 0.5;         // M1 bias turned against a position at least this many R in profit: close and bank it (0 = off)
+input double         InpSmartLockAtR     = 0.7;         // Once a position is this many R in profit, move the SL to ... (0 = off)
+input double         InpSmartLockR       = 0.1;         // ... entry + this many R (tightened only, never loosened)
+input group "Portfolio (this EA on several charts with the same magic)"
+input int            InpMaxOpenAcrossPairs = 3;         // Max open positions of this EA across ALL pairs (0 = unlimited)
+input int            InpMaxCcyExposure   = 2;           // Max positions already carrying the same currency the same way (two USD longs = one bet twice); 0 = off
 input group "Auto scalp (market order on the M1 trigger)"
 input bool           InpScalpAuto        = true;        // Auto scalp (lowest priority: only when no plan order is waiting)
 input double         InpScalpSlAtr       = 1.5;         // Scalp SL = x ATR(M5)  (1.5 validated)
@@ -2727,41 +2892,6 @@ input bool           InpTradeNyTrap      = true;        // Trade NY trap plans
 input bool           InpTradeSwing       = true;        // Trade M15 swing plans (QML + pullback)
 input bool           InpTradeRadar       = true;        // Trade IMPULSE RADAR plans (STOP orders beyond the nearest level)
 input double         InpRadarBufAtr      = 0.15;        // Radar stop order: buffer beyond the level (x ATR5)
-input group "Macro vote (dollar index, a US 10-year bond, the news, H4 / H1): a strong vote AGAINST a trade blocks it unless the metal's own structure is A+"
-input bool           InpMacroGate        = true;        // A strong macro vote AGAINST a trade blocks it (false = show the vote, gate nothing)
-input int            InpMacroBlockLevel  = 2;           // ... strong = the vote against is at least this (every voter counts 1)
-input int            InpMacroOverrideScore = 9;         // The metal's OWN A+ structure overrides it: M15 context + M5 regime agree, radar score at least this; 11 = never
-input string         InpMacroSymbol      = "";          // Dollar index witness; empty = AUTO (USDX / DXY / USDOLLAR ...), "-" = off
-input string         InpBondSymbol       = "";          // US 10-year bond witness; empty = AUTO (USTNOTE / TNOTE / US10Y ...), "-" = off
-input ENUM_NQ_BOND   InpBondKind         = NQ_BOND_AUTO; // The bond symbol is a PRICE (up = yields down = metal up) or a YIELD (up = metal down)
-input int            InpHtfBars          = 400;         // Closed H1 / H4 bars loaded for the higher-timeframe witnesses (EMA200 needs 200+)
-input int            InpHtfChochBars     = 12;          // An H1 CHoCH within the last N H1 bars votes its direction (fresh change of character); 0 = off
-input int            InpNewsVoteHours    = 4;           // USD releases of the last N hours vote (the calendar's own POSITIVE / NEGATIVE reading); 0 = off
-input group "News guard (USD events on the MT5 economic calendar - built in, no network, no DLL)"
-input bool           InpNewsGuard        = true;        // Close the gate around HIGH-impact USD events and pull resting orders
-input int            InpNewsBeforeMin    = 30;          // ... from N minutes before the event
-input int            InpNewsAfterMin     = 30;          // ... to N minutes after it
-input int            InpNewsTopBeforeMin = 60;          // TOP TIER (FOMC, rate decisions, NFP, CPI, GDP, pressers): from N minutes before
-input int            InpNewsTopAfterMin  = 60;          // ... to N minutes after
-input double         InpNewsBankProfitR  = 0.2;         // When a window opens, a position at least this many R in profit is closed (banked); 0 = never
-input bool           InpNewsMediumBlocks = false;       // MODERATE-impact events close the gate too (false = shown only)
-input bool           InpNewsUnknownBlocks = true;       // A calendar that answers nothing = NEWS UNKNOWN = no new trade (false = trade blind, at your choice)
-input group "Week edges + rollover (from the AUTO clock: the week opens / closes at 17:00 New York)"
-input int            InpRolloverGuardMin = 15;          // No new trade from N minutes before the daily rollover to N minutes after (spreads widen)
-input int            InpFridayStopMin    = 120;         // No new trade in the last N minutes before the Friday close; resting orders are pulled then
-input bool           InpWeekendFlat      = true;        // At the Friday stop close every position that is in profit (losers keep their SL unless the next input)
-input double         InpWeekendMinProfitR = 0.0;        // ... in profit = at least this many R (0 = any non-negative result)
-input bool           InpWeekendCloseLosers = false;     // At the Friday stop close losing positions too (no weekend gap risk at all)
-input int            InpWeekOpenGuardMin = 60;          // No new trade in the first N minutes after the week opens
-input group "Smart exit (intelligent management: bank on a bias change, lock profit, never wait for the SL blindly)"
-input bool           InpSmartExit        = true;        // Manage open positions on bias changes (below) instead of leaving everything to the SL / TP
-input double         InpSmartFlipProfitR = 0.1;         // M5 regime flipped against a position at least this many R in profit: close and bank it
-input bool           InpSmartFlipCutLoss = true;        // M5 regime flipped against a position under water: close now (a smaller loss than the SL); false = the SL decides
-input double         InpSmartM1ProfitR   = 0.5;         // M1 bias turned against a position at least this many R in profit: close and bank it (0 = off)
-input double         InpSmartLockAtR     = 0.7;         // Once a position is this many R in profit, move the SL to ... (0 = off)
-input double         InpSmartLockR       = 0.1;         // ... entry + this many R (tightened only, never loosened)
-input group "Portfolio (this EA on several charts with the same magic)"
-input int            InpMaxOpenAcrossCharts = 2;        // Max open positions of this EA across ALL charts (0 = unlimited)
 input group "Clock (sessions live in New York / London / Asia time; AUTO converts them with the broker's live GMT offset)"
 input bool           InpClockAuto        = true;        // AUTO: NY 09:30-16:00, London 08:00, Asia 22:00 UTC from TimeTradeServer-TimeGMT + US/EU DST; false = the server hours below
 input group "NY trap + swing (server hours - used when InpClockAuto = false)"
@@ -2793,18 +2923,19 @@ input double         InpRiskPct          = 0.5;         // Risk per trade (% of 
 input double         InpDailyLossCapPct  = 2.0;         // Daily loss cap (% of balance) stops new trades; 0 = off
 input int            InpMaxOpenPositions = 1;           // Max open positions (ONE SLOT per asset is enforced regardless)
 input int            InpMaxTradesPerDay  = 0;           // Max entries per day (0 = unlimited)
-input int            InpMaxSpreadPoints  = 50;          // Max spread (points)
+input double         InpMaxSpreadPips    = 0.0;         // Max spread (pips); 0 = the ATR rule below
+input double         InpMaxSpreadAtr     = 0.0;         // Max spread as x ATR(M5); 0 = the class profile (MAJOR 0.15, CROSS 0.20, EXOTIC 0.30)
 input int            InpSessionStartHour = 0;           // Session start (server hour); 0-24 = trade round the clock
 input int            InpSessionEndHour   = 24;          // Session end (server hour)
 input bool           InpAllowRealAccount = true;        // Trade on a REAL account (false = demo only). The MT5 Algo Trading button is the on/off switch
-input int            InpMagic            = 180915;      // Magic number
+input int            InpMagic            = 180917;      // Magic number
 input int            InpSlippagePoints   = 20;          // Max slippage (points)
 input group "SignalMesh journal (every plan event, append-only)"
 input bool           InpJournalToFile    = true;        // Append every event to MQL5/Files/NQ_events_<symbol>.jsonl
 input string         InpSignalMeshUrl    = "https://app.signalmesh.dev/webhooks/brain/signal";   // Journal door (preset; "" = off). Armed only when the secret below is set
 input string         InpSignalMeshSecret = "";          // X-Brain-Secret for both doors (never printed). Empty = nothing is posted. Allow https://app.signalmesh.dev once in Tools > Options > Expert Advisors > WebRequest
-input group "SignalMesh telemetry (ANALYSIS ONLY - a data witness for the METAL ANALYSIS page, never a signal)"
-input string         InpTelemetryUrl     = "https://app.signalmesh.dev/webhooks/metal/telemetry";   // Telemetry door for the METAL ANALYSIS page (preset; "" = off). Armed only when the secret is set
+input group "SignalMesh telemetry (ANALYSIS ONLY - a data witness for the FOREX ANALYSIS page, never a signal)"
+input string         InpTelemetryUrl     = "https://app.signalmesh.dev/webhooks/forex/telemetry";   // Telemetry door for the FOREX ANALYSIS page (preset; "" = off). Armed only when the secret is set
 input int            InpTelemetrySec     = 60;          // Heartbeat every N seconds, and on every closed M1 candle (min 5)
 input bool           InpTelemetryDemoOnly = true;       // Send telemetry from a DEMO account only: a REAL account is never the witness
 input group "Forecast arrows"
@@ -2820,7 +2951,94 @@ input bool           InpDrawChart        = true;        // Draw arrows / structu
 
 // symbol specification (always read from MT5, never hard-coded)
 string   g_sym;
-int      g_metal;
+int      g_pair;        // NQ_PAIR_*
+string   g_base;        // the pair's currencies (ISO codes)
+string   g_quote;
+string   g_pairName;    // MAJOR / CROSS / EXOTIC / NONE
+string   g_pfx;         // the chart symbol's spelling around the 6-letter pair (prefix / suffix)
+string   g_sfx;
+double   g_pip;         // 10 points on 3- and 5-digit symbols, else 1 point
+double   g_profRisk;    // class profile: risk multiplier (<= 1, never widens)
+double   g_profBuf;     // SL-buffer multiplier (>= 1)
+double   g_profImp;     // pullback min-impulse multiplier (>= 1)
+double   g_profSpread;  // spread cap as x ATR(M5)
+bool     g_profRadar;   // radar (breakout STOP) plans allowed for this class
+bool     g_profScalp;   // M1 scalps allowed for this class
+// the switches the tests flip; the inputs are the source of truth at OnInit
+bool     g_macroGate;
+bool     g_newsGuard;
+bool     g_newsUnknownBlocks;
+bool     g_newsMediumBlocks;
+bool     g_homeOnly;
+bool     g_clockGuards; // rollover + week edges (false = off, tests only)
+bool     g_smartExit;
+bool     g_sessionTilt;
+// witnesses: the symbol in force ("" = none) and its M15 NRTR direction (0 = no data)
+string   g_oilSym;
+int      g_oilDir;
+string   g_goldSym;
+int      g_goldDir;
+string   g_bondSym;
+int      g_bondDir;
+bool     g_bondYield;   // the bond symbol is a yield (else a price)
+string   g_dxySym;
+int      g_dxyDir;
+// currency strength: every currency against the basket, in ATR(M15) units
+string   g_strCcy[];
+double   g_strSum[];
+int      g_strCnt[];
+int      g_nStr;
+int      g_strPairs;    // pairs the broker served
+bool     g_strOk;       // base and quote both measured
+double   g_strDiff;     // strength(base) - strength(quote)
+int      g_strGrade;    // 0 flat, 1 weak, 2 strong
+int      g_strDir;      // sign of the difference
+// the calendar: events of the pair's currencies in a 3-day window (MODERATE and HIGH)
+datetime g_evT[];
+string   g_evCcy[];
+int      g_evImp[];
+string   g_evName[];
+int      g_evImpact[];  // the calendar's reading once released: +1 positive for the currency, -1 negative, 0 none / not released
+bool     g_evTop[];     // top tier (FOMC, rate decisions, NFP, CPI ...)
+int      g_nEv;
+bool     g_newsOk;      // the calendar answered with events: from here "no event" means no event
+int      g_newsErr;     // GetLastError() of the last failed calendar call (0 = none)
+bool     g_newsTester;  // the Strategy Tester has no calendar
+bool     g_newsBlock;   // inside a guarded window right now
+bool     g_newsUnknown;
+string   g_newsText;    // the NEWS panel row
+string   g_newsWhy;     // the gate's words
+datetime g_newsReadT;   // when the calendar was last read
+datetime g_newsWinT;    // the event whose window is open (0 = none): a position is banked once per window
+// the clock
+int      g_sessOpen;    // bit set: 1 Asia, 2 London, 4 NY (as the day's session minutes say)
+int      g_homeMask;    // the pair's home sessions, same bits
+bool     g_homeOpen;
+string   g_homeText;
+bool     g_rollover;
+bool     g_weekEdge;
+bool     g_weekFriday;  // the Friday stop is in force (orders pulled, profits banked)
+string   g_weekText;
+int      g_dow;
+// the portfolio: this EA on every chart (same magic)
+int      g_portfolioPos;
+bool     g_portfolioFull;
+string   g_expCcy[];
+int      g_expNet[];
+int      g_nExp;
+string   g_expText;
+string   g_smartNote;   // the last smart-exit action (panel)
+// higher timeframes: H1 and H4 context (EMA200 + NRTR), confirmed structure and its breaks (BOS / CHoCH)
+NqSeries g_h1;
+NqSeries g_h4;
+NqPivot  g_pivH1[];
+NqPivot  g_pivH4[];
+NqSwingBreak g_sbH1[];
+NqSwingBreak g_sbH4[];
+int      g_nSbH1;
+int      g_nSbH4;
+bool     g_h1Ok;
+bool     g_h4Ok;
 int      g_digits;
 double   g_tick;
 double   g_point;
@@ -2861,57 +3079,6 @@ NqPlan   g_radar[];
 int      g_nRadar;
 NqRadar  g_rdUp;
 NqRadar  g_rdDn;
-int      g_macroDir;   // M15 NRTR direction of the dollar-index witness (0 = none / not available)
-string   g_macroSym;   // the dollar-index symbol in force ("" = none)
-string   g_bondSym;    // the bond witness ("" = none) and its M15 NRTR direction
-int      g_bondDir;
-bool     g_bondYield;  // the bond symbol is a yield (else a price)
-// the switches the tests flip; the inputs are the source of truth at OnInit
-bool     g_macroGate;
-bool     g_newsGuard;
-bool     g_newsUnknownBlocks;
-bool     g_newsMediumBlocks;
-bool     g_clockGuards;
-bool     g_smartExit;
-// the calendar: USD events in a 3-day window (MODERATE and HIGH)
-datetime g_evT[];
-string   g_evCcy[];
-int      g_evImp[];
-string   g_evName[];
-int      g_evImpact[];  // the calendar's reading once released: +1 positive for the dollar, -1 negative, 0 none / not released
-bool     g_evTop[];     // top tier (FOMC, rate decisions, NFP, CPI ...)
-int      g_nEv;
-bool     g_newsOk;      // the calendar answered with events: from here "no event" means no event
-int      g_newsErr;     // GetLastError() of the last failed calendar call (0 = none)
-bool     g_newsTester;  // the Strategy Tester has no calendar
-bool     g_newsBlock;   // inside a guarded window right now
-bool     g_newsUnknown;
-string   g_newsText;    // the NEWS panel row
-string   g_newsWhy;     // the gate's words
-datetime g_newsReadT;   // when the calendar was last read
-datetime g_newsWinT;    // the event whose window is open (0 = none)
-// the week and the rollover
-int      g_sessOpen;    // bit set: 1 Asia, 2 London, 4 NY
-bool     g_rollover;
-bool     g_weekEdge;
-bool     g_weekFriday;  // the Friday stop is in force (orders pulled, profits banked)
-string   g_weekText;
-int      g_dow;
-// the portfolio: this EA on every chart (same magic)
-int      g_portfolioPos;
-bool     g_portfolioFull;
-string   g_smartNote;   // the last smart-exit action (panel)
-// higher timeframes: H1 and H4 context (EMA200 + NRTR), confirmed structure and its breaks (BOS / CHoCH)
-NqSeries g_h1;
-NqSeries g_h4;
-NqPivot  g_pivH1[];
-NqPivot  g_pivH4[];
-NqSwingBreak g_sbH1[];
-NqSwingBreak g_sbH4[];
-int      g_nSbH1;
-int      g_nSbH4;
-bool     g_h1Ok;
-bool     g_h4Ok;
 NqClock  g_clk;        // the session minutes in force (AUTO from the GMT offset, or the manual inputs)
 bool     g_clkAuto;    // AUTO succeeded
 string   g_clkText;    // what the panel says about the clock
@@ -2933,7 +3100,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.9.4"
+#define NQ_EA_VERSION "1.0.5"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -2946,7 +3113,7 @@ datetime g_webLast;
 int      g_webFails;
 bool     g_jrFileWarned;
 // telemetry (ANALYSIS ONLY): a heartbeat snapshot of the panel's state for the
-// SignalMesh METAL ANALYSIS page. It reads state and sends it; it never
+// SignalMesh FOREX ANALYSIS page. It reads state and sends it; it never
 // changes a decision, a level or an order, and a failed POST is a Print.
 string   g_telUrl;
 int      g_telSec;
@@ -3036,6 +3203,30 @@ bool   NqPlanByComment(string cmt, NqPlan &out);
 string NqJsonS(string key, string val);
 string NqJsonN(string key, double val, int digits);
 string NqJsonI(string key, long val);
+void   NqSetProfile();
+void   NqReadPip();
+void   NqReadSpelling();
+string NqFindSym(string csv);
+void   NqResolveWitnesses();
+void   NqReadWitnesses();
+void   NqReadStrength();
+void   NqReadCalendar();
+void   NqNewsState();
+void   NqSessionScan(datetime now);
+void   NqPortfolioScan();
+int    NqForexGateBits();
+int    NqMaxSpreadPts();
+int    NqMacroVote(int d, string &why);
+bool   NqExposureBlocks(int dir, string &why);
+bool   NqSmartExit(ulong tk, int pdir, string cmt, bool isScalp, int reg5);
+bool   NqRegimeAgreedSince(datetime opened, int pdir);
+double NqPosR(double open, double sl, double px, int pdir, string cmt);
+bool   NqModifySl(ulong ticket, double sl, double tp, string why);
+string NqHomeName(int m);
+bool   NqCcyIn(string csv, string c);
+bool   NqSend(MqlTradeRequest &req, string why);
+bool   NqClosePosition(ulong ticket, string why);
+string NqJsonB(string key, bool val);
 void   NqVolRegime();
 void   NqReadClock();
 int    NqVolGateBits();
@@ -3045,25 +3236,14 @@ string NqGateNameX(int bit);
 void   NqSpikeScan();
 bool   NqSpikeBlocks(const NqPlan &pl);
 bool   NqMacroBlocks(int dir, int score, bool isRadar, string &why);
-int    NqMacroVote(int d, string &why);
-void   NqResolveWitnesses();
-void   NqReadWitnesses();
-void   NqReadCalendar();
-void   NqNewsState();
-void   NqSessionScan(datetime now);
-void   NqPortfolioScan();
-int    NqMetalGateBits();
+bool   NqTiltBlocks(int dir, int score, bool isRadar, int kind, string &why);
+int    NqTiltNow();
+string NqSessionName();
+string NqSpell(string pair);
+double NqStrOf(string c);
 void   NqReadHtf();
 string NqBreakText(const NqSeries &s, const NqSwingBreak &sb[], int n);
 string NqBreakKind(const NqSeries &s, const NqSwingBreak &b);
-string NqSessionName();
-bool   NqSmartExit(ulong tk, int pdir, string cmt, bool isScalp, int reg5);
-bool   NqRegimeAgreedSince(datetime opened, int pdir);
-double NqPosR(double open, double sl, double px, int pdir, string cmt);
-bool   NqModifySl(ulong ticket, double sl, double tp, string why);
-bool   NqSend(MqlTradeRequest &req, string why);
-bool   NqClosePosition(ulong ticket, string why);
-string NqJsonB(string key, bool val);
 void   NqDrawWarn();
 void   NqLabelOne(string id, int x, int y, string txt, color clr, int size, string font, int anchor);
 int    NqSplitLabel(string txt, string &parts[]);
@@ -3077,11 +3257,12 @@ int OnInit()
       InpQmlWaitBars < 1 || InpPlanValidBars < 1 || InpPbRetrace <= 0.0 || InpPbRetrace >= 1.0 ||
       InpPbMinImpulseAtr < 0.0 || InpPbSlBufAtr < 0.0 || InpPlanTp1R <= 0.0 || InpPlanTp2R <= 0.0 || InpPlanMinRiskAtr < 0.0 ||
       InpRiskPct <= 0.0 || InpRiskPct > 5.0 || InpDailyLossCapPct < 0.0 || InpMaxOpenPositions < 0 ||
-      InpMaxTradesPerDay < 0 || InpMaxSpreadPoints < 0 ||
-      InpMacroBlockLevel < 1 || InpMacroOverrideScore < 0 || InpMacroOverrideScore > 11 || InpHtfBars < 50 || InpHtfChochBars < 0 ||
-      InpNewsVoteHours < 0 || InpNewsBeforeMin < 0 || InpNewsAfterMin < 0 || InpNewsTopBeforeMin < 0 || InpNewsTopAfterMin < 0 ||
-      InpNewsBankProfitR < 0.0 || InpRolloverGuardMin < 0 || InpRolloverGuardMin > 360 || InpFridayStopMin < 0 || InpFridayStopMin > 1440 ||
-      InpWeekOpenGuardMin < 0 || InpWeekOpenGuardMin > 720 || InpMaxOpenAcrossCharts < 0 || InpSmartFlipProfitR < 0.0 || InpSmartM1ProfitR < 0.0 ||
+      InpMaxTradesPerDay < 0 || InpMaxSpreadPips < 0.0 || InpMaxSpreadAtr < 0.0 ||
+      InpMacroBlockLevel < 1 || InpMacroOverrideScore < 0 || InpMacroOverrideScore > 11 || InpStrengthBars < 2 ||
+      InpStrengthWeak <= 0.0 || InpStrengthStrong < InpStrengthWeak || InpNewsBeforeMin < 0 || InpNewsAfterMin < 0 ||
+      InpRolloverHour < 0 || InpRolloverHour > 23 || InpRolloverGuardMin < 0 || InpRolloverGuardMin > 360 ||
+      InpFridayStopMin < 0 || InpFridayStopMin > 1440 || InpWeekOpenGuardMin < 0 || InpWeekOpenGuardMin > 720 ||
+      InpMaxOpenAcrossPairs < 0 || InpMaxCcyExposure < 0 || InpSmartFlipProfitR < 0.0 || InpSmartM1ProfitR < 0.0 ||
       InpSmartLockAtR < 0.0 || InpSmartLockR < 0.0 || (InpSmartLockAtR > 0.0 && InpSmartLockR >= InpSmartLockAtR) ||
       InpVolAvgBars < 20 || InpVolDead <= 0.0 || InpVolDead >= InpVolExpand || InpVolExpand >= InpVolExtreme ||
       InpVolExpandRadar < 0 || InpVolExpandRadar > 10 || InpSpikeBars < 2 || InpSpikeX < 1.0 || InpSpikeRetrace <= 0.0 ||
@@ -3100,16 +3281,21 @@ int OnInit()
    }
 
    g_sym = _Symbol;
-   g_metal = NqMetalOf(g_sym, SymbolInfoString(g_sym, SYMBOL_CURRENCY_BASE),
-                       SymbolInfoString(g_sym, SYMBOL_CURRENCY_PROFIT));
+   g_pair = NqPairOf(g_sym, SymbolInfoString(g_sym, SYMBOL_CURRENCY_BASE),
+                     SymbolInfoString(g_sym, SYMBOL_CURRENCY_PROFIT), (int)InpPairClass, g_base, g_quote);
+   NqSetProfile();
    NqReadSpec();
+   NqReadPip();
+   NqReadSpelling();
    // the switches the tests flip; the inputs are the source of truth
    g_macroGate = InpMacroGate;
    g_newsGuard = InpNewsGuard;
    g_newsUnknownBlocks = InpNewsUnknownBlocks;
    g_newsMediumBlocks = InpNewsMediumBlocks;
+   g_homeOnly = InpHomeSessionOnly;
    g_clockGuards = true;
    g_smartExit = InpSmartExit;
+   g_sessionTilt = InpSessionTilt;
    NqResolveWitnesses();
 
    g_P.atrPeriod = InpNrtrAtrPeriod;
@@ -3121,12 +3307,12 @@ int OnInit()
    g_P.scalpTpAtr = InpScalpTpAtr;
    g_P.scalpValidBars = InpScalpValidBars;
    g_P.scalpTimeBars = InpScalpTimeStop;
-   g_P.qmlSlBufAtr = InpQmlSlBufAtr;
+   g_P.qmlSlBufAtr = InpQmlSlBufAtr * g_profBuf;      // class profile: wider, never tighter
    g_P.qmlWaitBars = InpQmlWaitBars;
    g_P.planValidBars = InpPlanValidBars;
    g_P.pbRetrace = InpPbRetrace;
-   g_P.pbMinImpulseAtr = InpPbMinImpulseAtr;
-   g_P.pbSlBufAtr = InpPbSlBufAtr;
+   g_P.pbMinImpulseAtr = InpPbMinImpulseAtr * g_profImp;
+   g_P.pbSlBufAtr = InpPbSlBufAtr * g_profBuf;
    g_P.planTp1R = InpPlanTp1R;
    g_P.planTp2R = InpPlanTp2R;
    g_P.planMinRiskAtr = InpPlanMinRiskAtr;
@@ -3165,14 +3351,23 @@ int OnInit()
    g_nRadar = 0;
    NqRadarReset(g_rdUp);
    NqRadarReset(g_rdDn);
-   g_macroDir = 0;
+   g_oilDir = 0;
+   g_goldDir = 0;
    g_bondDir = 0;
+   g_dxyDir = 0;
+   ArrayResize(g_strCcy, 0);
+   ArrayResize(g_strSum, 0);
+   ArrayResize(g_strCnt, 0);
+   g_nStr = 0;
+   g_strPairs = 0;
+   g_strOk = false;
+   g_strDiff = 0.0;
+   g_strGrade = 0;
+   g_strDir = 0;
    ArrayResize(g_evT, 0);
    ArrayResize(g_evCcy, 0);
    ArrayResize(g_evImp, 0);
    ArrayResize(g_evName, 0);
-   ArrayResize(g_evImpact, 0);
-   ArrayResize(g_evTop, 0);
    g_nEv = 0;
    g_newsOk = false;
    g_newsErr = 0;
@@ -3182,15 +3377,20 @@ int OnInit()
    g_newsText = "";
    g_newsWhy = "";
    g_newsReadT = 0;
-   g_newsWinT = 0;
    g_sessOpen = 0;
+   g_homeMask = 0;
+   g_homeOpen = true;
+   g_homeText = "";
    g_rollover = false;
    g_weekEdge = false;
-   g_weekFriday = false;
    g_weekText = "";
    g_dow = 0;
    g_portfolioPos = 0;
    g_portfolioFull = false;
+   ArrayResize(g_expCcy, 0);
+   ArrayResize(g_expNet, 0);
+   g_nExp = 0;
+   g_expText = "";
    g_smartNote = "";
    NqSeriesResize(g_h1, 0);
    NqSeriesResize(g_h4, 0);
@@ -3265,7 +3465,7 @@ int OnInit()
    g_newBar1 = false;
    g_fresh = false;
    g_final = NQ_WAIT;
-   g_finalR = (g_metal == NQ_METAL_NONE) ? NQ_R_UNSUPPORTED : NQ_R_NO_DATA;
+   g_finalR = (g_pair == NQ_PAIR_NONE) ? NQ_R_UNSUPPORTED : NQ_R_NO_DATA;
    g_gate = 0;
    g_lotNext = 0.0;
    g_lossNext = 0.0;
@@ -3275,7 +3475,7 @@ int OnInit()
 
    ObjectsDeleteAll(0, NQ_PFX);
    EventSetTimer(1);
-   Print("NQ: started on " + g_sym + (g_isDemo ? " (DEMO)" : " (REAL - trading blocked unless allowed)"));
+   Print("NQ: started on " + g_sym + " (" + g_pairName + " " + g_base + "/" + g_quote + ")" + (g_isDemo ? " (DEMO)" : " (REAL - trading blocked unless allowed)"));
    NqUpdate();
    return INIT_SUCCEEDED;
 }
@@ -3327,7 +3527,7 @@ void NqUpdate()
 {
    g_newBar1 = false;
    g_newBar5 = false;
-   if(g_metal != NQ_METAL_NONE)
+   if(g_pair != NQ_PAIR_NONE)
    {
       datetime t15 = iTime(g_sym, PERIOD_M15, 1);
       datetime t5 = iTime(g_sym, PERIOD_M5, 1);
@@ -3373,10 +3573,10 @@ void NqVerdict()
    g_nearPrice = 0.0;
    g_nearDir = 0;
    g_warnOn = false;
-   bool ok = (g_metal != NQ_METAL_NONE && g_ready && g_s5.n > 0 && g_s1.n > 0);
-   if(g_metal == NQ_METAL_NONE)
+   bool ok = (g_pair != NQ_PAIR_NONE && g_ready && g_s5.n > 0 && g_s1.n > 0);
+   if(g_pair == NQ_PAIR_NONE)
    {
-      g_verdict = NqSymDot() + "  GOLD / SILVER ONLY";
+      g_verdict = NqSymDot() + "  FOREX ONLY  (a currency pair: EURUSD, GBPJPY, USDTRY ... - or set InpPairClass)";
       g_verdictClr = cWait;
       return;
    }
@@ -3617,23 +3817,6 @@ bool NqLoad(ENUM_TIMEFRAMES tf, NqSeries &s, int &why)
    return NqLoadSym(g_sym, tf, s, why);
 }
 
-// the dollar-index witness: the M15 NRTR direction of the resolved symbol
-void NqReadMacro()
-{
-   g_macroDir = 0;
-   if(g_macroSym == "")
-      return;
-   NqSeries m;
-   NqSeriesResize(m, 0);
-   int why = 0;
-   if(!NqLoadSym(g_macroSym, PERIOD_M15, m, why))
-      return;
-   NqCalcATR(m.h, m.l, m.c, m.n, g_P.atrPeriod, m.atr);
-   NqCalcNRTR(m.c, m.atr, m.n, g_P.nrtrMult, m.dir, m.stop, m.ext, m.flip);
-   if(m.n > 0)
-      g_macroDir = m.dir[m.n - 1];
-}
-
 void NqRecompute()
 {
    NqReadSpec();
@@ -3682,8 +3865,9 @@ void NqRecompute()
    g_labelT = g_s1.t[g_s1.n - 1];
    // impulse radar: pre-break pressure per direction, STOP-order plans
    NqRunRadar(g_s5, g_piv5, g_s5.np, g_resAbove, g_supBelow, g_P, InpRadarBufAtr, g_radar, g_nRadar, g_rdUp, g_rdDn);
-   NqReadWitnesses();      // the dollar index + the bond: M15 NRTR of each, NO DATA = no vote
-   NqReadCalendar();       // the MT5 economic calendar, USD events
+   NqReadWitnesses();      // oil / gold / bond / dollar index: M15 NRTR of each, NO DATA = no vote
+   NqReadStrength();       // every currency against the basket, in ATR units
+   NqReadCalendar();       // the MT5 economic calendar for the pair's two currencies
    NqReadHtf();            // H1 / H4 context, structure, BOS / CHoCH
    // swing plans: the same QML / pullback engine on M15 structure
    NqSeriesResize(g_s15r, g_s15.n);
@@ -3757,7 +3941,7 @@ bool NqKindEnabled(const NqPlan &p)
    if(p.kind == NQ_PLAN_NY)
       return InpTradeNyTrap;
    if(p.kind == NQ_PLAN_RADAR)
-      return InpTradeRadar;
+      return InpTradeRadar && g_profRadar;   // the class profile can switch breakout stops off
    if(p.tf == 900)
       return InpTradeSwing;
    return (p.kind == NQ_PLAN_QML) ? InpTradeQml : InpTradePullback;
@@ -3899,7 +4083,7 @@ int NqVolGateBits()
    return 0;
 }
 
-// gate names: the engine's own bits first (its helper, untouched), then the two regime bits
+// gate names: the engine's own bits first (its helper, untouched), then the regime bits, then the forex bits
 string NqGateNameX(int bit)
 {
    if(bit == NQ_K_VOL_DEAD)
@@ -3910,27 +4094,30 @@ string NqGateNameX(int bit)
       return "NEWS GUARD - " + g_newsWhy;
    if(bit == NQ_K_NEWS_UNKNOWN)
       return "NEWS UNKNOWN - THE CALENDAR ANSWERED NOTHING, NOT TRADING BLIND";
+   if(bit == NQ_K_HOME)
+      return "OUTSIDE HOME SESSION - " + g_homeText;
    if(bit == NQ_K_ROLLOVER)
       return "ROLLOVER WINDOW - SPREADS WIDEN, NO NEW TRADE";
    if(bit == NQ_K_WEEK_EDGE)
       return "WEEK EDGE - " + g_weekText;
    if(bit == NQ_K_PORTFOLIO)
-      return "PORTFOLIO FULL - " + IntegerToString(g_portfolioPos) + " POSITIONS ACROSS CHARTS (MAX " + IntegerToString(InpMaxOpenAcrossCharts) + ")";
+      return "PORTFOLIO FULL - " + IntegerToString(g_portfolioPos) + " POSITIONS ACROSS PAIRS (MAX " + IntegerToString(InpMaxOpenAcrossPairs) + ")";
    return NqGateName(bit);
 }
 
 string NqGateAtX(int g, int nth)
 {
-   int extras[7];
+   int extras[8];
    extras[0] = NQ_K_VOL_DEAD;
    extras[1] = NQ_K_VOL_EXTREME;
    extras[2] = NQ_K_NEWS;
    extras[3] = NQ_K_NEWS_UNKNOWN;
-   extras[4] = NQ_K_ROLLOVER;
-   extras[5] = NQ_K_WEEK_EDGE;
-   extras[6] = NQ_K_PORTFOLIO;
+   extras[4] = NQ_K_HOME;
+   extras[5] = NQ_K_ROLLOVER;
+   extras[6] = NQ_K_WEEK_EDGE;
+   extras[7] = NQ_K_PORTFOLIO;
    int mask = 0;
-   for(int i = 0; i < 7; i++)
+   for(int i = 0; i < 8; i++)
       mask |= extras[i];
    int engine = g & ~mask;   // an int variable: ~ on a literal is uint in MQL5 (compiler warning)
    string s = NqGateAt(engine, nth);
@@ -3940,7 +4127,7 @@ string NqGateAtX(int g, int nth)
    while(NqGateAt(engine, c) != "")
       c++;
    int k = nth - c;
-   for(int i = 0; i < 7; i++)
+   for(int i = 0; i < 8; i++)
    {
       if((g & extras[i]) == 0)
          continue;
@@ -4043,19 +4230,82 @@ bool NqSpikeBlocks(const NqPlan &pl)
 }
 
 //+------------------------------------------------------------------+
-//| THE MACRO VOTE (v1.9). Voters for a direction d (+1 = buy the     |
-//| metal): the dollar index (up = metal down), a US 10-year bond     |
-//| (a PRICE up = yields down = metal up; a YIELD up = metal down),   |
-//| the calendar's reading of USD releases of the last hours (USD     |
-//| positive = metal down), the H4 and H1 context and a fresh H1      |
-//| CHoCH. Every voter contributes 1 or nothing (NO DATA votes        |
-//| nothing). A vote against a trade of InpMacroBlockLevel or more    |
-//| blocks it unless the metal's OWN structure is A+ (M15 context +   |
-//| M5 regime with the trade, a radar break with a high score).       |
+//| PAIR SPECIALIST PROFILE. The class decides how careful the bot is |
+//| with this pair. Multipliers only ever REDUCE risk (<= 1) and only |
+//| ever WIDEN buffers (>= 1); the panel shows the profile in force.  |
+//| EXOTIC: half the risk, no breakout stops, no scalps (the spread   |
+//| eats a 1-ATR take-profit). Yen crosses: wider stops (wicks run).  |
 //+------------------------------------------------------------------+
-const string NQ_NEWS_CCY = "USD";   // the metal is quoted in dollars: its news is the dollar's news
+void NqSetProfile()
+{
+   g_pairName = "NONE";
+   g_profRisk = 1.0;
+   g_profBuf = 1.0;
+   g_profImp = 1.0;
+   g_profSpread = 0.20;
+   g_profRadar = true;
+   g_profScalp = true;
+   if(g_pair == NQ_PAIR_MAJOR)
+   {
+      g_pairName = "MAJOR";
+      g_profSpread = 0.15;
+   }
+   if(g_pair == NQ_PAIR_CROSS)
+   {
+      g_pairName = "CROSS";
+      g_profSpread = 0.20;
+      if(g_base == "JPY" || g_quote == "JPY")
+         g_profBuf = 1.25;
+   }
+   if(g_pair == NQ_PAIR_EXOTIC)
+   {
+      g_pairName = "EXOTIC";
+      g_profRisk = 0.5;
+      g_profBuf = 1.5;
+      g_profImp = 1.25;
+      g_profSpread = 0.30;
+      g_profRadar = false;
+      g_profScalp = false;
+   }
+   if(!InpSpecialist)
+   {
+      g_profRisk = 1.0;            // raw inputs; the ATR spread cap stays (points mean nothing across pairs)
+      g_profBuf = 1.0;
+      g_profImp = 1.0;
+      g_profRadar = true;
+      g_profScalp = true;
+   }
+}
 
-// the first candidate the broker serves; "" = none
+// a pip: 10 points on 3- and 5-digit symbols (USDJPY 150.123, EURUSD 1.08512), else one point
+void NqReadPip()
+{
+   g_pip = (g_digits == 3 || g_digits == 5) ? g_point * 10.0 : g_point;
+   if(g_pip <= 0.0)
+      g_pip = g_point;
+}
+
+// the chart symbol's spelling around the 6-letter pair (EURUSD.m -> "" + ".m"), so sibling
+// symbols are looked up the way this broker spells them (GBPUSD.m)
+void NqReadSpelling()
+{
+   g_pfx = "";
+   g_sfx = "";
+   string u = g_sym;
+   StringToUpper(u);
+   int p = StringFind(u, g_base + g_quote);
+   if(p < 0)
+      return;
+   g_pfx = StringSubstr(g_sym, 0, p);
+   g_sfx = StringSubstr(g_sym, p + 6);
+}
+
+bool NqCcyIn(string csv, string c)
+{
+   return StringFind(csv, "," + c + ",") >= 0;
+}
+
+// the first candidate the broker serves: raw, then in this chart's spelling. "" = none
 string NqFindSym(string csv)
 {
    int pos = 0;
@@ -4067,8 +4317,13 @@ string NqFindSym(string csv)
          c = n;
       string cand = StringSubstr(csv, pos, c - pos);
       pos = c + 1;
-      if(cand != "" && SymbolSelect(cand, true))
+      if(cand == "")
+         continue;
+      if(SymbolSelect(cand, true))
          return cand;
+      string sp = g_pfx + cand + g_sfx;
+      if(sp != cand && SymbolSelect(sp, true))
+         return sp;
    }
    return "";
 }
@@ -4109,11 +4364,20 @@ bool NqBondIsYield(string sym)
    return false;
 }
 
+const string NQ_OIL_CCY  = ",CAD,NOK,MXN,RUB,";
+const string NQ_GOLD_CCY = ",AUD,";
+const string NQ_USD_CCY  = ",USD,";
+
 void NqResolveWitnesses()
 {
-   g_macroSym = NqResolveWitness(InpMacroSymbol, "USDX,DXY,USDOLLAR,DX,USDIDX,USIDX,DOLLAR,USDINDEX,USDOLLARINDEX", true);
-   g_bondSym = NqResolveWitness(InpBondSymbol, "USTNOTE,TNOTE,US10YT,UST10,USTN10,ZN,TNOTEUSD,US10YB,US10Y,US10YR,USTBOND,TBOND,ZB", true);
+   bool oil = NqCcyIn(NQ_OIL_CCY, g_base) || NqCcyIn(NQ_OIL_CCY, g_quote);
+   bool gold = NqCcyIn(NQ_GOLD_CCY, g_base) || NqCcyIn(NQ_GOLD_CCY, g_quote);
+   bool usd = (g_base == "USD" || g_quote == "USD");
+   g_oilSym = NqResolveWitness(InpOilSymbol, "XTIUSD,USOIL,WTI,WTIUSD,USOUSD,CRUDE,OILUSD,OIL,USCRUDE,WTICOUSD,XBRUSD,UKOIL,BRENT,UKOUSD,BCOUSD", oil);
+   g_goldSym = NqResolveWitness(InpGoldSymbol, "XAUUSD,GOLD,Gold,XAU/USD", gold);
+   g_bondSym = NqResolveWitness(InpBondSymbol, "USTNOTE,TNOTE,US10YT,UST10,USTN10,ZN,TNOTEUSD,US10YB,US10Y,US10YR,USTBOND,TBOND,ZB", usd);
    g_bondYield = NqBondIsYield(g_bondSym);
+   g_dxySym = NqResolveWitness(InpDxySymbol, "USDX,DXY,USDOLLAR,DX,USDIDX,USIDX,DOLLAR,USDINDEX,USDOLLARINDEX", usd);
 }
 
 // the M15 NRTR direction of any symbol the broker serves; 0 = no data (nothing invented)
@@ -4133,21 +4397,184 @@ int NqDirOfSym(string sym)
 
 void NqReadWitnesses()
 {
-   NqReadMacro();
+   g_oilDir = NqDirOfSym(g_oilSym);
+   g_goldDir = NqDirOfSym(g_goldSym);
    g_bondDir = NqDirOfSym(g_bondSym);
+   g_dxyDir = NqDirOfSym(g_dxySym);
 }
 
-// one witness: its M15 NRTR direction times its sign is the METAL direction it implies
-int NqWitnessVote(int d, string label, string sym, int wdir, int sign, int weight, string &why)
+//+------------------------------------------------------------------+
+//| CURRENCY STRENGTH. Each of the broker's USD majors (and this pair |
+//| when it is not one of them) moves r = (close now - close N bars   |
+//| ago) / ATR(M15). Its base gets +r, its quote -r; a currency's      |
+//| strength is the mean of its contributions. The difference         |
+//| strength(base) - strength(quote) is the pair's vote, WEAK or      |
+//| STRONG by two thresholds. A pair the broker does not serve is     |
+//| skipped and the panel says how many were used.                    |
+//+------------------------------------------------------------------+
+int NqStrIdx(string c)
+{
+   for(int i = 0; i < g_nStr; i++)
+      if(g_strCcy[i] == c)
+         return i;
+   return -1;
+}
+
+void NqStrAdd(string c, double r, bool count)
+{
+   int i = NqStrIdx(c);
+   if(i < 0)
+   {
+      ArrayResize(g_strCcy, g_nStr + 1, 16);
+      ArrayResize(g_strSum, g_nStr + 1, 16);
+      ArrayResize(g_strCnt, g_nStr + 1, 16);
+      g_strCcy[g_nStr] = c;
+      g_strSum[g_nStr] = 0.0;
+      g_strCnt[g_nStr] = 0;
+      i = g_nStr;
+      g_nStr++;
+   }
+   if(count)
+   {
+      g_strSum[i] += r;
+      g_strCnt[i]++;
+   }
+}
+
+double NqStrOf(string c)
+{
+   int i = NqStrIdx(c);
+   if(i < 0 || g_strCnt[i] <= 0)
+      return 0.0;
+   return g_strSum[i] / g_strCnt[i];
+}
+
+bool NqStrHas(string c)
+{
+   int i = NqStrIdx(c);
+   return (i >= 0 && g_strCnt[i] > 0);
+}
+
+// one series' move over InpStrengthBars closed M15 bars in ATR(M15) units
+bool NqMoveOf(const NqSeries &m, double &r)
+{
+   int n = m.n;
+   if(n < InpStrengthBars + 1)
+      return false;
+   double a = m.atr[n - 1];
+   if(a <= 0.0)
+      return false;
+   r = (m.c[n - 1] - m.c[n - 1 - InpStrengthBars]) / a;
+   return true;
+}
+
+bool NqPairMove(string sym, double &r)
+{
+   NqSeries m;
+   NqSeriesResize(m, 0);
+   int why = 0;
+   if(!NqLoadSym(sym, PERIOD_M15, m, why))
+      return false;
+   NqCalcATR(m.h, m.l, m.c, m.n, g_P.atrPeriod, m.atr);
+   return NqMoveOf(m, r);
+}
+
+void NqReadStrength()
+{
+   g_nStr = 0;
+   g_strPairs = 0;
+   g_strOk = false;
+   g_strDiff = 0.0;
+   g_strGrade = 0;
+   g_strDir = 0;
+   string g8 = "USD,EUR,GBP,JPY,AUD,NZD,CAD,CHF";
+   int pos = 0;
+   while(pos < StringLen(g8))
+   {
+      NqStrAdd(StringSubstr(g8, pos, 3), 0.0, false);
+      pos += 4;
+   }
+   NqStrAdd(g_base, 0.0, false);
+   NqStrAdd(g_quote, 0.0, false);
+   string majors[7];
+   majors[0] = "EURUSD";
+   majors[1] = "GBPUSD";
+   majors[2] = "AUDUSD";
+   majors[3] = "NZDUSD";
+   majors[4] = "USDJPY";
+   majors[5] = "USDCAD";
+   majors[6] = "USDCHF";
+   string own = g_base + g_quote;
+   bool ownDone = false;
+   for(int k = 0; k < 7; k++)
+   {
+      double r = 0.0;
+      if(majors[k] == own)
+      {
+         if(!NqMoveOf(g_s15, r))
+            continue;
+         ownDone = true;
+      }
+      else
+      {
+         string sym = NqSpell(majors[k]);
+         if(!SymbolSelect(sym, true) || !NqPairMove(sym, r))
+            continue;
+      }
+      NqStrAdd(StringSubstr(majors[k], 0, 3), r, true);
+      NqStrAdd(StringSubstr(majors[k], 3, 3), -r, true);
+      g_strPairs++;
+   }
+   if(!ownDone)
+   {
+      double r = 0.0;
+      if(NqMoveOf(g_s15, r))
+      {
+         NqStrAdd(g_base, r, true);
+         NqStrAdd(g_quote, -r, true);
+         g_strPairs++;
+      }
+   }
+   if(!NqStrHas(g_base) || !NqStrHas(g_quote))
+      return;
+   g_strOk = true;
+   g_strDiff = NqStrOf(g_base) - NqStrOf(g_quote);
+   double ad = MathAbs(g_strDiff);
+   g_strGrade = (ad >= InpStrengthStrong) ? 2 : ((ad >= InpStrengthWeak) ? 1 : 0);
+   g_strDir = (g_strDiff > 0.0) ? 1 : ((g_strDiff < 0.0) ? -1 : 0);
+}
+
+string NqSpell(string pair)
+{
+   return g_pfx + pair + g_sfx;
+}
+
+//+------------------------------------------------------------------+
+//| THE MACRO VOTE for a direction d (+1 = buy the base). Voters:    |
+//| currency strength (1 or 2), each witness that speaks for one of   |
+//| the pair's currencies (1), and the calendar's reading of the      |
+//| releases of the last hours (1 each). Strength contributes 0 / 1 / |
+//| 2 by its grade; every other voter contributes 1 or nothing. A     |
+//| witness without data votes nothing. Positive supports d, negative |
+//| is against it.                                                    |
+//+------------------------------------------------------------------+
+int NqWitnessVote(int d, string label, string sym, int wdir, string ccys, int sign, string &why)
 {
    if(sym == "" || wdir == 0)
       return 0;
-   int s = sign * wdir * d * weight;
-   why = why + ((why == "") ? "" : ", ") + label + " " + NqDirText(wdir) + " " + ((s > 0) ? "+" : "") + IntegerToString(s);
+   int implied = 0;    // the PAIR direction the witness implies
+   if(NqCcyIn(ccys, g_base))
+      implied = sign * wdir;
+   else if(NqCcyIn(ccys, g_quote))
+      implied = -sign * wdir;
+   else
+      return 0;
+   int s = implied * d;
+   why = why + ((why == "") ? "" : ", ") + label + " " + NqDirText(wdir) + " " + ((s > 0) ? "+1" : "-1");
    return s;
 }
 
-// the USD releases of the last InpNewsVoteHours, read by the calendar itself: USD positive = metal down
+// the releases of the last InpNewsVoteHours for the pair's currencies, read by the calendar itself
 int NqNewsVote(int d, string &why)
 {
    if(InpNewsVoteHours <= 0 || !g_newsOk)
@@ -4158,9 +4585,10 @@ int NqNewsVote(int d, string &why)
    {
       if(g_evImpact[i] == 0 || g_evT[i] > now || now - g_evT[i] > (long)InpNewsVoteHours * 3600)
          continue;
-      int s = -g_evImpact[i] * d;
+      int implied = (g_evCcy[i] == g_base) ? g_evImpact[i] : -g_evImpact[i];
+      int s = implied * d;
       v += s;
-      why = why + ((why == "") ? "" : ", ") + "news USD " + g_evName[i] + " " + ((g_evImpact[i] > 0) ? "POSITIVE" : "NEGATIVE") + " " + ((s > 0) ? "+1" : "-1");
+      why = why + ((why == "") ? "" : ", ") + "news " + g_evCcy[i] + " " + g_evName[i] + " " + ((g_evImpact[i] > 0) ? "POSITIVE" : "NEGATIVE") + " " + ((s > 0) ? "+1" : "-1");
    }
    return v;
 }
@@ -4293,8 +4721,16 @@ int NqMacroVote(int d, string &why)
 {
    int v = 0;
    why = "";
-   v += NqWitnessVote(d, "DXY", g_macroSym, g_macroDir, -1, 1, why);
-   v += NqWitnessVote(d, g_bondYield ? "yield" : "bond", g_bondSym, g_bondDir, g_bondYield ? -1 : 1, 1, why);
+   if(g_strOk && g_strGrade > 0)
+   {
+      int s = g_strDir * g_strGrade * d;
+      v += s;
+      why = "strength " + g_base + ((g_strDir > 0) ? ">" : "<") + g_quote + " " + ((g_strGrade == 2) ? "STRONG" : "WEAK") + " " + ((s > 0) ? "+" : "") + IntegerToString(s);
+   }
+   v += NqWitnessVote(d, "oil", g_oilSym, g_oilDir, NQ_OIL_CCY, 1, why);
+   v += NqWitnessVote(d, "gold", g_goldSym, g_goldDir, NQ_GOLD_CCY, 1, why);
+   v += NqWitnessVote(d, g_bondYield ? "yield" : "bond", g_bondSym, g_bondDir, NQ_USD_CCY, g_bondYield ? 1 : -1, why);
+   v += NqWitnessVote(d, "DXY", g_dxySym, g_dxyDir, NQ_USD_CCY, 1, why);
    v += NqNewsVote(d, why);
    v += NqHtfVote(d, why);
    return v;
@@ -4317,6 +4753,68 @@ bool NqMacroBlocks(int dir, int score, bool isRadar, string &why)
       return false;
    why = "MACRO AGAINST ";
    why = why + ((dir > 0) ? "BUY" : "SELL") + " (vote " + IntegerToString(v) + ": " + voters + ") - own structure not A+";
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| SESSION TILT. The operator's observation: Asia leans BUY, New     |
+//| York leans SELL. A trade AGAINST the session's tilt needs strong  |
+//| confirmation: M15 context + M5 regime with it (a reversal plan,   |
+//| QML or NY trap, needs the M15 context), the macro vote not        |
+//| against, a radar break with a high score. Recorded on every       |
+//| journal line (session, tilt, with_tilt) so it can be judged.      |
+//+------------------------------------------------------------------+
+int NqTiltOf(int sel)
+{
+   if(sel == NQ_TILT_BUY)
+      return 1;
+   if(sel == NQ_TILT_SELL)
+      return -1;
+   return 0;
+}
+
+string NqSessionName()
+{
+   if((g_sessOpen & 4) != 0)
+      return "NY";
+   if((g_sessOpen & 2) != 0)
+      return "LONDON";
+   if((g_sessOpen & 1) != 0)
+      return "ASIA";
+   return "OFF";
+}
+
+int NqTiltNow()
+{
+   if((g_sessOpen & 4) != 0)
+      return NqTiltOf((int)InpNyTilt);
+   if((g_sessOpen & 2) != 0)
+      return NqTiltOf((int)InpLondonTilt);
+   if((g_sessOpen & 1) != 0)
+      return NqTiltOf((int)InpAsiaTilt);
+   return 0;
+}
+
+bool NqTiltBlocks(int dir, int score, bool isRadar, int kind, string &why)
+{
+   why = "";
+   if(!g_sessionTilt || dir == 0)
+      return false;
+   int tilt = NqTiltNow();
+   if(tilt == 0 || tilt == dir)
+      return false;
+   bool m15 = (g_s15.n > 0 && g_s15.ctx[g_s15.n - 1] == dir);
+   bool m5 = (g_s5.n > 0 && g_s5.regime[g_s5.n - 1] == dir);
+   bool reversal = (kind == NQ_PLAN_QML || kind == NQ_PLAN_NY);
+   string voters = "";
+   int v = NqMacroVote(dir, voters);
+   bool strong = m15 && (m5 || reversal) && v >= 0 && (!isRadar || score >= InpTiltOverrideScore);
+   if(strong)
+      return false;
+   why = "AGAINST THE ";
+   why = why + NqSessionName() + " TILT (" + ((tilt > 0) ? "BUY" : "SELL") + ") - needs strong confirmation: M15 " + (m15 ? "ok" : "AGAINST") +
+         ", M5 " + (m5 ? "ok" : (reversal ? "n/a (reversal)" : "AGAINST")) + ", macro vote " + IntegerToString(v) +
+         (isRadar ? (", radar " + IntegerToString(score) + "/" + IntegerToString(InpTiltOverrideScore)) : "");
    return true;
 }
 
@@ -4383,7 +4881,7 @@ void NqReadCalendar()
          continue;
       string ccy = co.currency;
       StringToUpper(ccy);
-      if(ccy != NQ_NEWS_CCY)
+      if(ccy != g_base && ccy != g_quote)
          continue;
       ArrayResize(g_evT, g_nEv + 1, 64);
       ArrayResize(g_evCcy, g_nEv + 1, 64);
@@ -4470,28 +4968,48 @@ void NqNewsState()
                    " (gate closes " + IntegerToString(g_evTop[nextI] ? InpNewsTopBeforeMin : InpNewsBeforeMin) + " min before)";
    }
    else
-      g_newsText = "clear - no HIGH USD event in the next 48h";
+      g_newsText = "clear - no HIGH event for " + g_base + " / " + g_quote + " in the next 48h";
    if(lastRel != "")
       g_newsText = g_newsText + "   released " + IntegerToString(InpNewsVoteHours) + "h: " + lastRel;
 }
 
-// the week's position and the rollover window on the server clock (engine NqWeekPos); the
-// session name is for the panel - a metal has no home session, the levels are its clock
-string NqSessionName()
+//+------------------------------------------------------------------+
+//| THE FOREX CLOCK. Which sessions are open now (the day's minutes   |
+//| from g_clk), the pair's home sessions, the rollover window and    |
+//| the week's edges (engine NqWeekPos: the week opens at the Sunday  |
+//| rollover and closes at the Friday one).                           |
+//+------------------------------------------------------------------+
+int NqHomeMask(string c)
 {
-   if((g_sessOpen & 4) != 0)
-      return "NY";
-   if((g_sessOpen & 2) != 0)
-      return "LONDON";
-   if((g_sessOpen & 1) != 0)
-      return "ASIA";
-   return "OFF";
+   if(NqCcyIn(",JPY,AUD,NZD,SGD,HKD,CNH,CNY,KRW,TWD,THB,IDR,MYR,PHP,INR,", c))
+      return 1;
+   if(NqCcyIn(",EUR,GBP,CHF,SEK,NOK,DKK,PLN,HUF,CZK,RON,TRY,ZAR,ILS,RUB,ISK,BGN,HRK,RSD,UAH,KZT,EGP,NGN,KES,MAD,SAR,AED,KWD,QAR,BHD,OMR,", c))
+      return 2;
+   if(NqCcyIn(",USD,CAD,MXN,BRL,COP,CLP,PEN,ARS,", c))
+      return 4;
+   return 7;
+}
+
+string NqHomeName(int m)
+{
+   if(m == 7)
+      return "any";
+   string s = "";
+   if((m & 1) != 0)
+      s = s + "Asia";
+   if((m & 2) != 0)
+      s = s + ((s == "") ? "" : "+") + "London";
+   if((m & 4) != 0)
+      s = s + ((s == "") ? "" : "+") + "NY";
+   return (s == "") ? "none" : s;
 }
 
 void NqSessionScan(datetime now)
 {
    int mod = NqMinuteOfDay(now);
    g_dow = NqDow(now);
+   // the true windows (they may wrap the server midnight on a broker west of UTC): NY first, then
+   // London up to the NY open, then Asia up to the London open - a minute belongs to one session
    int open = 0;
    if(NqInWindow(mod, g_clk.nyS0, g_clk.nyE0))
       open |= 4;
@@ -4500,7 +5018,11 @@ void NqSessionScan(datetime now)
    else if(NqInWindow(mod, g_clk.asiaS0, g_clk.lonS0))
       open |= 1;
    g_sessOpen = open;
-   int roll = g_clk.roll;
+   g_homeMask = NqHomeMask(g_base) | NqHomeMask(g_quote);
+   g_homeOpen = ((g_homeMask & open) != 0);
+   g_homeText = g_base + " " + NqHomeName(NqHomeMask(g_base)) + ", " + g_quote + " " + NqHomeName(NqHomeMask(g_quote)) +
+                " - now " + NqSessionName();
+   int roll = g_clkAuto ? g_clk.roll : InpRolloverHour * 60;
    int d = mod - roll;
    if(d > 720)
       d -= 1440;
@@ -4532,29 +5054,92 @@ void NqSessionScan(datetime now)
    }
 }
 
-// this EA on every chart (same magic): positions across symbols
+//+------------------------------------------------------------------+
+//| THE PORTFOLIO. This EA on several charts with one magic: how many |
+//| positions it holds across pairs, and the net exposure to each     |
+//| currency (a USD long on USDJPY and on USDCAD is +2 USD).           |
+//+------------------------------------------------------------------+
+void NqExpAdd(string c, int d)
+{
+   for(int i = 0; i < g_nExp; i++)
+   {
+      if(g_expCcy[i] == c)
+      {
+         g_expNet[i] += d;
+         return;
+      }
+   }
+   ArrayResize(g_expCcy, g_nExp + 1, 16);
+   ArrayResize(g_expNet, g_nExp + 1, 16);
+   g_expCcy[g_nExp] = c;
+   g_expNet[g_nExp] = d;
+   g_nExp++;
+}
+
+int NqExpOf(string c)
+{
+   for(int i = 0; i < g_nExp; i++)
+      if(g_expCcy[i] == c)
+         return g_expNet[i];
+   return 0;
+}
+
 void NqPortfolioScan()
 {
    g_portfolioPos = 0;
+   g_nExp = 0;
+   g_expText = "";
    int total = PositionsTotal();
    for(int i = 0; i < total; i++)
    {
       ulong tk = PositionGetTicket(i);
       if(tk == 0)
          continue;
-      if(PositionGetInteger(POSITION_MAGIC) == InpMagic)
-         g_portfolioPos++;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic)
+         continue;
+      string sym = PositionGetString(POSITION_SYMBOL);
+      int dir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+      g_portfolioPos++;
+      string b = g_base;
+      string q = g_quote;
+      if(sym != g_sym)
+      {
+         if(NqPairOf(sym, SymbolInfoString(sym, SYMBOL_CURRENCY_BASE), SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT), NQ_PAIR_NONE, b, q) == NQ_PAIR_NONE)
+            continue;
+      }
+      NqExpAdd(b, dir);
+      NqExpAdd(q, -dir);
    }
-   g_portfolioFull = (InpMaxOpenAcrossCharts > 0 && g_portfolioPos >= InpMaxOpenAcrossCharts);
+   for(int i = 0; i < g_nExp; i++)
+      if(g_expNet[i] != 0)
+         g_expText = g_expText + ((g_expText == "") ? "" : " ") + g_expCcy[i] + ((g_expNet[i] > 0) ? "+" : "") + IntegerToString(g_expNet[i]);
+   g_portfolioFull = (InpMaxOpenAcrossPairs > 0 && g_portfolioPos >= InpMaxOpenAcrossPairs);
 }
 
-int NqMetalGateBits()
+// a new trade carrying a currency the same way as InpMaxCcyExposure positions already do
+bool NqExposureBlocks(int dir, string &why)
+{
+   why = "";
+   if(InpMaxCcyExposure <= 0 || dir == 0)
+      return false;
+   int eb = NqExpOf(g_base) * dir;
+   int eq = NqExpOf(g_quote) * (-dir);
+   if(eb >= InpMaxCcyExposure)
+      why = "EXPOSURE - already " + IntegerToString(eb) + " position(s) " + ((dir > 0) ? "long " : "short ") + g_base + " on other charts (max " + IntegerToString(InpMaxCcyExposure) + ")";
+   else if(eq >= InpMaxCcyExposure)
+      why = "EXPOSURE - already " + IntegerToString(eq) + " position(s) " + ((dir > 0) ? "short " : "long ") + g_quote + " on other charts (max " + IntegerToString(InpMaxCcyExposure) + ")";
+   return (why != "");
+}
+
+int NqForexGateBits()
 {
    int g = 0;
    if(g_newsBlock)
       g |= NQ_K_NEWS;
    if(g_newsUnknown && g_newsUnknownBlocks)
       g |= NQ_K_NEWS_UNKNOWN;
+   if(g_homeOnly && !g_homeOpen)
+      g |= NQ_K_HOME;
    if(g_rollover)
       g |= NQ_K_ROLLOVER;
    if(g_weekEdge)
@@ -4562,6 +5147,25 @@ int NqMetalGateBits()
    if(g_portfolioFull)
       g |= NQ_K_PORTFOLIO;
    return g;
+}
+
+// the spread cap in points: the pip input when set, else x ATR(M5) (the same test for every pair)
+int NqMaxSpreadPts()
+{
+   if(InpMaxSpreadPips > 0.0)
+   {
+      int p = (int)MathRound(InpMaxSpreadPips * g_pip / g_point);
+      return (p < 1) ? 1 : p;
+   }
+   double frac = (InpMaxSpreadAtr > 0.0) ? InpMaxSpreadAtr : g_profSpread;
+   if(!g_ready || g_s1.n < 1 || g_point <= 0.0)
+      return 0;
+   int k5 = g_s1.map[g_s1.n - 1];
+   double atr5 = (k5 >= 0 && k5 < g_s5.n) ? g_s5.atr[k5] : 0.0;
+   if(atr5 <= 0.0)
+      return 0;
+   int pts = (int)MathRound(frac * atr5 / g_point);
+   return (pts < 1) ? 1 : pts;
 }
 
 //+------------------------------------------------------------------+
@@ -4713,7 +5317,7 @@ void NqReadAccount()
    g_balance = AccountInfoDouble(ACCOUNT_BALANCE);
    g_freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
    g_spreadPts = (int)SymbolInfoInteger(g_sym, SYMBOL_SPREAD);
-   g_riskMoney = NqRiskMoney(g_balance, InpRiskPct);
+   g_riskMoney = NqRiskMoney(g_balance, InpRiskPct * g_profRisk);   // the class never widens risk
    g_capMoney = NqRiskMoney(g_balance, InpDailyLossCapPct);
 
    g_openCount = 0;
@@ -4774,7 +5378,7 @@ void NqReadAccount()
    }
    if(g_pendText == "")
       g_pendText = "NONE";
-   NqPortfolioScan();   // this EA on every chart: positions across symbols
+   NqPortfolioScan();   // this EA on every chart: positions across pairs, exposure per currency
 
    // today's closed result and entries, from the deal history (magic + symbol).
    // The "last action" line is derived from the same history, so a restart
@@ -4822,7 +5426,7 @@ void NqEvaluate()
 {
    g_lotNext = 0.0;
    g_lossNext = 0.0;
-   if(g_metal == NQ_METAL_NONE)
+   if(g_pair == NQ_PAIR_NONE)
    {
       g_fresh = false;
       g_final = NQ_WAIT;
@@ -4835,17 +5439,18 @@ void NqEvaluate()
    bool tradeAllowed = (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) != 0 && MQLInfoInteger(MQL_TRADE_ALLOWED) != 0 &&
                         AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) != 0 && AccountInfoInteger(ACCOUNT_TRADE_EXPERT) != 0);
    double dayTotal = g_dayPnl + g_floating;
-   g_gate = NqRiskGate(InpScalpAuto || InpPendingAuto, g_isDemo, InpAllowRealAccount, tradeAllowed,
-                       g_spreadPts, InpMaxSpreadPoints, dayTotal, g_capMoney, g_openCount, InpMaxOpenPositions,
+   int maxSpr = NqMaxSpreadPts();
+   g_gate = NqRiskGate((InpScalpAuto && g_profScalp) || InpPendingAuto, g_isDemo, InpAllowRealAccount, tradeAllowed,
+                       g_spreadPts, maxSpr, dayTotal, g_capMoney, g_openCount, InpMaxOpenPositions,
                        g_tradesToday, InpMaxTradesPerDay, NqInSession(hour, InpSessionStartHour, InpSessionEndHour));
    NqVolRegime();
    NqSpikeScan();
    g_gate |= NqVolGateBits();   // DEAD / EXTREME volatility close the gate for NEW entries (named by NqGateAtX)
-   NqSessionScan(now);           // the rollover window, the week's edges
+   NqSessionScan(now);           // home sessions, the rollover window, the week's edges
    if(g_newsGuard && !g_newsTester && (long)now - (long)g_newsReadT >= 60)
       NqReadCalendar();          // the calendar is re-read every minute on the timer too, not only on a new candle
    NqNewsState();                // the calendar's verdict for this minute
-   g_gate |= NqMetalGateBits();  // news / week / portfolio bits (named by NqGateAtX)
+   g_gate |= NqForexGateBits();  // news / clock / portfolio bits (named by NqGateAtX)
 
    if(!g_ready || g_s1.n < 1 || g_s5.n < 1 || g_s15.n < 1)
    {
@@ -5231,6 +5836,8 @@ string NqEventJson(const NqPlan &p, string event, string extra)
    int n15 = g_s15.n;
    string j = "{" + NqJsonS("signal_id", NqSignalIdOf(p)) + "," + NqJsonS("system", "NQ-EA") + "," +
               NqJsonS("ea_version", NQ_EA_VERSION) + "," + NqJsonS("symbol", g_sym) + "," +
+              NqJsonS("engine", "NQ-FOREX") + "," + NqJsonS("pair_class", g_pairName) + "," + NqJsonS("base", g_base) + "," + NqJsonS("quote", g_quote) + "," +
+              NqJsonS("session", NqSessionName()) + "," + NqJsonI("tilt", NqTiltNow()) + "," + NqJsonB("with_tilt", NqTiltNow() == 0 || NqTiltNow() == p.dir) + "," +
               NqJsonS("h4_ctx", (g_h4Ok && g_h4.n > 0) ? NqContextText(g_h4.ctx[g_h4.n - 1]) : "") + "," + NqJsonS("h1_ctx", (g_h1Ok && g_h1.n > 0) ? NqContextText(g_h1.ctx[g_h1.n - 1]) : "") + "," +
               NqJsonS("h1_break", g_h1Ok ? NqBreakText(g_h1, g_sbH1, g_nSbH1) : "") + "," + NqJsonS("m5_break", NqBreakText(g_s5, g_sbrk, g_nSbrk)) + "," +
               NqJsonS("vol_regime", NqVolClassText(g_volClass)) + "," + NqJsonN("spike_atr", g_spikeAtr * g_spikeDir, 1) + "," +
@@ -5342,7 +5949,7 @@ void NqWebDrain()
 
 //+------------------------------------------------------------------+
 //| TELEMETRY (ANALYSIS ONLY). A snapshot of what the panel shows,   |
-//| POSTed to SignalMesh's /webhooks/metal/telemetry so the METAL     |
+//| POSTed to SignalMesh's /webhooks/forex/telemetry so the FOREX     |
 //| ANALYSIS page can display it. It is a DATA WITNESS: every field   |
 //| is the EA's own observed state, labelled as such; SignalMesh      |
 //| stores it verbatim and derives nothing from it. Nothing here can  |
@@ -5395,8 +6002,7 @@ string NqTelemetryJson()
    int n1 = g_s1.n;
    int n5 = g_s5.n;
    int n15 = g_s15.n;
-   bool ok = (g_metal != NQ_METAL_NONE && g_ready && n1 > 0 && n5 > 0 && n15 > 0);
-   string metal = (g_metal == NQ_METAL_GOLD) ? "GOLD" : ((g_metal == NQ_METAL_SILVER) ? "SILVER" : "NONE");
+   bool ok = (g_pair != NQ_PAIR_NONE && g_ready && n1 > 0 && n5 > 0 && n15 > 0);
    string dataReason = "";
    if(!ok)
       dataReason = NqReasonAt(g_finalR, 0);
@@ -5404,8 +6010,12 @@ string NqTelemetryJson()
       dataReason = NqReasonName(NQ_R_STALE);
    string j = "{" + NqJsonS("system", "NQ-EA") + "," + NqJsonS("kind", "telemetry") + "," +
               NqJsonS("mode", "ANALYSIS_ONLY") + "," + NqJsonS("label", "ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL") + "," +
-              NqJsonS("source", "NRTR_QML_MetalScalper") + "," + NqJsonS("ea_version", NQ_EA_VERSION) + "," +
-              NqJsonS("symbol", g_sym) + "," + NqJsonS("metal", metal) + "," +
+              NqJsonS("source", "NRTR_QML_ForexScalper") + "," + NqJsonS("ea_version", NQ_EA_VERSION) + "," +
+              NqJsonS("symbol", g_sym) + "," + NqJsonS("asset_class", "forex") + "," + NqJsonS("pair_class", g_pairName) + "," +
+              NqJsonS("base", g_base) + "," + NqJsonS("quote", g_quote) + "," + NqJsonN("pip", g_pip, g_digits) + "," +
+              NqJsonB("specialist", InpSpecialist) + "," + NqJsonN("prof_risk", g_profRisk, 2) + "," + NqJsonN("prof_buf", g_profBuf, 2) + "," +
+              NqJsonN("prof_imp", g_profImp, 2) + "," + NqJsonN("prof_spread_atr", (InpMaxSpreadAtr > 0.0) ? InpMaxSpreadAtr : g_profSpread, 2) + "," +
+              NqJsonB("prof_radar", g_profRadar) + "," + NqJsonB("prof_scalp", g_profScalp) + "," +
               NqJsonS("account_mode", g_isDemo ? "demo" : "real") + "," + NqJsonI("magic", InpMagic) + "," +
               NqJsonI("ts_server", (long)nowS) + "," + NqJsonI("ts_gmt", (long)nowG) + "," +
               NqJsonI("server_offset_sec", (long)nowS - (long)nowG) + "," + NqJsonI("heartbeat_sec", g_telSec) + "," +
@@ -5495,7 +6105,7 @@ string NqTelemetryJson()
        NqJsonS("verdict", g_verdict) + "," + NqJsonS("near", g_nearText) + "," +
        NqJsonS("final", (g_final == NQ_BUY) ? "BUY" : ((g_final == NQ_SELL) ? "SELL" : "WAIT")) + "," +
        NqJsonS("final_reason", NqReasonAt(g_finalR, 0)) + "," + NqJsonNames("gate", g_gate, true) + "," +
-       NqJsonB("algo_trading", (g_gate & NQ_K_TRADE_DISABLED) == 0) + "," + NqJsonB("auto_scalp", InpScalpAuto) + "," +
+       NqJsonB("algo_trading", (g_gate & NQ_K_TRADE_DISABLED) == 0) + "," + NqJsonB("auto_scalp", InpScalpAuto && g_profScalp) + "," +
        NqJsonB("pending_auto", InpPendingAuto) + "," + NqJsonB("allow_real", InpAllowRealAccount) + "},";
 
    // the SCALP M1 row exactly as the board shows it
@@ -5521,7 +6131,7 @@ string NqTelemetryJson()
          sl = (reg > 0) ? NqRoundTick(entry - slD, g_tick, g_digits, -1) : NqRoundTick(entry + slD, g_tick, g_digits, 1);
          tp = (reg > 0) ? NqRoundTick(entry + tpD, g_tick, g_digits, 1) : NqRoundTick(entry - tpD, g_tick, g_digits, -1);
          if(st1 == NQ_BUY || st1 == NQ_SELL)
-            stT = "TRIGGER NOW" + (InpScalpAuto ? ((g_gate == 0) ? " - auto" : (" - " + NqGateAtX(g_gate, 0))) : " - manual");
+            stT = "TRIGGER NOW" + ((InpScalpAuto && g_profScalp) ? ((g_gate == 0) ? " - auto" : (" - " + NqGateAtX(g_gate, 0))) : (g_profScalp ? " - manual" : " - manual (no scalps on an EXOTIC)"));
          else
             stT = "WAIT: " + NqReasonAt(g_s1.reasons[n1 - 1], 0);
       }
@@ -5566,7 +6176,20 @@ string NqTelemetryJson()
    }
    j = j + "],";
 
-   // v1.9: the higher timeframes, the witnesses, the vote, the news, the week, the smart exit, the portfolio (every field observed)
+   // forex: the currencies, the witnesses, the vote, the news, the clock, the portfolio (every field observed)
+   j = j + "\"strength\":{" + NqJsonB("ok", g_strOk) + "," + NqJsonN("base", NqStrOf(g_base), 2) + "," + NqJsonN("quote", NqStrOf(g_quote), 2) + "," +
+       NqJsonN("diff", g_strDiff, 2) + "," + NqJsonI("grade", g_strGrade) + "," + NqJsonI("pairs", g_strPairs) + "," + NqJsonI("bars", InpStrengthBars) + ",\"basket\":{";
+   {
+      int shownS = 0;
+      for(int i = 0; i < g_nStr; i++)
+      {
+         if(g_strCnt[i] <= 0)
+            continue;
+         j = j + ((shownS > 0) ? "," : "") + NqJsonN(g_strCcy[i], NqStrOf(g_strCcy[i]), 2);
+         shownS++;
+      }
+   }
+   j = j + "}},";
    j = j + "\"htf\":{\"h4\":{" + NqJsonB("ok", g_h4Ok) + "," + NqJsonS("context", (g_h4Ok && g_h4.n > 0 && g_h4.emaS[g_h4.n - 1] > 0.0) ? NqContextText(g_h4.ctx[g_h4.n - 1]) : "NOT READY") + "," +
        NqJsonS("structure", (g_h4Ok && g_h4.n > 0) ? NqStructText(g_h4.st[g_h4.n - 1], g_h4.hl[g_h4.n - 1], g_h4.ll[g_h4.n - 1], g_h4.lk[g_h4.n - 1]) : "") + "," +
        NqJsonS("last_break", g_h4Ok ? NqBreakText(g_h4, g_sbH4, g_nSbH4) : "") + "," + NqJsonI("bars", g_h4Ok ? g_h4.n : 0) + "}," +
@@ -5574,8 +6197,10 @@ string NqTelemetryJson()
        NqJsonS("structure", (g_h1Ok && g_h1.n > 0) ? NqStructText(g_h1.st[g_h1.n - 1], g_h1.hl[g_h1.n - 1], g_h1.ll[g_h1.n - 1], g_h1.lk[g_h1.n - 1]) : "") + "," +
        NqJsonS("last_break", g_h1Ok ? NqBreakText(g_h1, g_sbH1, g_nSbH1) : "") + "," + NqJsonI("bars", g_h1Ok ? g_h1.n : 0) + "}," +
        "\"m5_last_break\":" + "\"" + NqJsonEsc(NqBreakText(g_s5, g_sbrk, g_nSbrk)) + "\"},";
-   j = j + "\"witnesses\":{\"dxy\":{" + NqJsonS("symbol", g_macroSym) + "," + NqJsonS("dir", (g_macroDir == 0) ? "" : NqDirText(g_macroDir)) + "}," +
-       "\"bond\":{" + NqJsonS("symbol", g_bondSym) + "," + NqJsonS("kind", g_bondYield ? "yield" : "price") + "," + NqJsonS("dir", (g_bondDir == 0) ? "" : NqDirText(g_bondDir)) + "}},";
+   j = j + "\"witnesses\":{\"oil\":{" + NqJsonS("symbol", g_oilSym) + "," + NqJsonS("dir", (g_oilDir == 0) ? "" : NqDirText(g_oilDir)) + "}," +
+       "\"gold\":{" + NqJsonS("symbol", g_goldSym) + "," + NqJsonS("dir", (g_goldDir == 0) ? "" : NqDirText(g_goldDir)) + "}," +
+       "\"bond\":{" + NqJsonS("symbol", g_bondSym) + "," + NqJsonS("kind", g_bondYield ? "yield" : "price") + "," + NqJsonS("dir", (g_bondDir == 0) ? "" : NqDirText(g_bondDir)) + "}," +
+       "\"dxy\":{" + NqJsonS("symbol", g_dxySym) + "," + NqJsonS("dir", (g_dxyDir == 0) ? "" : NqDirText(g_dxyDir)) + "}},";
    {
       string whyB = "";
       string whyS = "";
@@ -5599,9 +6224,11 @@ string NqTelemetryJson()
       }
    }
    j = j + "]},";
-   j = j + "\"session\":{" + NqJsonS("now", NqSessionName()) + "," + NqJsonB("rollover", g_rollover) + "," + NqJsonB("week_edge", g_weekEdge) + "," +
-       NqJsonS("week_text", g_weekText) + "," + NqJsonI("dow", g_dow) + "," + NqJsonS("clock", g_clkText) + "},";
-   j = j + "\"portfolio\":{" + NqJsonI("positions", g_portfolioPos) + "," + NqJsonI("max", InpMaxOpenAcrossCharts) + "},";
+   j = j + "\"session\":{" + NqJsonS("now", NqSessionName()) + "," + NqJsonS("home", NqHomeName(g_homeMask)) + "," + NqJsonB("home_open", g_homeOpen) + "," +
+       NqJsonB("home_gated", g_homeOnly) + "," + NqJsonI("tilt", NqTiltNow()) + "," + NqJsonB("tilt_gated", g_sessionTilt) + "," + NqJsonB("rollover", g_rollover) + "," +
+       NqJsonB("week_edge", g_weekEdge) + "," + NqJsonS("week_text", g_weekText) + "," + NqJsonI("dow", g_dow) + "," + NqJsonS("clock", g_clkText) + "},";
+   j = j + "\"portfolio\":{" + NqJsonI("positions", g_portfolioPos) + "," + NqJsonI("max", InpMaxOpenAcrossPairs) + "," + NqJsonS("exposure", g_expText) + "," +
+       NqJsonI("max_ccy_exposure", InpMaxCcyExposure) + "},";
    j = j + "\"smart_exit\":{" + NqJsonB("on", g_smartExit) + "," + NqJsonN("flip_profit_r", InpSmartFlipProfitR, 2) + "," + NqJsonB("flip_cut_loss", InpSmartFlipCutLoss) + "," +
        NqJsonN("m1_profit_r", InpSmartM1ProfitR, 2) + "," + NqJsonN("lock_at_r", InpSmartLockAtR, 2) + "," + NqJsonN("lock_r", InpSmartLockR, 2) + "," + NqJsonS("last", g_smartNote) + "},";
    // the account as the EA sees it (this magic, this symbol) - no identity, no credentials
@@ -5775,7 +6402,7 @@ void NqEmitBroker(string comment, string event, string extra)
 //+------------------------------------------------------------------+
 void NqTrade()
 {
-   if(g_metal == NQ_METAL_NONE || !g_ready)
+   if(g_pair == NQ_PAIR_NONE || !g_ready)
       return;
    int n1 = g_s1.n;
    int n5 = g_s5.n;
@@ -6010,13 +6637,27 @@ void NqTrade()
                g_note = NqPlanKindText(pl.kind) + ": PRICE ALREADY PAST THE LEVEL - NOT PLACED";
                continue;
             }
-            // MACRO VOTE (every plan kind): the dollar index, the bond, the news, H4 / H1. A strong vote AGAINST
-            // the plan's direction is a block, unless the metal's OWN structure is A+
+            // MACRO VOTE (every plan kind): currency strength + the witnesses that speak for one of the pair's
+            // currencies. A strong vote AGAINST the plan's direction is a block, unless the pair's OWN structure is A+
             int rdScore = (pl.dir > 0) ? g_rdUp.score : g_rdDn.score;
             string mwhy = "";
             if(NqMacroBlocks(pl.dir, rdScore, isStop, mwhy))
             {
                g_note = NqPlanKindText(pl.kind) + ": " + mwhy;
+               continue;
+            }
+            // SESSION TILT: against the session's lean only with strong confirmation
+            string twhy = "";
+            if(NqTiltBlocks(pl.dir, rdScore, isStop, pl.kind, twhy))
+            {
+               g_note = NqPlanKindText(pl.kind) + ": " + twhy;
+               continue;
+            }
+            // PORTFOLIO: the same currency already carried this way on other charts (same magic) is one bet taken twice
+            string ewhy = "";
+            if(NqExposureBlocks(pl.dir, ewhy))
+            {
+               g_note = NqPlanKindText(pl.kind) + ": " + ewhy;
                continue;
             }
             // volatility EXPANSION: a breakout needs stronger confirmation
@@ -6044,7 +6685,7 @@ void NqTrade()
 
    // 4) scalp entry on a fresh trigger (the just-closed M1 candle): lowest
    //    priority - never while a plan order is waiting for its level
-   if(!g_fresh || !InpScalpAuto)
+   if(!g_fresh || !InpScalpAuto || !g_profScalp)
       return;
    int st = g_s1.state[n1 - 1];
    if(st != NQ_BUY && st != NQ_SELL)
@@ -6089,6 +6730,18 @@ void NqTrade()
    if(NqMacroBlocks(st, 0, false, mwhy))
    {
       g_note = "SCALP TRIGGER " + sideT + " - " + mwhy;
+      return;
+   }
+   string twhy = "";
+   if(NqTiltBlocks(st, 0, false, NQ_PLAN_SCALP, twhy))
+   {
+      g_note = "SCALP TRIGGER " + sideT + " - " + twhy;
+      return;
+   }
+   string ewhy = "";
+   if(NqExposureBlocks(st, ewhy))
+   {
+      g_note = "SCALP TRIGGER " + sideT + " - " + ewhy;
       return;
    }
    double entry = (st > 0) ? SymbolInfoDouble(g_sym, SYMBOL_ASK) : SymbolInfoDouble(g_sym, SYMBOL_BID);
@@ -6625,7 +7278,7 @@ void NqDrawPanel()
    int kOff = (int)MathRound(8 * sc);
    int vOff = (int)MathRound(122 * sc);
    int bannerH = (int)MathRound(38 * sc);
-   int rowsTop = 12;
+   int rowsTop = 15;
    // compact board: an empty plan slot is one line, broker rows only as many as there are (at least one)
    int slotLines = 0;
    for(int q = 0; q < NQ_PLAN_SLOTS; q++)
@@ -6651,7 +7304,11 @@ void NqDrawPanel()
 
    color cBg = NQ_RGB(16, 20, 28);
    color cTbl = NQ_RGB(22, 27, 37);
-   color cMetal = (g_metal == NQ_METAL_SILVER) ? NQ_RGB(200, 206, 214) : NQ_RGB(212, 175, 55);
+   color cMetal = NQ_RGB(80, 200, 255);           // MAJOR: sky blue
+   if(g_pair == NQ_PAIR_CROSS)
+      cMetal = NQ_RGB(190, 140, 255);
+   if(g_pair == NQ_PAIR_EXOTIC)
+      cMetal = NQ_RGB(255, 170, 60);
    color cKey = NQ_RGB(140, 150, 165);
    color cVal = NQ_RGB(235, 238, 242);
    color cUp = NQ_RGB(46, 204, 113);
@@ -6674,7 +7331,7 @@ void NqDrawPanel()
    else if(ObjectFind(0, NQ_PFX_P + "bgI") >= 0)
       ObjectsDeleteAll(0, NQ_PFX_P + "bgI");
 
-   bool ok = (g_metal != NQ_METAL_NONE && g_ready && g_s15.n > 0 && g_s5.n > 0 && g_s1.n > 0);
+   bool ok = (g_pair != NQ_PAIR_NONE && g_ready && g_s15.n > 0 && g_s5.n > 0 && g_s1.n > 0);
    int i15 = ok ? g_s15.n - 1 : 0;
    int i5 = ok ? g_s5.n - 1 : 0;
    int i1 = ok ? g_s1.n - 1 : 0;
@@ -6682,11 +7339,9 @@ void NqDrawPanel()
 
    // title + price line (+ M1 candle countdown)
    int y = oy + pad;
-   string title = "NRTR QML METAL SCALPER";
-   if(g_metal == NQ_METAL_GOLD)
-      title = "GOLD  -  NRTR QML SCALPER";
-   if(g_metal == NQ_METAL_SILVER)
-      title = "SILVER  -  NRTR QML SCALPER";
+   string title = "NRTR QML FOREX SCALPER";
+   if(g_pair != NQ_PAIR_NONE)
+      title = g_base + "/" + g_quote + " " + g_pairName + "  -  NRTR QML FOREX SCALPER";
    title = title + "   v" + NQ_EA_VERSION;   // the build on the chart, so the real file is recognisable
    title = title + (boardOpen ? "   (click: fold)" : "   (click: unfold)");
    NqLabel("title", ox + pad, y, title, cMetal, fsT, "Arial Black", ANCHOR_LEFT_UPPER);
@@ -6703,9 +7358,9 @@ void NqDrawPanel()
    // banner = THE VERDICT (what to do now)
    string st = g_verdict;
    color bc = g_verdictClr;
-   if(g_metal == NQ_METAL_NONE)
+   if(g_pair == NQ_PAIR_NONE)
    {
-      st = NqSymDot() + "  GOLD / SILVER ONLY";
+      st = NqSymDot() + "  FOREX ONLY  (a currency pair: EURUSD, GBPJPY, USDTRY ... - or set InpPairClass)";
       bc = cWait;
    }
    else if((g_gate & NQ_K_REAL_ACCOUNT) != 0)
@@ -6725,7 +7380,7 @@ void NqDrawPanel()
    // reasons
    string r1 = "";
    string r2 = "";
-   if(g_metal == NQ_METAL_NONE)
+   if(g_pair == NQ_PAIR_NONE)
       r1 = NqReasonName(NQ_R_UNSUPPORTED);
    else if(!ok)
       r1 = NqReasonAt(g_finalR, 0);
@@ -6779,7 +7434,16 @@ void NqDrawPanel()
       }
       ctxT = NqContextText(ctx) + "  (NRTR " + NqDirText(g_s15.dir[i15]) + ", " + emaSide + ")";
    }
-   // ---- v1.9 rows: the higher timeframes, the macro vote, the news, the week ----
+   // ---- forex rows: the pair, the currencies, the macro vote, the news, the clock ----
+   double pipValue = (g_tick > 0.0) ? g_pip / g_tick * g_tickValue : 0.0;
+   double sprPips = (g_pip > 0.0) ? g_spreadPts * g_point / g_pip : 0.0;
+   int capPts = NqMaxSpreadPts();
+   string capT = (capPts > 0) ? (DoubleToString(capPts * g_point / g_pip, 1) + ((InpMaxSpreadPips > 0.0) ? " pips cap" : (" (" + DoubleToString((InpMaxSpreadAtr > 0.0) ? InpMaxSpreadAtr : g_profSpread, 2) + " ATR)"))) : "cap n/a";
+   string profT = g_pairName + "  " + g_base + "/" + g_quote + (InpSpecialist ? "" : " (profile off)") + "   pip " + DoubleToString(g_pip, g_digits) + " = " +
+                  DoubleToString(pipValue, 2) + " " + g_accCcy + "/lot   risk x" + DoubleToString(g_profRisk, 2) + "   SL buf x" + DoubleToString(g_profBuf, 2) +
+                  "   spread " + DoubleToString(sprPips, 1) + " pips <= " + capT + (g_profRadar ? "" : "   radar off") + (g_profScalp ? "" : "   scalp off");
+   NqRow("e0p", kx, vx, yr, "PAIR PROFILE", profT, (g_pair == NQ_PAIR_NONE) ? cDim : cMetal, cKey, fs);
+   yr += rh;
    string htfT = "---";
    color htfC = cDim;
    if(ok)
@@ -6791,6 +7455,26 @@ void NqDrawPanel()
    }
    NqRow("e0t", kx, vx, yr, "H4 / H1", htfT, htfC, cKey, fs);
    yr += rh;
+   string strT = "---";
+   color strC = cDim;
+   if(g_strOk)
+   {
+      strT = g_base + " " + ((NqStrOf(g_base) >= 0.0) ? "+" : "") + DoubleToString(NqStrOf(g_base), 2) + "  " + g_quote + " " + ((NqStrOf(g_quote) >= 0.0) ? "+" : "") +
+             DoubleToString(NqStrOf(g_quote), 2) + "  diff " + ((g_strDiff >= 0.0) ? "+" : "") + DoubleToString(g_strDiff, 2) + " " +
+             ((g_strGrade == 2) ? "STRONG" : ((g_strGrade == 1) ? "WEAK" : "FLAT")) + "  (" + IntegerToString(g_strPairs) + " pairs, " +
+             IntegerToString(InpStrengthBars) + " M15 bars, ATR units)   basket:";
+      for(int i = 0; i < g_nStr; i++)
+      {
+         if(g_strCnt[i] <= 0 || g_strCcy[i] == g_base || g_strCcy[i] == g_quote)
+            continue;
+         strT = strT + " " + g_strCcy[i] + ((NqStrOf(g_strCcy[i]) >= 0.0) ? "+" : "") + DoubleToString(NqStrOf(g_strCcy[i]), 1);
+      }
+      strC = (g_strGrade == 0) ? cVal : ((g_strDir > 0) ? cUp : cDn);
+   }
+   else if(ok)
+      strT = "NO DATA - the broker serves " + IntegerToString(g_strPairs) + " of the USD majors in this spelling (" + NqSpell("GBPUSD") + " ...)";
+   NqRow("e0s", kx, vx, yr, "STRENGTH", strT, strC, cKey, fs);
+   yr += rh;
    string macT = "---";
    color macC = cDim;
    if(ok)
@@ -6799,8 +7483,11 @@ void NqDrawPanel()
       string whyS = "";
       int vb = NqMacroVote(1, whyB);
       int vs = NqMacroVote(-1, whyS);
-      string wit = "   DXY " + ((g_macroSym == "") ? "-" : (g_macroSym + " " + ((g_macroDir == 0) ? "NO DATA" : NqDirText(g_macroDir)))) +
-                   "   " + (g_bondYield ? "yield " : "bond ") + ((g_bondSym == "") ? "-" : (g_bondSym + " " + ((g_bondDir == 0) ? "NO DATA" : NqDirText(g_bondDir))));
+      string wit = "";
+      wit = wit + "   oil " + ((g_oilSym == "") ? "-" : (g_oilSym + " " + ((g_oilDir == 0) ? "NO DATA" : NqDirText(g_oilDir))));
+      wit = wit + "   gold " + ((g_goldSym == "") ? "-" : (g_goldSym + " " + ((g_goldDir == 0) ? "NO DATA" : NqDirText(g_goldDir))));
+      wit = wit + "   " + (g_bondYield ? "yield " : "bond ") + ((g_bondSym == "") ? "-" : (g_bondSym + " " + ((g_bondDir == 0) ? "NO DATA" : NqDirText(g_bondDir))));
+      wit = wit + "   DXY " + ((g_dxySym == "") ? "-" : (g_dxySym + " " + ((g_dxyDir == 0) ? "NO DATA" : NqDirText(g_dxyDir))));
       macT = "vote BUY ";
       macT = macT + ((vb >= 0) ? "+" : "") + IntegerToString(vb) + " / SELL " + ((vs >= 0) ? "+" : "") + IntegerToString(vs) +
              (g_macroGate ? ("  (blocks at -" + IntegerToString(InpMacroBlockLevel) + ", A+ structure overrides)") : "  (gate off)") +
@@ -6811,14 +7498,19 @@ void NqDrawPanel()
    yr += rh;
    string newsT = (g_newsText == "") ? "---" : g_newsText;
    color newsC = g_newsBlock ? cBlock : (g_newsUnknown ? (g_newsUnknownBlocks ? cBlock : cWait) : cVal);
-   NqRow("e0n", kx, vx, yr, "NEWS (USD)", newsT, newsC, cKey, fs);
+   NqRow("e0n", kx, vx, yr, "NEWS", newsT, newsC, cKey, fs);
    yr += rh;
-   string wkT = NqSessionName() + "   rollover " + IntegerToString(g_clk.roll / 60, 2, '0') + ":" + IntegerToString(g_clk.roll % 60, 2, '0') + (g_rollover ? " NOW" : "") +
-                ((g_weekText == "") ? "   week open" : ("   " + g_weekText)) + (g_clockGuards ? "" : " (guards off)") +
-                ((g_portfolioPos > 0) ? ("   portfolio " + IntegerToString(g_portfolioPos) + " pos (max " + IntegerToString(InpMaxOpenAcrossCharts) + ")") : "") +
-                ((g_smartNote == "") ? "" : ("   last: " + g_smartNote));
-   color wkC = (g_weekEdge || g_rollover || g_portfolioFull) ? cBlock : cVal;
-   NqRow("e0h", kx, vx, yr, "WEEK / SMART", wkT, wkC, cKey, fs);
+   string sesT = NqSessionName() + "  home " + NqHomeName(g_homeMask) + (g_homeOpen ? " OPEN" : " CLOSED") + (g_homeOnly ? "" : " (not gated)") +
+                 "   tilt " + ((NqTiltNow() > 0) ? "BUY" : ((NqTiltNow() < 0) ? "SELL" : "none")) + (g_sessionTilt ? "" : " (off)") +
+                 "   NY " + IntegerToString(g_clk.nyS / 60, 2, '0') + ":" + IntegerToString(g_clk.nyS % 60, 2, '0') + "-" + IntegerToString(g_clk.nyE / 60, 2, '0') + ":" +
+                 IntegerToString(g_clk.nyE % 60, 2, '0') + "  London " + IntegerToString(g_clk.lonS / 60, 2, '0') + ":" + IntegerToString(g_clk.lonS % 60, 2, '0') +
+                 "  Asia " + IntegerToString(g_clk.asiaS0 / 60, 2, '0') + ":" + IntegerToString(g_clk.asiaS0 % 60, 2, '0') +
+                 "  rollover " + IntegerToString((g_clkAuto ? g_clk.roll : InpRolloverHour * 60) / 60, 2, '0') + ":" + IntegerToString((g_clkAuto ? g_clk.roll : InpRolloverHour * 60) % 60, 2, '0') +
+                 (g_rollover ? " NOW" : "") + "   " + g_clkText + ((g_weekText == "") ? "" : ("   " + g_weekText)) +
+                 ((g_portfolioPos > 0) ? ("   portfolio " + IntegerToString(g_portfolioPos) + " pos " + g_expText) : "") +
+                 ((g_smartNote == "") ? "" : ("   last: " + g_smartNote));
+   color sesC = (g_weekEdge || g_rollover || (g_homeOnly && !g_homeOpen)) ? cBlock : cVal;
+   NqRow("e0h", kx, vx, yr, "SESSION", sesT, sesC, cKey, fs);
    yr += rh;
    string volT = "---";
    color volC = cDim;
@@ -6999,7 +7691,7 @@ void NqDrawPanel()
             armed++;
       }
       act = act + "FREE  " + IntegerToString(armed) + " armed, " + IntegerToString(g_pendCount) +
-            " waiting - the first fill takes it" + ((InpScalpAuto && g_pendCount == 0) ? ", scalp may fire" : "");
+            " waiting - the first fill takes it" + ((InpScalpAuto && g_profScalp && g_pendCount == 0) ? ", scalp may fire" : "");
       actC = (armed > 0) ? cUp : cWait;
    }
    if(g_manualPos + g_manualOrd > 0)
@@ -7282,7 +7974,7 @@ void NqDrawPanel()
             vD = "live";
             if(st1 == NQ_BUY || st1 == NQ_SELL)
             {
-               stT = "TRIGGER NOW" + (InpScalpAuto ? ((g_gate == 0) ? " - auto" : (" - " + NqGateAtX(g_gate, 0))) : " - manual");
+               stT = "TRIGGER NOW" + ((InpScalpAuto && g_profScalp) ? ((g_gate == 0) ? " - auto" : (" - " + NqGateAtX(g_gate, 0))) : (g_profScalp ? " - manual" : " - manual (no scalps on an EXOTIC)"));
                cSt = (g_gate == 0 || !InpScalpAuto) ? cUp : cBlock;
             }
             else
@@ -7419,7 +8111,7 @@ void NqDrawPanel()
    NqLabel("bf2", kx, yr, accT + " " + g_accCcy + "  bal " + DoubleToString(g_balance, 2) +
            "  risk " + DoubleToString(InpRiskPct, 2) + "%=" + DoubleToString(g_riskMoney, 2) + "  day " + DoubleToString(g_dayPnl, 2) +
            "/" + DoubleToString(g_floating, 2) + "  cap " + ((g_capMoney > 0.0) ? ("-" + DoubleToString(g_capMoney, 2)) : "off") +
-           "  scalp " + (InpScalpAuto ? "auto" : "off") + "  UPDATE " + TimeToString(nowS, TIME_SECONDS), cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
+           "  scalp " + ((InpScalpAuto && g_profScalp) ? "auto" : "off") + "  UPDATE " + TimeToString(nowS, TIME_SECONDS), cVal, fsH, "Arial", ANCHOR_LEFT_UPPER);
    y += tBotH + 4;
 
    NqLabel("f1", ox + pad, y, "Closed candles only. One slot per asset. Own orders only. Last " + g_lastTrade,

@@ -19,7 +19,7 @@ static void begin(const char *n) { g_sec = g_fail; std::printf("[ RUN  ] %s\n", 
 static void end(const char *n) { std::printf("[ %s ] %s\n", g_fail == g_sec ? " OK " : "FAIL", n); }
 static bool near(double a, double b, double eps = 1e-9) { return std::fabs(a - b) <= eps; }
 
-static const long long T0 = 1788220800LL;   // 2026-08-31 00:00 UTC (a Monday)
+static const long long T0 = 1788220800LL;   // 2026-09-01 00:00 UTC (a Tuesday)
 
 static std::vector<MqlRates> toRates(const std::vector<SBar> &v)
 {
@@ -96,6 +96,14 @@ static std::string lbl(const char *id)
    }
    return s;
 }
+// the v1.9 gates off, so the engine's own behaviour is checked as before (the M sections test them)
+static void relax()
+{
+   g_clockGuards = false;
+   g_macroGate = false;
+   g_smartExit = false;
+   NqUpdate();
+}
 static int countSent(int action, bool openingOnly)
 {
    int n = 0;
@@ -115,6 +123,7 @@ int main()
    {
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       CHECK(startAt(START) == INIT_SUCCEEDED, "init");
+      relax();
       CHECK(g_metal == NQ_METAL_GOLD && g_isDemo, "gold, demo");
       run(START + 1, END);
       int market = 0, bad = 0, lotBad = 0;
@@ -178,6 +187,7 @@ int main()
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       const size_t START2 = 1440 + 17;   // five days: enough plans to see fills
       startAt(START2);
+      relax();
       int placed = 0, bad = 0, cancels = 0, wrongCancel = 0, twice = 0, overRisk = 0, radarBad = 0;
       std::set<std::string> seen;
       double maxBal = SIM.balance;
@@ -268,6 +278,7 @@ int main()
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       SIM.accountMode = ACCOUNT_TRADE_MODE_REAL;
       startAt(START);
+      relax();
       run(START + 1, END);
       CHECK(!SIM.sent.empty(), "orders are sent on a real account");
       CHECK(lbl("bf2").find("REAL") == 0, "footer shows REAL");
@@ -277,6 +288,7 @@ int main()
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       SIM.terminalTrade = false;
       startAt(START);
+      relax();
       run(START + 1, START + 400);
       CHECK(SIM.sent.empty(), "Algo Trading off: nothing sent");
       CHECK(lbl("state").find("MANUAL:") == 0 && lbl("r1").find("ALGO TRADING OFF") != std::string::npos, "banner verdict is prefixed MANUAL: and the reason line says ALGO TRADING OFF");
@@ -285,6 +297,7 @@ int main()
       // manual (foreign magic) order and position on the symbol: counted, shown, never touched
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       startAt(START);
+      relax();
       SimPos mp;
       mp.ticket = 9001; mp.sym = "XAUUSD"; mp.type = POSITION_TYPE_SELL; mp.vol = 0.30; mp.open = SIM.bid; mp.sl = 0; mp.tp = 0;
       mp.time = SIM.now; mp.magic = 0; mp.comment = "manual";
@@ -311,6 +324,7 @@ int main()
    {
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       startAt(START);
+      relax();
       run(START + 1, START + 200);
       // inject a losing day: one closed deal of -2% today with our magic
       SimDeal d;
@@ -356,6 +370,7 @@ int main()
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       SIM.spreadPts = 500;
       startAt(START);
+      relax();
       run(START + 1, END);
       CHECK(countSent(TRADE_ACTION_DEAL, true) == 0 && countSent(TRADE_ACTION_PENDING, true) == 0, "spread 500 > 50: no entries");
       CHECK((g_gate & NQ_K_SPREAD) != 0, "gate: spread");
@@ -363,6 +378,7 @@ int main()
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       SIM.terminalTrade = false;
       startAt(START);
+      relax();
       run(START + 1, END);
       CHECK(countSent(TRADE_ACTION_DEAL, true) == 0 && countSent(TRADE_ACTION_PENDING, true) == 0, "autotrading off: no entries");
    }
@@ -372,6 +388,7 @@ int main()
    {
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       startAt(START);
+      relax();
       // walk until the M5 regime is BULL or BEAR, then plant an opposite scalp
       size_t i = START + 1;
       int reg = 0;
@@ -411,6 +428,7 @@ int main()
    {
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       startAt(START);
+      relax();
       run(START + 1, START + 900);
       std::vector<NqPlan> plans = g_plans;
       std::vector<NqSignal> sigs = g_sigs;
@@ -420,6 +438,7 @@ int main()
       OnDeinit(0);
       CHECK(SIM.objs.empty(), "deinit removes every object");
       CHECK(OnInit() == INIT_SUCCEEDED, "re-init");
+      relax();
       CHECK(g_nPlans == nPl && g_nSig == nSg, "same number of plans and signals");
       bool same = true;
       for(int k = 0; k < nPl; k++)
@@ -457,6 +476,7 @@ int main()
    {
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       startAt(START);
+      relax();
       run(START + 1, START + 300);
       size_t sent = SIM.sent.size();
       // the feed freezes: no bar after the current one, and two hours pass
@@ -471,6 +491,7 @@ int main()
 
       load(gold, "EURUSD", "EUR", 5, 0.00001, 1.0);
       startAt(START);
+      relax();
       run(START + 1, START + 300);
       CHECK(SIM.sent.empty() && lbl("state").find("GOLD / SILVER ONLY") != std::string::npos, "EURUSD: no trading, panel says so");
    }
@@ -480,6 +501,7 @@ int main()
    {
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       startAt(START);
+      relax();
       run(START + 1, START + 400);
       std::map<std::string, long long> before;
       int arrows = 0;
@@ -523,6 +545,7 @@ int main()
    {
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       startAt(START);
+      relax();
       run(START + 1, START + 300);
       CHECK(lbl("title").find("NRTR QML") != std::string::npos && lbl("title").find(std::string("v") + NQ_EA_VERSION) != std::string::npos,
             "the title names the build (v" NQ_EA_VERSION ") so the file on the chart is recognisable");
@@ -539,12 +562,19 @@ int main()
          if(v.empty() || v == "<missing>") empty++;
       }
       std::printf("    %d rows\n", rows);
-      CHECK(rows == 8, "8 engine rows (VOL REGIME + the 7 engine rows)");
+      CHECK(rows == 12, "12 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, VOL REGIME + the 7 engine rows)");
       CHECK(dup == 0, "no key twice");
       CHECK(empty == 0, "every row has a value");
       CHECK(lbl("h1").find("ENGINE") != std::string::npos && lbl("h2").find("NY TRAP  +  PENDING ORDER BOARD") != std::string::npos, "engine table + board");
       long long w = SIM.objs["NQEA_P_bg"].i[OBJPROP_XSIZE];
       CHECK(w < 800, "single column");
+      // SPLIT layout (default): the information desk sits in its own block at the bottom middle, the board top-left
+      // (the simulated chart is 1400 x 900: the desk sits at the bottom edge, centred; on a short chart it may overlap the board)
+      CHECK(SIM.objs.count("NQEA_P_bgI") == 1 && SIM.objs["NQEA_P_bgI"].i[OBJPROP_XDISTANCE] > 100 &&
+            SIM.objs["NQEA_P_bgI"].i[OBJPROP_YDISTANCE] + SIM.objs["NQEA_P_bgI"].i[OBJPROP_YSIZE] <= 900 &&
+            SIM.objs["NQEA_P_t1"].i[OBJPROP_YDISTANCE] > SIM.objs["NQEA_P_bgI"].i[OBJPROP_YDISTANCE] &&
+            SIM.objs["NQEA_P_t1"].i[OBJPROP_YDISTANCE] > SIM.objs["NQEA_P_t2"].i[OBJPROP_YDISTANCE] && lbl("h1").find("INFORMATION DESK") == 0,
+            "SPLIT: the INFORMATION DESK block is centred at the bottom edge with the engine table inside it, under the trading board's table");
       // the board: 5 plan rows with 7 columns + a detail line, 6 broker rows, NY lines, footer
       bool boardOk = true;
       const char *types[7] = {"QML M5", "PULLBACK M5", "NY TRAP", "SWING QML", "SWING PB", "RADAR UP", "RADAR DOWN"};
@@ -553,9 +583,10 @@ int main()
          std::string id = "bp" + std::to_string(q);
          if(lbl((id + "0").c_str()) != types[q]) boardOk = false;
          for(int c = 1; c <= 6; c++) if(lbl((id + std::to_string(c)).c_str()) == "<missing>") boardOk = false;
-         if(lbl((id + "d").c_str()) == "<missing>") boardOk = false;
+         NqPlan plq;
+         if(NqSlotPlan(q, plq) && lbl((id + "d").c_str()) == "<missing>") boardOk = false;   // compact: the detail line only for a slot that holds a plan
       }
-      for(int i = 0; i < 6; i++) if(lbl(("bb" + std::to_string(i) + "0").c_str()) == "<missing>") boardOk = false;
+      if(lbl("bb00") == "<missing>") boardOk = false;
       CHECK(boardOk, "board rows: TYPE SIDE ENTRY SL TP DIST STATUS for 5 plan slots + 6 broker rows");
       // the scalp row is always there with live levels
       {
@@ -633,6 +664,7 @@ int main()
    {
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       startAt(START);
+      relax();
       size_t i = START + 1;
       int reg = 0;
       for(; i <= END; i++) { stepTo(i); reg = g_s5.regime[g_s5.n - 1]; if(reg != NQ_REG_CHOP) break; }
@@ -686,6 +718,10 @@ int main()
    {
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       startAt(START);
+      relax();
+      CHECK(std::string(InpSignalMeshUrl).find("https://app.signalmesh.dev/webhooks/") == 0 && std::string(InpTelemetryUrl).find("https://app.signalmesh.dev/webhooks/") == 0 &&
+            std::string(InpSignalMeshSecret).empty() && g_webUrl.empty() && g_telUrl.empty(),
+            "the SignalMesh addresses are preset, but without the secret both doors are OFF: nothing is ever posted blind");
       g_webUrl = "https://status.example/webhooks/brain/signal";
       g_webSecret = "s3cr3t-token";
       run(START + 1, END);
@@ -784,6 +820,7 @@ int main()
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       SIM.gmtOffsetSec = 3 * 3600;
       startAt(START);
+      relax();
       g_webUrl = "";                                   // journal off: every POST below is telemetry
       g_telUrl = "https://status.example/webhooks/metal/telemetry";
       g_telSec = 60;
@@ -819,9 +856,9 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.7.3\"",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.9.4\"", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
                            "\"symbol\":\"XAUUSD\"", "\"metal\":\"GOLD\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
-                           "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
+                           "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"clock\":\"AUTO\"", "\"clock_offset_min\":180", "\"ny_dst\":true", "\"ny_open_min\":990", "\"london_open_min\":600", "\"asia_open_min\":60", "\"rollover_min\":0", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
                            "\"m5\":{\"regime\":\"", "\"structure\":\"", "\"structure_state\":\"", "\"lookback\":3", "\"reasons\":[",
                            "\"m1\":{\"nrtr_dir\":\"", "\"trigger\":\"", "\"forecast_next\":\"", "\"forecast_resolved\":",
@@ -849,6 +886,7 @@ int main()
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       SIM.accountMode = ACCOUNT_TRADE_MODE_REAL;
       startAt(START);
+      relax();
       g_webUrl = "";
       g_telUrl = "https://status.example/webhooks/metal/telemetry";
       g_telSec = 60;
@@ -864,7 +902,7 @@ int main()
       CHECK(SIM.web.size() > b3 && SIM.web.back().body.find("\"account_mode\":\"real\"") != std::string::npos,
             "with demo-only off the snapshot says account_mode real, so the page can flag it");
       SIM.accountMode = ACCOUNT_TRADE_MODE_DEMO;
-      SIM.gmtOffsetSec = 0;
+      SIM.gmtOffsetSec = 3 * 3600;
       g_telUrl = "";
       g_telDemoOnly = true;
    }
@@ -874,6 +912,7 @@ int main()
    {
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       startAt(START);
+      relax();
       run(START + 1, START + 30);
       CHECK(g_volClass != NQ_VOL_UNKNOWN && g_volRatio > 0.0 && g_volAvg > 0.0, "a class is assigned once the 24h average exists");
       CHECK(lbl("k_e0v") == "VOL REGIME" && lbl("v_e0v").find("ATR5") != std::string::npos, "the VOL REGIME row shows the ratio");
@@ -913,6 +952,7 @@ int main()
    {
       load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
       startAt(START);
+      relax();
       run(START + 1, START + 30);
       CHECK(g_volAvg > 0.0 && g_spikeDir == 0, "a quiet synthetic market: no spike");
       int n5 = g_s5.n;
@@ -985,6 +1025,7 @@ int main()
       Market silver = makeMarket(5, 60.9, 0.001, 0.006, (int)DAYS);
       load(silver, "XAGUSD", "XAG", 3, 0.001, 5.0);
       startAt(START);
+      relax();
       run(START + 1, END);
       int market = 0, bad = 0;
       for(const MqlTradeRequest &r : SIM.sent)
@@ -1002,6 +1043,7 @@ int main()
       load(silver, "XAGUSD", "XAG", 3, 0.001, 5.0);
       SIM.rejectAll = true;
       startAt(START);
+      relax();
       run(START + 1, END);
       int rejects = 0;
       for(const std::string &l : SIM.log) if(l.find("REJECTED") != std::string::npos) rejects++;
@@ -1012,6 +1054,466 @@ int main()
       CHECK(rejects > 0 && dupScalp == 0, "rejections are logged and a rejected scalp is not re-sent for the same trigger");
    }
    end("A10");
+
+
+   // ======================= v1.9: the metal's macro / news / smart-exit layer =======================
+   begin("M1 news guard (USD): the MT5 calendar closes the gate around HIGH USD events, pulls resting orders, banks profit; UNKNOWN is not clear");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      relax();
+      CHECK(g_newsOk && !g_newsBlock && !g_newsUnknown && lbl("v_e0n").find("clear") == 0 && (g_gate & (NQ_K_NEWS | NQ_K_NEWS_UNKNOWN)) == 0,
+            "a working calendar with no HIGH event: CLEAR, nothing gated");
+      simAddEvent("USD", SIM.now + 20 * 60, CALENDAR_IMPORTANCE_HIGH, "Initial Jobless Claims");
+      SimOrder so;
+      so.ticket = 7001; so.sym = "XAUUSD"; so.type = ORDER_TYPE_BUY_LIMIT; so.vol = 0.10; so.price = SIM.bid - 2.0; so.sl = SIM.bid - 3.0; so.tp = SIM.bid - 1.0;
+      so.time = SIM.now; so.magic = InpMagic; so.comment = "NQ-Q1";
+      SIM.ord.push_back(so);
+      stepTo(START + 1);
+      CHECK(g_nEv >= 1 && g_newsBlock && (g_gate & NQ_K_NEWS) != 0 && g_newsWhy.find("USD Initial Jobless Claims") == 0 && lbl("v_e0n").find("GUARD") == 0,
+            "a HIGH USD event 20 min ahead: NEWS GUARD, the gate names the event");
+      bool pulled = true;
+      for(const SimOrder &o : SIM.ord) if(o.ticket == 7001) pulled = false;
+      bool said = false;
+      for(const std::string &l : SIM.log) if(l.find("NEWS GUARD: resting orders are pulled") != std::string::npos) said = true;
+      CHECK(pulled && said, "the resting order was pulled with the reason");
+      SIM.cal.clear();
+      simAddEvent("GBP", SIM.now + 10 * 60, CALENDAR_IMPORTANCE_HIGH, "BoE Rate Decision");
+      simAddEvent("EUR", SIM.now + 10 * 60, CALENDAR_IMPORTANCE_HIGH, "ECB Press Conference");
+      stepTo(START + 2);
+      CHECK(!g_newsBlock, "GBP and EUR events are not the metal's business: its news is the dollar's");
+      simAddEvent("USD", SIM.now + 10 * 60, CALENDAR_IMPORTANCE_HIGH, "FOMC Press Conference");
+      stepTo(START + 3);
+      CHECK(g_newsBlock && g_newsWhy.find("USD FOMC Press Conference") == 0 && g_newsWhy.find("TOP TIER") != std::string::npos, "a USD presser counts and is TOP TIER");
+      SIM.cal.clear();
+      simAddEvent("USD", SIM.now + 50 * 60, CALENDAR_IMPORTANCE_HIGH, "Factory Orders");
+      stepTo(START + 4);
+      CHECK(!g_newsBlock && lbl("v_e0n").find("next HIGH USD Factory Orders") != std::string::npos, "a plain HIGH event 50 min away is outside the 30-min window; the row names it next");
+      SIM.cal.clear();
+      simAddEvent("USD", SIM.now + 50 * 60, CALENDAR_IMPORTANCE_HIGH, "FOMC Rate Decision");
+      stepTo(START + 5);
+      CHECK(g_newsBlock && g_newsWhy.find("TOP TIER") != std::string::npos, "FOMC 50 min away is inside the 60-min TOP TIER window");
+      SIM.cal.clear();
+      simAddEvent("USD", SIM.now + 10 * 60, CALENDAR_IMPORTANCE_MODERATE, "Consumer Credit");
+      stepTo(START + 6);
+      CHECK(!g_newsBlock, "a MODERATE event does not gate by default");
+      g_newsMediumBlocks = true;
+      NqNewsState();
+      CHECK(g_newsBlock, "InpNewsMediumBlocks: it does");
+      g_newsMediumBlocks = false;
+      SIM.cal.clear();
+      simAddEvent("USD", SIM.now - 40 * 60, CALENDAR_IMPORTANCE_HIGH, "Factory Orders");
+      stepTo(START + 7);
+      CHECK(!g_newsBlock, "40 min after a HIGH release: the window (30 min after) has closed");
+      SIM.cal.clear();
+      simAddEvent("USD", SIM.now - 20 * 60, CALENDAR_IMPORTANCE_HIGH, "Factory Orders");
+      stepTo(START + 8);
+      CHECK(g_newsBlock && g_newsWhy.find("ago") != std::string::npos, "20 min after: still inside");
+      // the calendar's own reading of a release votes for its currency for InpNewsVoteHours
+      SIM.cal.clear();
+      simAddEvent("USD", SIM.now - 3600, CALENDAR_IMPORTANCE_HIGH, "Nonfarm Payrolls", CALENDAR_IMPACT_POSITIVE, true);
+      stepTo(START + 9);
+      std::string w;
+      CHECK(NqNewsVote(1, w) == -1 && NqNewsVote(-1, w) == 1 && lbl("v_e0n").find("released 4h: USD Nonfarm Payrolls POSITIVE") != std::string::npos,
+            "USD POSITIVE 1 h ago = dollar up = metal down: -1 for a BUY, +1 for a SELL; the row shows it");
+      simAddEvent("USD", SIM.now - 2 * 3600, CALENDAR_IMPORTANCE_HIGH, "Unemployment Rate", CALENDAR_IMPACT_NEGATIVE, true);
+      stepTo(START + 10);
+      w = "";
+      CHECK(NqNewsVote(1, w) == 0 && w.find("POSITIVE") != std::string::npos && w.find("NEGATIVE") != std::string::npos, "a USD NEGATIVE release 2 h ago cancels it: one vote each");
+      SIM.cal.clear();
+      simAddEvent("USD", SIM.now - 5 * 3600, CALENDAR_IMPORTANCE_HIGH, "Old release", CALENDAR_IMPACT_POSITIVE, true);
+      stepTo(START + 11);
+      CHECK(NqNewsVote(1, w) == 0, "a release older than InpNewsVoteHours votes nothing");
+      // banking a position in profit when a window opens
+      SIM.cal.clear();
+      SIM.pos.clear();
+      {
+         const MqlRates &nb = SIM.m1[START + 12];
+         SimPos p;
+         p.ticket = 7101; p.sym = "XAUUSD"; p.type = POSITION_TYPE_BUY; p.vol = 0.10; p.open = nb.close - 0.5; p.sl = p.open - 1.0; p.tp = p.open + 3.0;
+         p.time = SIM.now - 600; p.magic = InpMagic; p.comment = "NQ-P7101";
+         SIM.pos.push_back(p);
+         SimPos l = p;
+         l.ticket = 7102; l.type = POSITION_TYPE_SELL; l.open = nb.close - 0.5; l.sl = l.open + 1.0; l.tp = l.open - 3.0; l.comment = "NQ-P7102";
+         SIM.pos.push_back(l);
+      }
+      simAddEvent("USD", SIM.now + 10 * 60, CALENDAR_IMPORTANCE_HIGH, "FOMC Statement");
+      stepTo(START + 12);
+      bool bankedA = true, keptB = false;
+      for(const SimPos &p : SIM.pos) { if(p.ticket == 7101) bankedA = false; if(p.ticket == 7102) keptB = true; }
+      bool reason = false;
+      for(const std::string &l : SIM.log) if(l.find("NEWS: banking +0.50R before USD FOMC Statement") != std::string::npos) reason = true;
+      CHECK(bankedA && keptB && reason, "the window opens: the +0.5R BUY is banked with the reason, the losing SELL keeps its SL");
+      SIM.pos.clear();
+      SIM.cal.clear();
+      // the calendar is re-read on the timer, not only on a new candle: an event added between candles is known within a minute
+      simAddEvent("USD", SIM.now + 10 * 60, CALENDAR_IMPORTANCE_HIGH, "Fed Chair Speaks");
+      g_newsReadT = SIM.now - 61;   // the last read is a minute old
+      SIM.now += 30;                // 30 s into the forming candle: no new bar
+      OnTimer();
+      CHECK(g_newsBlock && g_newsWhy.find("USD Fed Chair Speaks") == 0 && g_seen1 == SIM.m1[START + 12].time,
+            "no new candle, the last read a minute old: the timer re-read found the event and closed the gate");
+      SIM.now -= 30;
+      SIM.cal.clear();
+      // the calendar call FAILS (the terminal has no calendar / an error): UNKNOWN with the error code, the gate closed, nothing placed
+      SIM.calOk = false;
+      stepTo(START + 13);
+      CHECK(!g_newsOk && g_newsUnknown && g_newsErr == 5402 && (g_gate & NQ_K_NEWS_UNKNOWN) != 0 && lbl("v_e0n").find("UNKNOWN") == 0 &&
+            lbl("v_e0n").find("error 5402") != std::string::npos && NqGateAtX(g_gate, 0).find("NEWS UNKNOWN") != std::string::npos,
+            "a failed calendar call: NEWS UNKNOWN with the error code closes the gate and says so");
+      {
+         size_t sentB = SIM.sent.size();
+         run(START + 14, START + 200);
+         int opened = 0;
+         for(size_t k = sentB; k < SIM.sent.size(); k++)
+            if(SIM.sent[k].action == TRADE_ACTION_PENDING || (SIM.sent[k].action == TRADE_ACTION_DEAL && SIM.sent[k].position == 0)) opened++;
+         CHECK(opened == 0, "186 candles with the calendar failing: no new order of any kind");
+      }
+      // the call succeeds but returns no values at all: UNKNOWN as well (an empty answer is not "no news")
+      SIM.calOk = true;
+      SIM.calFiller = false;
+      stepTo(START + 201);
+      CHECK(!g_newsOk && g_newsUnknown && (g_gate & NQ_K_NEWS_UNKNOWN) != 0, "an empty calendar answer is UNKNOWN too");
+      SIM.calFiller = true;
+      SIM.calOk = false;
+      stepTo(START + 202);
+      g_newsUnknownBlocks = false;
+      NqNewsState();
+      CHECK(g_newsUnknown && (NqMetalGateBits() & NQ_K_NEWS_UNKNOWN) == 0 && g_newsText.find("trading anyway") != std::string::npos, "InpNewsUnknownBlocks = false: trade blind, said plainly");
+      g_newsUnknownBlocks = true;
+      SIM.calOk = true;
+      SIM.tester = true;
+      stepTo(START + 14);
+      CHECK(g_newsTester && !g_newsUnknown && !g_newsBlock && (g_gate & (NQ_K_NEWS | NQ_K_NEWS_UNKNOWN)) == 0 && lbl("v_e0n").find("N/A in the Strategy Tester") == 0,
+            "the Strategy Tester has no calendar: N/A, not gated, not UNKNOWN");
+      SIM.tester = false;
+      OnDeinit(0);
+   }
+   end("M1");
+
+   begin("M2 smart exit: bank on an M5 flip in profit, cut under water, lock the SL at +0.7R, bank on an M1 turn; a reversal plan whose regime never agreed is left alone");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      relax();
+      g_smartExit = true;
+      size_t i = START + 1;
+      int reg = 0;
+      for(; i <= END; i++) { stepTo(i); reg = g_s5.regime[(size_t)g_s5.n - 1]; if(reg == NQ_REG_BULL) break; }
+      CHECK(reg == NQ_REG_BULL, "found a bullish M5 regime");
+      size_t n5 = (size_t)g_s5.n;
+      int keep1 = g_s5.regime[n5 - 1], keep2 = g_s5.regime[n5 - 2];
+      double risk = 1.0;
+      auto plant = [&](ulong tk, int type, double open, const char *cmt) {
+         SIM.pos.clear();
+         SIM.ord.clear();
+         SimPos p;
+         p.ticket = tk; p.sym = "XAUUSD"; p.type = type; p.vol = 0.10; p.open = open;
+         p.sl = (type == POSITION_TYPE_BUY) ? open - risk : open + risk; p.tp = (type == POSITION_TYPE_BUY) ? open + 3 * risk : open - 3 * risk;
+         p.time = g_s5.t[n5 - 2]; p.magic = InpMagic; p.comment = cmt;
+         SIM.pos.push_back(p);
+      };
+      auto closedWith = [&](ulong tk, const char *txt) {
+         for(const SimPos &p : SIM.pos) if(p.ticket == tk) return false;
+         for(const std::string &l : SIM.log) if(l.find(txt) != std::string::npos) return true;
+         return false;
+      };
+      // a) the regime agreed (bar n-2 BULL), then flipped (bar n-1 BEAR): +0.3R is banked
+      g_s5.regime[n5 - 2] = NQ_REG_BULL; g_s5.regime[n5 - 1] = NQ_REG_BEAR;
+      plant(8001, POSITION_TYPE_BUY, SIM.bid - 0.3 * risk, "NQ-P8001");
+      CHECK(NqRegimeAgreedSince(g_s5.t[n5 - 2], 1), "the regime agreed since the open");
+      NqVerdict();
+      CHECK(g_verdict.find("EXIT BUY #8001") == 0 && g_verdict.find("SMART EXIT banks it") != std::string::npos && g_verdict.find("+0.30R") != std::string::npos,
+            "the verdict says the smart exit will bank +0.30R at the next M1 close");
+      NqTrade();
+      CHECK(closedWith(8001, "SMART EXIT: M5 regime flipped BEARISH against the position, banking +0.30R"), "banked with the reason");
+      // b) under water: cut before the SL
+      plant(8002, POSITION_TYPE_BUY, SIM.bid + 0.3 * risk, "NQ-P8002");
+      NqTrade();
+      CHECK(closedWith(8002, "SMART EXIT: M5 regime flipped BEARISH against the position at -0.30R - cut before the SL"), "cut at -0.30R with the reason");
+      // c) a scalp under water on a flip: the scalp rule, not the smart cut
+      plant(8003, POSITION_TYPE_BUY, SIM.bid + 0.3 * risk, "NQ-S8003");
+      NqTrade();
+      CHECK(closedWith(8003, "M5 regime turned BEARISH against the scalp"), "a scalp keeps its own flip rule");
+      // d) the regime never agreed (a reversal plan filled against it): the flip means nothing, the plan runs
+      g_s5.regime[n5 - 2] = NQ_REG_BEAR;
+      plant(8004, POSITION_TYPE_BUY, SIM.bid - 0.3 * risk, "NQ-Q8004");
+      int keepD1 = g_s1.dir[(size_t)g_s1.n - 1];
+      g_s1.dir[(size_t)g_s1.n - 1] = 1;
+      NqVerdict();
+      CHECK(g_verdict.find("EXIT BUY #8004") == 0 && g_verdict.find("never agreed") != std::string::npos, "the verdict explains why the bot will not act");
+      NqTrade();
+      bool stillThere = false;
+      for(const SimPos &p : SIM.pos) if(p.ticket == 8004) stillThere = true;
+      CHECK(stillThere, "left to its SL / TP");
+      // e) the lock: +0.8R with the regime intact moves the SL to entry + 0.1R, once
+      g_s5.regime[n5 - 2] = NQ_REG_BULL; g_s5.regime[n5 - 1] = NQ_REG_BULL;
+      plant(8005, POSITION_TYPE_BUY, SIM.bid - 0.8 * risk, "NQ-P8005");
+      size_t before = SIM.sent.size();
+      NqTrade();
+      bool locked = false;
+      double wantSl = NqRoundTick(SIM.pos.empty() ? 0.0 : SIM.pos[0].open + 0.1 * risk, 0.01, 2, -1);
+      for(size_t k = before; k < SIM.sent.size(); k++)
+         if(SIM.sent[k].action == TRADE_ACTION_SLTP && SIM.sent[k].position == 8005 && near(SIM.sent[k].sl, wantSl, 1e-9)) locked = true;
+      CHECK(locked && !SIM.pos.empty() && near(SIM.pos[0].sl, wantSl, 1e-9), "SL moved to entry + 0.1R by a SLTP request; the position stays");
+      bool logged = false;
+      for(const std::string &l : SIM.log) if(l.find("SMART LOCK: +0.80R reached") != std::string::npos) logged = true;
+      CHECK(logged, "logged with the reason");
+      before = SIM.sent.size();
+      NqTrade();
+      int again = 0;
+      for(size_t k = before; k < SIM.sent.size(); k++) if(SIM.sent[k].action == TRADE_ACTION_SLTP) again++;
+      CHECK(again == 0, "never loosened, never repeated");
+      NqVerdict();
+      CHECK(g_verdict.find("HOLD BUY #8005") == 0 && g_verdict.find("SL locked") != std::string::npos, "HOLD ... SL locked");
+      // f) the M1 bias turned against a +0.6R position: banked; at +0.3R not
+      g_s1.dir[(size_t)g_s1.n - 1] = -1;
+      plant(8006, POSITION_TYPE_BUY, SIM.bid - 0.6 * risk, "NQ-P8006");
+      NqTrade();
+      CHECK(closedWith(8006, "SMART EXIT: M1 bias turned BEARISH, banking +0.60R"), "M1 turn with +0.6R: banked");
+      plant(8007, POSITION_TYPE_BUY, SIM.bid - 0.3 * risk, "NQ-P8007");
+      NqTrade();
+      stillThere = false;
+      for(const SimPos &p : SIM.pos) if(p.ticket == 8007) stillThere = true;
+      CHECK(stillThere, "+0.3R is under the M1 threshold: kept");
+      // g) smart exit off: the hard rules only (a plan position on a flip says EXIT, you decide)
+      g_smartExit = false;
+      g_s5.regime[n5 - 1] = NQ_REG_BEAR;
+      plant(8008, POSITION_TYPE_BUY, SIM.bid - 0.3 * risk, "NQ-P8008");
+      NqTrade();
+      stillThere = false;
+      for(const SimPos &p : SIM.pos) if(p.ticket == 8008) stillThere = true;
+      NqVerdict();
+      CHECK(stillThere && g_verdict.find("you decide") != std::string::npos, "off: the plan position is left to the human");
+      g_s1.dir[(size_t)g_s1.n - 1] = keepD1;
+      g_s5.regime[n5 - 1] = keep1; g_s5.regime[n5 - 2] = keep2;
+      SIM.pos.clear();
+      OnDeinit(0);
+   }
+   end("M2");
+
+   begin("M3 the Friday stop and the portfolio: orders pulled and profits banked before the weekend; positions across charts");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      relax();
+      run(START + 1, START + 5);
+      SIM.pos.clear();
+      SIM.ord.clear();
+      SimOrder so;
+      so.ticket = 9101; so.sym = "XAUUSD"; so.type = ORDER_TYPE_BUY_LIMIT; so.vol = 0.10; so.price = SIM.bid - 2.0; so.sl = SIM.bid - 3.0; so.tp = SIM.bid - 1.0;
+      so.time = SIM.now; so.magic = InpMagic; so.comment = "NQ-Q9101";
+      SIM.ord.push_back(so);
+      SimPos a;
+      a.ticket = 9102; a.sym = "XAUUSD"; a.type = POSITION_TYPE_BUY; a.vol = 0.10; a.open = SIM.bid - 0.2; a.sl = a.open - 1.0; a.tp = a.open + 3.0;
+      a.time = SIM.now - 600; a.magic = InpMagic; a.comment = "NQ-P9102";
+      SIM.pos.push_back(a);
+      SimPos l = a;
+      l.ticket = 9103; l.type = POSITION_TYPE_SELL; l.open = SIM.bid - 0.2; l.sl = l.open + 1.0; l.tp = l.open - 3.0; l.comment = "NQ-P9103";
+      SIM.pos.push_back(l);
+      g_weekFriday = true;
+      g_weekEdge = true;
+      NqTrade();
+      bool orderGone = true, aGone = true, lKept = false;
+      for(const SimOrder &o : SIM.ord) if(o.ticket == 9101) orderGone = false;
+      for(const SimPos &p : SIM.pos) { if(p.ticket == 9102) aGone = false; if(p.ticket == 9103) lKept = true; }
+      bool r1 = false, r2 = false;
+      for(const std::string &l2 : SIM.log)
+      {
+         if(l2.find("WEEKEND: resting orders are pulled before the Friday close") != std::string::npos) r1 = true;
+         if(l2.find("WEEKEND: banking +0.20R before the Friday close") != std::string::npos) r2 = true;
+      }
+      CHECK(orderGone && aGone && lKept && r1 && r2, "Friday stop: the order is pulled, the +0.2R BUY is banked, the losing SELL keeps its SL (InpWeekendCloseLosers = false)");
+      g_weekFriday = false;
+      g_weekEdge = false;
+      SIM.pos.clear();
+      // the portfolio: this EA's positions on OTHER charts count (same magic)
+      auto other = [&](ulong tk, const char *sym, int type) {
+         SimPos p;
+         p.ticket = tk; p.sym = sym; p.type = type; p.vol = 0.10; p.open = 60.0; p.sl = 0; p.tp = 0; p.time = SIM.now; p.magic = InpMagic; p.comment = "NQ-P1";
+         SIM.pos.push_back(p);
+      };
+      other(9201, "XAGUSD", POSITION_TYPE_BUY);
+      NqReadAccount();
+      NqEvaluate();
+      CHECK(g_portfolioPos == 1 && !g_portfolioFull && g_openCount == 0 && (g_gate & NQ_K_PORTFOLIO) == 0, "one position on another chart: counted, not this chart's slot, under the cap");
+      other(9202, "XAGUSD", POSITION_TYPE_SELL);
+      NqReadAccount();
+      NqEvaluate();
+      CHECK(g_portfolioPos == 2 && g_portfolioFull && (g_gate & NQ_K_PORTFOLIO) != 0 && NqGateAtX(g_gate, 0).find("PORTFOLIO FULL - 2 POSITIONS") != std::string::npos,
+            "two positions across charts = the cap: PORTFOLIO FULL closes the gate");
+      OnTimer();
+      CHECK(lbl("v_e0h").find("portfolio 2 pos") != std::string::npos, "the WEEK / SMART row shows the portfolio");
+      SIM.pos.clear();
+      OnDeinit(0);
+   }
+   end("M3");
+
+   begin("M4 higher timeframes: H1 / H4 context, confirmed structure, BOS / CHoCH classification, the HTF voters");
+   {
+      Market big = makeMarket(7, 4150.0, 0.01, 0.35, 40);
+      load(big, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      SIM.h1 = toRates(agg(big.m1, 3600));
+      SIM.h4 = toRates(agg(big.m1, 14400));
+      const size_t START40 = 1440 * 39 + 17;
+      startAt(START40);
+      relax();
+      CHECK(g_h1Ok && g_h4Ok && g_h1.n == 400 && g_h4.n >= 200 && g_h4.emaS[(size_t)g_h4.n - 1] > 0.0 && g_h1.emaS[(size_t)g_h1.n - 1] > 0.0,
+            "400 H1 and 200+ H4 bars loaded: EMA200 ready on both");
+      CHECK(lbl("v_e0t").find("H4 ") == 0 && lbl("v_e0t").find("|   H1 ") != std::string::npos && lbl("v_e0t").find("last ") != std::string::npos, "the H4 / H1 row");
+      NqSeries s;
+      NqSeriesResize(s, 3);
+      ArrayResize(s.st, 3);
+      NqSwingBreak b;
+      b.pivIdx = 0; b.idx = 1; b.level = 1.0; b.close = 1.0;
+      s.st[0] = NQ_ST_BULL; b.dir = 1;
+      bool okB = (NqBreakKind(s, b) == "BOS");
+      b.dir = -1;
+      okB = okB && (NqBreakKind(s, b) == "CHoCH");
+      s.st[0] = NQ_ST_BEAR;
+      okB = okB && (NqBreakKind(s, b) == "BOS");
+      b.dir = 1;
+      okB = okB && (NqBreakKind(s, b) == "CHoCH");
+      s.st[0] = NQ_ST_MIXED;
+      okB = okB && (NqBreakKind(s, b) == "BREAK");
+      CHECK(okB, "a close through a swing WITH the structure in force = BOS, AGAINST it = CHoCH, no structure = BREAK");
+      size_t i4 = (size_t)g_h4.n - 1, i1 = (size_t)g_h1.n - 1;
+      int c4 = g_h4.ctx[i4], c1 = g_h1.ctx[i1];
+      g_h4.ctx[i4] = 1; g_h1.ctx[i1] = 1;
+      int keepN = g_nSbH1;
+      g_nSbH1 = 0;
+      std::string w;
+      CHECK(NqHtfVote(1, w) == 2 && w.find("H4 BULLISH +1") == 0 && w.find("H1 BULLISH +1") != std::string::npos && NqHtfVote(-1, w) == -2, "H4 and H1 context vote 1 each");
+      g_h1.ctx[i1] = -1;
+      CHECK(NqHtfVote(1, w) == 0, "H1 against H4: they cancel");
+      // a fresh H1 CHoCH down votes its direction
+      g_h1.ctx[i1] = 1;
+      ArrayResize(g_sbH1, 1);
+      g_sbH1[0].pivIdx = 0; g_sbH1[0].idx = g_h1.n - 2; g_sbH1[0].dir = -1; g_sbH1[0].level = 1.0; g_sbH1[0].close = 1.0;
+      g_h1.st[(size_t)g_h1.n - 3] = NQ_ST_BULL;
+      g_nSbH1 = 1;
+      CHECK(NqHtfVote(1, w) == 1 && w.find("H1 CHoCH down -1") != std::string::npos, "a CHoCH down 1 bar ago: -1 for a BUY (counted beside the two contexts)");
+      g_sbH1[0].idx = g_h1.n - 30;
+      CHECK(NqHtfVote(1, w) == 2, "a CHoCH older than InpHtfChochBars votes nothing");
+      g_nSbH1 = keepN;
+      g_h4.ctx[i4] = c4; g_h1.ctx[i1] = c1;
+      // no H1 / H4 at the broker: NO DATA, no vote, the EA runs on
+      OnDeinit(0);
+      SIM.h1.clear();
+      SIM.h4.clear();
+      startAt(START40);
+      relax();
+      CHECK(!g_h1Ok && !g_h4Ok && NqHtfVote(1, w) == 0 && lbl("v_e0t").find("H4 NO DATA") == 0 && g_ready, "no H1 / H4 served: NO DATA, no vote, everything else runs");
+      OnDeinit(0);
+   }
+   end("M4");
+
+   begin("M5 the week's edges and the rollover on the server clock: Friday stop, the first hour of the week, the weekend, the rollover window");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      relax();
+      g_clockGuards = true;
+      datetime fri = T0 + 3 * 86400;   // T0 is Tuesday 2026-09-01: Friday the 4th
+      datetime mon = T0 + 6 * 86400;   // Monday the 7th
+      NqSessionScan(fri + 22 * 3600 + 30 * 60);
+      CHECK(g_weekEdge && g_weekFriday && g_weekText.find("FRIDAY STOP") == 0 && (NqMetalGateBits() & NQ_K_WEEK_EDGE) != 0, "Friday 22:30 = 90 min before the close: FRIDAY STOP");
+      NqSessionScan(fri + 19 * 3600);
+      CHECK(!g_weekEdge && !g_rollover, "Friday 19:00: open");
+      NqSessionScan(fri + 23 * 3600 + 50 * 60);
+      CHECK(g_rollover && (NqMetalGateBits() & NQ_K_ROLLOVER) != 0, "23:50 = 10 min before the rollover: ROLLOVER bit");
+      NqSessionScan(mon + 30 * 60);
+      CHECK(g_weekEdge && !g_weekFriday && g_weekText.find("FIRST 60 MIN") == 0, "Monday 00:30: the first hour of the week");
+      NqSessionScan(fri + 86400 + 3600);
+      CHECK(g_weekEdge && g_weekText.find("WEEKEND") == 0, "Saturday 01:00: weekend");
+      NqSessionScan(fri + 12 * 3600);
+      CHECK(NqSessionName() == "LONDON" && !g_weekEdge, "Friday 12:00 = London, open");
+      g_clockGuards = false;
+      NqSessionScan(fri + 22 * 3600 + 30 * 60);
+      CHECK(!g_weekEdge && !g_rollover, "guards off: nothing");
+      OnDeinit(0);
+   }
+   end("M5");
+
+
+   begin("M6 compact board, click-to-fold blocks, the SL guard: a position without a stop gets the plan's stop back or is closed");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      relax();
+      run(START + 1, START + 300);
+      // compact: an empty plan slot has no detail line, a filled one has; broker rows only as many as there are
+      int withDetail = 0, withoutDetail = 0, badDetail = 0;
+      for(int q = 0; q < NQ_PLAN_SLOTS; q++)
+      {
+         NqPlan pl;
+         bool has = NqSlotPlan(q, pl);
+         bool det = lbl(("bp" + std::to_string(q) + "d").c_str()) != "<missing>";
+         if(has && det) withDetail++;
+         else if(!has && !det) withoutDetail++;
+         else badDetail++;
+      }
+      CHECK(badDetail == 0 && withDetail + withoutDetail == NQ_PLAN_SLOTS, "a detail line exactly for the slots that hold a plan");
+      int brokerRows = 0;
+      for(int i = 0; i < 6; i++) if(lbl(("bb" + std::to_string(i) + "0").c_str()) != "<missing>") brokerRows++;
+      CHECK(brokerRows == std::max(1, std::min(6, (int)SIM.ord.size() + (int)SIM.pos.size())), "broker rows = the orders and positions there are, at least one line");
+      // fold the desk: the engine rows go, the header stays and says unfold; unfold brings them back
+      CHECK(lbl("k_e1") == "M15 CONTEXT" && lbl("h1").find("(click: fold)") != std::string::npos, "the desk is open");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "NQEA_P_h1");
+      CHECK(g_deskCollapsed && lbl("k_e1") == "<missing>" && lbl("h1").find("(click: unfold)") != std::string::npos && lbl("t2") != "<missing>",
+            "click on the desk header: folded to its header, the board untouched");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "NQEA_P_h1~1");
+      CHECK(!g_deskCollapsed && lbl("k_e1") == "M15 CONTEXT", "a click on a piece of the header unfolds it");
+      // fold the board: the banner and the reasons stay, the tables and the footer go
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "NQEA_P_title");
+      CHECK(g_boardCollapsed && lbl("state") != "<missing>" && lbl("r1") != "<missing>" && lbl("t2") == "<missing>" && lbl("bf1") == "<missing>" &&
+            lbl("f1") == "<missing>" && lbl("title").find("(click: unfold)") != std::string::npos && lbl("t1") != "<missing>",
+            "click on the title: the board folds to its banner, the desk stays");
+      OnTimer();
+      CHECK(lbl("t2") == "<missing>" && lbl("state") != "<missing>", "a refresh keeps it folded");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "NQEA_P_title");
+      CHECK(!g_boardCollapsed && lbl("t2") != "<missing>" && lbl("bf1") != "<missing>", "a second click unfolds it");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "NQEA_P_v_e1");
+      CHECK(!g_boardCollapsed && !g_deskCollapsed, "a click elsewhere does nothing");
+      // the SL guard
+      int kp = -1;
+      for(int k = g_nPlans - 1; k >= 0; k--) if(g_plans[(size_t)k].dir > 0 && g_plans[(size_t)k].sl > 0.0) { kp = k; break; }
+      CHECK(kp >= 0, "a BUY plan exists in the history");
+      if(kp >= 0)
+      {
+         const NqPlan &pp = g_plans[(size_t)kp];
+         double keepBid = SIM.bid;
+         SIM.pos.clear();
+         SIM.ord.clear();
+         SimPos p;
+         p.ticket = 9301; p.sym = SIM.sym; p.type = POSITION_TYPE_BUY; p.vol = 0.10; p.open = pp.entry; p.sl = 0; p.tp = 0;
+         p.time = SIM.now - 600; p.magic = InpMagic; p.comment = NqPlanComment(pp);
+         SIM.pos.push_back(p);
+         SIM.bid = pp.sl + pp.risk * 0.5;   // above the plan's stop: the stop is restored
+         size_t before = SIM.sent.size();
+         NqTrade();
+         bool restored = false;
+         for(size_t k = before; k < SIM.sent.size(); k++)
+            if(SIM.sent[k].action == TRADE_ACTION_SLTP && SIM.sent[k].position == 9301 && near(SIM.sent[k].sl, pp.sl, 1e-9) && near(SIM.sent[k].tp, pp.tp1, 1e-9)) restored = true;
+         bool logged = false;
+         for(const std::string &l : SIM.log) if(l.find("SL MISSING: the plan's stop") != std::string::npos) logged = true;
+         CHECK(restored && logged && !SIM.pos.empty() && near(SIM.pos[0].sl, pp.sl, 1e-9), "no stop at the broker: the plan's SL and TP1 are restored by one SLTP request, logged");
+         SIM.pos.clear();
+         p.ticket = 9302;
+         SIM.pos.push_back(p);
+         SIM.bid = pp.sl - pp.risk * 0.5;   // already beyond the stop: closed now
+         NqTrade();
+         bool gone = true;
+         for(const SimPos &q2 : SIM.pos) if(q2.ticket == 9302) gone = false;
+         bool said = false;
+         for(const std::string &l : SIM.log) if(l.find("SL MISSING and the price is already beyond") != std::string::npos) said = true;
+         CHECK(gone && said, "no stop and the price beyond it: closed with the reason");
+         SIM.bid = keepBid;
+      }
+      SIM.pos.clear();
+      OnDeinit(0);
+   }
+   end("M6");
 
    std::printf("\nEA TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
