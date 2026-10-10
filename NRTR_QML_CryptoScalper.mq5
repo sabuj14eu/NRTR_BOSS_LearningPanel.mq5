@@ -18,6 +18,8 @@
 //|     the broker's BTC symbol, found automatically.                 |
 //|   * 24/7: crypto never closes, so the session clock only shapes  |
 //|     the levels (Asia / London / NY), it never stops the bot.     |
+//|     v1.3.4: the WEEKEND IS OPEN (InpWeekendTrading, default   |
+//|     on); the Friday stop and the week-open guard default to 0.  |
 //|                                                                  |
 //|  M15 = CONTEXT ONLY        (EMA200 + NRTR: shades, never gates)  |
 //|   M5 = REGIME + STRUCTURE  (NRTR + confirmed HH/HL or LH/LL)     |
@@ -33,7 +35,7 @@
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.33"
+#property version     "1.34"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -2817,13 +2819,14 @@ input int            InpNewsTopAfterMin  = 60;          // ... to N minutes afte
 input double         InpNewsBankProfitR  = 0.2;         // When a window opens, a position at least this many R in profit is closed (banked); 0 = never
 input bool           InpNewsMediumBlocks = false;       // MODERATE-impact events close the gate too (false = shown only)
 input bool           InpNewsUnknownBlocks = true;       // A calendar that answers nothing = NEWS UNKNOWN = no new trade (false = trade blind, at your choice)
-input group "Week edges + rollover (from the AUTO clock: the week opens / closes at 17:00 New York)"
+input group "Week edges + rollover (crypto trades 24/7: the WEEKEND IS OPEN; Friday / Monday guards are off unless you set them)"
+input bool           InpWeekendTrading   = true;        // Crypto trades the weekend: no WEEKEND block (false = treat the weekend as closed, as a metal does)
 input int            InpRolloverGuardMin = 15;          // No new trade from N minutes before the daily rollover to N minutes after (spreads widen)
-input int            InpFridayStopMin    = 120;         // No new trade in the last N minutes before the Friday close; resting orders are pulled then
+input int            InpFridayStopMin    = 0;           // 0 = no Friday stop (24/7). N > 0: no new trade in the last N minutes before the Friday 17:00 NY close; resting orders are pulled then
 input bool           InpWeekendFlat      = true;        // At the Friday stop close every position that is in profit (losers keep their SL unless the next input)
 input double         InpWeekendMinProfitR = 0.0;        // ... in profit = at least this many R (0 = any non-negative result)
 input bool           InpWeekendCloseLosers = false;     // At the Friday stop close losing positions too (no weekend gap risk at all)
-input int            InpWeekOpenGuardMin = 60;          // No new trade in the first N minutes after the week opens
+input int            InpWeekOpenGuardMin = 0;           // 0 = no week-open guard (24/7). N > 0: no new trade in the first N minutes after the Sunday 17:00 NY open
 input group "Smart exit (intelligent management: bank on a bias change, lock profit, never wait for the SL blindly)"
 input bool           InpSmartExit        = true;        // Manage open positions on bias changes (below) instead of leaving everything to the SL / TP
 input double         InpSmartFlipProfitR = 0.1;         // M5 regime flipped against a position at least this many R in profit: close and bank it
@@ -2873,10 +2876,10 @@ input int            InpMagic            = 180916;      // Magic number
 input int            InpSlippagePoints   = 20;          // Max slippage (points)
 input group "SignalMesh journal (every plan event, append-only)"
 input bool           InpJournalToFile    = true;        // Append every event to MQL5/Files/NQ_events_<symbol>.jsonl
-input string         InpSignalMeshUrl    = "";          // POST events here (e.g. https://app.signalmesh.dev/webhooks/brain/signal); empty = off
-input string         InpSignalMeshSecret = "";          // X-Brain-Secret for that URL (never printed). Allow the URL in Tools > Options > Expert Advisors
+input string         InpSignalMeshUrl    = "https://app.signalmesh.dev/webhooks/brain/signal";   // Journal door (preset; "" = off). Armed only when the secret below is set
+input string         InpSignalMeshSecret = "";          // X-Brain-Secret for both doors (never printed). Empty = nothing is posted. Allow https://app.signalmesh.dev once in Tools > Options > Expert Advisors > WebRequest
 input group "SignalMesh telemetry (ANALYSIS ONLY - a data witness for the CRYPTO ANALYSIS page, never a signal)"
-input string         InpTelemetryUrl     = "";          // POST a state snapshot here (e.g. https://app.signalmesh.dev/webhooks/crypto/telemetry); empty = off
+input string         InpTelemetryUrl     = "https://app.signalmesh.dev/webhooks/crypto/telemetry";   // Telemetry door for the CRYPTO ANALYSIS page (preset; "" = off). Armed only when the secret is set
 input int            InpTelemetrySec     = 60;          // Heartbeat every N seconds, and on every closed M1 candle (min 5)
 input bool           InpTelemetryDemoOnly = true;       // Send telemetry from a DEMO account only: a REAL account is never the witness
 input group "Forecast arrows"
@@ -3011,7 +3014,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.3.3"
+#define NQ_EA_VERSION "1.3.4"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -3311,12 +3314,20 @@ int OnInit()
    g_jrSeeded = false;
    g_webUrl = InpSignalMeshUrl;
    g_webSecret = InpSignalMeshSecret;
+   // the SignalMesh addresses are preset; without the secret a POST can only be refused (401),
+   // so both doors stay OFF until the secret input is set - no blind posting, no log spam
+   if(g_webSecret == "")
+   {
+      g_webUrl = "";
+      if(InpSignalMeshUrl != "" || InpTelemetryUrl != "")
+         Print("NQ SignalMesh: the secret input is empty - journal and telemetry POSTs are OFF until you set it (the addresses are preset)");
+   }
    ArrayResize(g_webQ, 0);
    g_webN = 0;
    g_webLast = 0;
    g_webFails = 0;
    g_jrFileWarned = false;
-   g_telUrl = InpTelemetryUrl;
+   g_telUrl = (g_webSecret == "") ? "" : InpTelemetryUrl;
    g_telSec = (InpTelemetrySec < 5) ? 5 : InpTelemetrySec;
    g_telDemoOnly = InpTelemetryDemoOnly;
    g_telLast = 0;
@@ -4591,10 +4602,16 @@ void NqSessionScan(datetime now)
    int untilClose = 0;
    if(!NqWeekPos(g_dow, mod, roll, sinceOpen, untilClose))
    {
-      g_weekEdge = true;
-      g_weekText = "WEEKEND (the week opens Sunday 17:00 New York)";
+      // v1.3.4: crypto trades the weekend - the metal's WEEKEND block applies only when the operator says so
+      if(!InpWeekendTrading)
+      {
+         g_weekEdge = true;
+         g_weekText = "WEEKEND (InpWeekendTrading = false: treated as closed, as a metal)";
+      }
+      else
+         g_weekText = "WEEKEND - OPEN (crypto trades 24/7)";
    }
-   else if(untilClose <= InpFridayStopMin)
+   else if(InpFridayStopMin > 0 && untilClose <= InpFridayStopMin)
    {
       g_weekEdge = true;
       g_weekFriday = true;

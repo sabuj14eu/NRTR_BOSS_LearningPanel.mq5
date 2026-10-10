@@ -33,7 +33,7 @@
 //|  Personal tool. No network, no Telegram, no DLL, no files.       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.93"
+#property version     "1.94"
 #property description "Gold/Silver: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar plans, macro vote (DXY, bond, USD news, H4/H1), news guard, smart exit."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -2801,10 +2801,10 @@ input int            InpMagic            = 180915;      // Magic number
 input int            InpSlippagePoints   = 20;          // Max slippage (points)
 input group "SignalMesh journal (every plan event, append-only)"
 input bool           InpJournalToFile    = true;        // Append every event to MQL5/Files/NQ_events_<symbol>.jsonl
-input string         InpSignalMeshUrl    = "";          // POST events here (e.g. https://app.signalmesh.dev/webhooks/brain/signal); empty = off
-input string         InpSignalMeshSecret = "";          // X-Brain-Secret for that URL (never printed). Allow the URL in Tools > Options > Expert Advisors
+input string         InpSignalMeshUrl    = "https://app.signalmesh.dev/webhooks/brain/signal";   // Journal door (preset; "" = off). Armed only when the secret below is set
+input string         InpSignalMeshSecret = "";          // X-Brain-Secret for both doors (never printed). Empty = nothing is posted. Allow https://app.signalmesh.dev once in Tools > Options > Expert Advisors > WebRequest
 input group "SignalMesh telemetry (ANALYSIS ONLY - a data witness for the METAL ANALYSIS page, never a signal)"
-input string         InpTelemetryUrl     = "";          // POST a state snapshot here (e.g. https://app.signalmesh.dev/webhooks/metal/telemetry); empty = off
+input string         InpTelemetryUrl     = "https://app.signalmesh.dev/webhooks/metal/telemetry";   // Telemetry door for the METAL ANALYSIS page (preset; "" = off). Armed only when the secret is set
 input int            InpTelemetrySec     = 60;          // Heartbeat every N seconds, and on every closed M1 candle (min 5)
 input bool           InpTelemetryDemoOnly = true;       // Send telemetry from a DEMO account only: a REAL account is never the witness
 input group "Forecast arrows"
@@ -2933,7 +2933,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.9.3"
+#define NQ_EA_VERSION "1.9.4"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -3228,12 +3228,20 @@ int OnInit()
    g_jrSeeded = false;
    g_webUrl = InpSignalMeshUrl;
    g_webSecret = InpSignalMeshSecret;
+   // the SignalMesh addresses are preset; without the secret a POST can only be refused (401),
+   // so both doors stay OFF until the secret input is set - no blind posting, no log spam
+   if(g_webSecret == "")
+   {
+      g_webUrl = "";
+      if(InpSignalMeshUrl != "" || InpTelemetryUrl != "")
+         Print("NQ SignalMesh: the secret input is empty - journal and telemetry POSTs are OFF until you set it (the addresses are preset)");
+   }
    ArrayResize(g_webQ, 0);
    g_webN = 0;
    g_webLast = 0;
    g_webFails = 0;
    g_jrFileWarned = false;
-   g_telUrl = InpTelemetryUrl;
+   g_telUrl = (g_webSecret == "") ? "" : InpTelemetryUrl;
    g_telSec = (InpTelemetrySec < 5) ? 5 : InpTelemetrySec;
    g_telDemoOnly = InpTelemetryDemoOnly;
    g_telLast = 0;

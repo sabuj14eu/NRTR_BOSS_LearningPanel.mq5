@@ -721,6 +721,9 @@ int main()
       load(btc, "BTCUSD", "BTC", 2, 0.01, 0.01);
       startAt(START);
       relax();
+      CHECK(std::string(InpSignalMeshUrl).find("https://app.signalmesh.dev/webhooks/") == 0 && std::string(InpTelemetryUrl).find("https://app.signalmesh.dev/webhooks/") == 0 &&
+            std::string(InpSignalMeshSecret).empty() && g_webUrl.empty() && g_telUrl.empty(),
+            "the SignalMesh addresses are preset, but without the secret both doors are OFF: nothing is ever posted blind");
       g_webUrl = "https://status.example/webhooks/brain/signal";
       g_webSecret = "s3cr3t-token";
       run(START + 1, END);
@@ -855,7 +858,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_CryptoScalper\"", "\"ea_version\":\"1.3.3\"", "\"prof_risk\":1.00", "\"prof_spread_atr\":0.15", "\"lead_symbol\":\"\"", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_CryptoScalper\"", "\"ea_version\":\"1.3.4\"", "\"prof_risk\":1.00", "\"prof_spread_atr\":0.15", "\"lead_symbol\":\"\"", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
                            "\"symbol\":\"BTCUSD\"", "\"coin\":\"BTC\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"clock\":\"AUTO\"", "\"clock_offset_min\":180", "\"ny_dst\":true", "\"ny_open_min\":990", "\"london_open_min\":600", "\"asia_open_min\":60", "\"rollover_min\":0", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
@@ -1416,15 +1419,15 @@ int main()
       datetime fri = T0 + 3 * 86400;   // T0 is Tuesday 2026-09-01: Friday the 4th
       datetime mon = T0 + 6 * 86400;   // Monday the 7th
       NqSessionScan(fri + 22 * 3600 + 30 * 60);
-      CHECK(g_weekEdge && g_weekFriday && g_weekText.find("FRIDAY STOP") == 0 && (NqMetalGateBits() & NQ_K_WEEK_EDGE) != 0, "Friday 22:30 = 90 min before the close: FRIDAY STOP");
+      CHECK(!g_weekEdge && !g_weekFriday && g_weekText == "" && (NqMetalGateBits() & NQ_K_WEEK_EDGE) == 0, "Friday 22:30: OPEN (InpFridayStopMin = 0 on crypto: no Friday stop, nothing pulled)");
       NqSessionScan(fri + 19 * 3600);
       CHECK(!g_weekEdge && !g_rollover, "Friday 19:00: open");
       NqSessionScan(fri + 23 * 3600 + 50 * 60);
       CHECK(g_rollover && (NqMetalGateBits() & NQ_K_ROLLOVER) != 0, "23:50 = 10 min before the rollover: ROLLOVER bit");
       NqSessionScan(mon + 30 * 60);
-      CHECK(g_weekEdge && !g_weekFriday && g_weekText.find("FIRST 60 MIN") == 0, "Monday 00:30: the first hour of the week");
+      CHECK(!g_weekEdge && !g_weekFriday && g_weekText == "", "Monday 00:30: OPEN (InpWeekOpenGuardMin = 0 on crypto)");
       NqSessionScan(fri + 86400 + 3600);
-      CHECK(g_weekEdge && g_weekText.find("WEEKEND") == 0, "Saturday 01:00: weekend");
+      CHECK(!g_weekEdge && !g_weekFriday && g_weekText == "WEEKEND - OPEN (crypto trades 24/7)" && (NqMetalGateBits() & NQ_K_WEEK_EDGE) == 0, "Saturday 01:00: WEEKEND - OPEN, no WEEK EDGE bit (v1.3.4)");
       NqSessionScan(fri + 12 * 3600);
       CHECK(NqSessionName() == "LONDON" && !g_weekEdge, "Friday 12:00 = London, open");
       g_clockGuards = false;
@@ -1698,6 +1701,28 @@ int main()
       SIM.macro15.clear();
    }
    end("C6");
+
+   begin("C7 the weekend is OPEN (v1.3.4): on a Saturday clock with the clock guards ON nothing week-related gates, the WEEK row says so, the rollover window still does");
+   {
+      load(btc, "BTCUSD", "BTC", 2, 0.01, 0.01);
+      startAt(START);
+      relax();
+      g_clockGuards = true;
+      datetime fri = T0 + 3 * 86400;   // T0 is Tuesday 2026-09-01: Friday the 4th
+      NqSessionScan(fri + 86400 + 15 * 3600);   // Saturday 15:00 server
+      CHECK(!g_weekEdge && (NqMetalGateBits() & (NQ_K_WEEK_EDGE | NQ_K_ROLLOVER)) == 0 && g_weekText == "WEEKEND - OPEN (crypto trades 24/7)", "Saturday 15:00: no WEEK EDGE, no ROLLOVER - open for business");
+      NqSessionScan(fri + 2 * 86400 + 23 * 3600 + 55 * 60);   // Sunday 23:55 server = 5 min before the 00:00 server rollover (17:00 NY on this clock)
+      CHECK(g_rollover && (NqMetalGateBits() & NQ_K_ROLLOVER) != 0 && !g_weekEdge, "Sunday 23:55: the rollover window still gates (the swap), the weekend itself does not");
+      SIM.now = fri + 86400 + 15 * 3600;
+      NqSessionScan(SIM.now);
+      NqDrawPanel();
+      std::string wk = lbl("v_e0h");
+      std::printf("    WEEK / SMART row: [%s]\n", wk.c_str());
+      CHECK(wk.find("WEEKEND - OPEN") != std::string::npos && wk.find("FRIDAY STOP") == std::string::npos, "the WEEK / SMART row reads WEEKEND - OPEN");
+      g_clockGuards = false;
+      OnDeinit(0);
+   }
+   end("C7");
    std::printf("\nCRYPTO EA TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
 }

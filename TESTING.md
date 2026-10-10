@@ -37,20 +37,21 @@ before relying on it.** If F7 reports anything, send the exact message.
 ```
 CRYPTO TWIN:      derived files match; engine block identical apart from the asset detector
 FOREX EA:         engine block identical to the metal EA apart from the asset detector
--- NRTR_QML_MetalScalper.mq5 (v1.9.3) --
+-- NRTR_QML_MetalScalper.mq5 (v1.9.4) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 EA ENGINE TESTS:  122 checks passed, 0 failed   (E13 = the clock, E14 = the risk floor)
-EA TESTS:         246 checks passed, 0 failed   (A1-A15 + A10 with the v1.9 gates relaxed, plus M1-M5)
--- NRTR_QML_CryptoScalper.mq5 (v1.3.3) --
+EA TESTS:         247 checks passed, 0 failed   (A1-A15 + A10 with the v1.9 gates relaxed, plus M1-M6)
+-- NRTR_QML_CryptoScalper.mq5 (v1.3.4) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-CRYPTO EA TESTS:  280 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
-                  BTC-sized market + an LTC 3-digit spec, plus the 6 crypto sections below)
--- NRTR_QML_ForexScalper.mq5 (v1.0.4) --
+CRYPTO EA TESTS:  284 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
+                  BTC-sized market + an LTC 3-digit spec, plus the 7 crypto sections below;
+                  C7 = the weekend is OPEN)
+-- NRTR_QML_ForexScalper.mq5 (v1.0.5) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-FOREX EA TESTS:   315 checks passed, 0 failed   (the 15 whole-EA sections on a EURUSD
+FOREX EA TESTS:   316 checks passed, 0 failed   (the 15 whole-EA sections on a EURUSD
                   5-digit market + a USDJPY 3-digit spec, plus the 9 forex sections below)
 MetaEditor F7:    NOT RUN (not available in the build environment) - for ALL THREE files
 ```

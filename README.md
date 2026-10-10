@@ -2,8 +2,10 @@
 
 One standalone Expert Advisor, `NRTR_QML_MetalScalper.mq5`, for **XAUUSD / Gold** and
 **XAGUSD / Silver** only. Nothing else. No Telegram, no DLLs. The only network use is two
-outbound POSTs to SignalMesh, both optional and both off by default: the append-only event
-journal and the ANALYSIS ONLY telemetry heartbeat (see the two SignalMesh sections). It replaces the earlier learning-panel indicator (removed from this repository; git
+outbound POSTs to SignalMesh, the append-only event journal and the ANALYSIS ONLY telemetry
+heartbeat (see the two SignalMesh sections). Since 1.9.4 / 1.3.4 / 1.0.5 their addresses are
+**preset** (`app.signalmesh.dev`, the right door per EA) and **armed only by the secret**: with
+`InpSignalMeshSecret` empty nothing is ever posted. It replaces the earlier learning-panel indicator (removed from this repository; git
 history keeps it). **Remove the old indicator from your chart.**
 
 ```
@@ -36,7 +38,7 @@ the journal and telemetry so it can be judged on evidence (n >= 100 trades), not
 | **News guard** on the MT5 economic calendar, **USD events**: HIGH events close the gate 30 min before to 30 after (TOP TIER 60 / 60), resting orders pulled, a position >= 0.2 R in profit banked; calendar silence = NEWS UNKNOWN = no trading blind; N/A in the tester; re-read every minute | yes | yes | `NEWS (USD)` row, `news` in telemetry |
 | **H4 / H1** context + structure, every M5 / H1 / H4 break classified **BOS** (with the structure) or **CHoCH** (against it) | yes | yes | `H4 / H1` row, chart marks, `h4_ctx` / `h1_ctx` / `h1_break` / `m5_break` in the journal |
 | **SMART EXIT**: bank on an M5 flip in profit (0.1 R), cut under water, bank on an M1 turn (0.5 R), lock the SL at +0.7 R to entry + 0.1 R; a reversal plan whose regime never agreed is left alone | yes | yes | the verdict (`SMART EXIT banks it`), `smart_exit` in telemetry, journal event `sl_moved` |
-| **Friday stop** (orders pulled, profits banked 2 h before the Friday 17:00 NY close), **week-open guard** (first 60 min), **rollover window** (15 min each side of 17:00 NY) | yes | yes (crypto trades the weekend on some brokers: set `InpFridayStopMin` / `InpWeekOpenGuardMin` to 0 there) | `WEEK / SMART` row |
+| **Friday stop** (orders pulled, profits banked 2 h before the Friday 17:00 NY close), **week-open guard** (first 60 min), **rollover window** (15 min each side of 17:00 NY) | yes | **the weekend is OPEN** (v1.3.4, `InpWeekendTrading = true`): no WEEKEND block; the Friday stop and the week-open guard default to 0 and apply only if you set them (a broker that closes crypto at the weekend); the rollover window stays | `WEEK / SMART` row (`WEEKEND - OPEN (crypto trades 24/7)`) |
 | **Portfolio cap** across charts (`InpMaxOpenAcrossCharts`, 2) | yes | yes | gate `PORTFOLIO FULL` |
 
 What the metal and crypto EAs still do NOT have (forex only): currency strength, oil / gold
@@ -641,8 +643,8 @@ Every order is printed to the **Experts** log, e.g.
 | Asia start / end, London start | 01 / 10 / 10 server hours | used when Clock AUTO is off; London ends at the NY open |
 | Draw levels | on | session highs/lows, previous day, S/R swings, VWAP, confirmed break marks |
 | Plan close on regime flip | off | scalps always close on a flip; plans say EXIT and wait for you |
-| Journal to file / SignalMesh URL / secret | on / empty / empty | see the journal section |
-| Telemetry URL / every N s / demo only | empty / 60 / on | see the telemetry section; empty = off |
+| Journal to file / SignalMesh URL / secret | on / preset `.../webhooks/brain/signal` / empty | see the journal section; the URL is armed only when the secret is set |
+| Telemetry URL / every N s / demo only | preset `.../webhooks/<metal|crypto|forex>/telemetry` / 60 / on | see the telemetry section; `""` = off; armed only when the secret is set |
 | Pullback retrace / min impulse / SL buffer | 50 % / 2 × ATR5 / 0.2 × ATR5 | |
 | Plan TP1 / TP2 | 1R / 2R | |
 | Plan minimum risk | 1.0 x ATR | a structural stop (QML head, pullback swing, NY sweep, radar swing) closer than this is pushed out to the floor, never in; TP1 / TP2 follow the widened R; 0 = off |
@@ -685,9 +687,10 @@ in the SignalMesh repo) reads these into a per-kind performance matrix.
 
 ## SignalMesh telemetry (ANALYSIS ONLY - the METAL ANALYSIS page)
 
-Since 1.6.0 the EA can also act as a **data witness**: when `InpTelemetryUrl` is set (e.g.
-`https://app.signalmesh.dev/webhooks/metal/telemetry`, allowed under Tools → Options →
-Expert Advisors → WebRequest) it POSTs one JSON **snapshot of what the panel shows** on every
+Since 1.6.0 the EA can also act as a **data witness**: with `InpTelemetryUrl` set (preset since
+1.9.4 to `https://app.signalmesh.dev/webhooks/metal/telemetry`; the crypto twin presets
+`/webhooks/crypto/telemetry`, the forex EA `/webhooks/forex/telemetry`) and `InpSignalMeshSecret`
+filled in, it POSTs one JSON **snapshot of what the panel shows** on every
 closed M1 candle and at least every `InpTelemetrySec` seconds (default 60), with the same
 `X-Brain-Secret` header as the journal. SignalMesh stores the snapshot verbatim and renders it
 on its **METAL ANALYSIS** page under the fixed label
@@ -726,6 +729,20 @@ false` for good measure, and leave the **Algo Trading button OFF** so the EA is 
 `NQ telemetry: snapshot accepted by SignalMesh (ANALYSIS ONLY)` once, and a failure count if the
 platform stops answering. Telemetry runs after `NqTrade()` and has no queue; it can never block
 or alter a decision, and a failed POST costs one `Print`.
+
+## Setting up SignalMesh once (v1.9.4 / 1.3.4 / 1.0.5)
+
+The addresses are already in the inputs, so the setup is two steps per terminal, done once:
+1. **MT5 → Tools → Options → Expert Advisors → "Allow WebRequest for listed URL"** → add
+   `https://app.signalmesh.dev`. An EA cannot do this for you: MetaTrader keeps that list
+   outside every program on purpose.
+2. On each chart, put the platform's `X-Brain-Secret` into **`InpSignalMeshSecret`**. With it
+   empty both doors stay OFF and the Experts log says so once (`NQ SignalMesh: the secret input
+   is empty - journal and telemetry POSTs are OFF until you set it`). The secret is never
+   printed, never journaled, never sent anywhere but in that header.
+
+`InpSignalMeshUrl = ""` or `InpTelemetryUrl = ""` switches a door off explicitly. The
+telemetry door also stays shut on a REAL account while `InpTelemetryDemoOnly` is on.
 
 ## Live account and the on/off switch
 

@@ -62,6 +62,8 @@ HEADER = '''//+-----------------------------------------------------------------
 //|     the broker's BTC symbol, found automatically.                 |
 //|   * 24/7: crypto never closes, so the session clock only shapes  |
 //|     the levels (Asia / London / NY), it never stops the bot.     |
+//|     v1.3.4: the WEEKEND IS OPEN (InpWeekendTrading, default   |
+//|     on); the Friday stop and the week-open guard default to 0.  |
 //|                                                                  |
 //|  M15 = CONTEXT ONLY        (EMA200 + NRTR: shades, never gates)  |
 //|   M5 = REGIME + STRUCTURE  (NRTR + confirmed HH/HL or LH/LL)     |
@@ -77,7 +79,7 @@ HEADER = '''//+-----------------------------------------------------------------
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.33"
+#property version     "1.34"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -410,7 +412,21 @@ def derive_ea(m: str) -> str:
             '   yr += rh;\n'
             '   string volT = "---";\n')
     # 14. version + helper functions (after NqReadAccount's spread read block: append before NqEvaluate's doc comment)
-    t = rep(t, '#define NQ_EA_VERSION "1.9.3"', '#define NQ_EA_VERSION "1.3.3"')
+    t = rep(t, '#define NQ_EA_VERSION "1.9.4"', '#define NQ_EA_VERSION "1.3.4"')
+    # 14b. v1.3.4 - the weekend is OPEN: crypto never closes, so the metal's WEEKEND block must not
+    #      apply; the Friday stop and the week-open guard are off unless the operator sets them
+    #      (a broker that closes crypto at the weekend). Nothing else of the week logic changes.
+    t = rep(t, 'input group "Week edges + rollover (from the AUTO clock: the week opens / closes at 17:00 New York)"\n',
+            'input group "Week edges + rollover (crypto trades 24/7: the WEEKEND IS OPEN; Friday / Monday guards are off unless you set them)"\n'
+            'input bool           InpWeekendTrading   = true;        // Crypto trades the weekend: no WEEKEND block (false = treat the weekend as closed, as a metal does)\n')
+    t = rep(t, 'input int            InpFridayStopMin    = 120;         // No new trade in the last N minutes before the Friday close; resting orders are pulled then\n',
+            'input int            InpFridayStopMin    = 0;           // 0 = no Friday stop (24/7). N > 0: no new trade in the last N minutes before the Friday 17:00 NY close; resting orders are pulled then\n')
+    t = rep(t, 'input int            InpWeekOpenGuardMin = 60;          // No new trade in the first N minutes after the week opens\n',
+            'input int            InpWeekOpenGuardMin = 0;           // 0 = no week-open guard (24/7). N > 0: no new trade in the first N minutes after the Sunday 17:00 NY open\n')
+    t = rep(t, '   if(!NqWeekPos(g_dow, mod, roll, sinceOpen, untilClose))\n   {\n      g_weekEdge = true;\n      g_weekText = "WEEKEND (the week opens Sunday 17:00 New York)";\n   }\n   else if(untilClose <= InpFridayStopMin)\n',
+            '   if(!NqWeekPos(g_dow, mod, roll, sinceOpen, untilClose))\n   {\n      // v1.3.4: crypto trades the weekend - the metal\'s WEEKEND block applies only when the operator says so\n'
+            '      if(!InpWeekendTrading)\n      {\n         g_weekEdge = true;\n         g_weekText = "WEEKEND (InpWeekendTrading = false: treated as closed, as a metal)";\n      }\n'
+            '      else\n         g_weekText = "WEEKEND - OPEN (crypto trades 24/7)";\n   }\n   else if(InpFridayStopMin > 0 && untilClose <= InpFridayStopMin)\n')
     t = rep(t, "// account view (this EA's magic, this symbol)\n", "// account view (this EA's magic, this symbol)\n")
     t = rep(t, "\nvoid NqReadAccount()\n{\n", PROFILE_FUNCS + "\nvoid NqReadAccount()\n{\n")
     # 15. renames
@@ -435,7 +451,7 @@ def derive_test(s: str) -> str:
     t = rep(t, 'find("GOLD / SILVER ONLY")', 'find("CRYPTO ONLY")')
     t = rep(t, '"\\"metal\\":\\"GOLD\\""', '"\\"coin\\":\\"BTC\\""')
     t = rep(t, '"\\"source\\":\\"NRTR_QML_MetalScalper\\""', '"\\"source\\":\\"NRTR_QML_CryptoScalper\\""')
-    t = rep(t, '"\\"ea_version\\":\\"1.9.3\\""', '"\\"ea_version\\":\\"1.3.3\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
+    t = rep(t, '"\\"ea_version\\":\\"1.9.4\\""', '"\\"ea_version\\":\\"1.3.4\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
     t = rep(t, 'CHECK(rows == 12, "12 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, VOL REGIME + the 7 engine rows)");', 'CHECK(rows == 13, "13 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, COIN PROFILE, VOL REGIME + the 7 engine rows)");')
     t = rep(t, "   SIM.tickValue = tickValue;\n", "   SIM.tickValue = tickValue;\n   SIM.contract = 1.0;   // crypto CFD: one coin per lot\n")
     # price offsets of the hand-made broker items, scaled from a $4,150 metal to a $61,500 coin
@@ -457,6 +473,13 @@ def derive_test(s: str) -> str:
     t = t.replace("XAGUSD", "LTCUSD").replace('"XAG"', '"LTC"')
     t = t.replace("silver", "ltc").replace("gold,", "btc,").replace("Market gold", "Market btc").replace("(gold)", "(btc)")
     t = rep(t, "A10 ltc spec (3 digits, tick value 5)", "A10 LTC spec (3 digits, tick value 5)")
+    # v1.3.4: the week's edges on crypto defaults - the weekend is OPEN, no Friday stop, no week-open guard
+    t = rep(t, 'CHECK(g_weekEdge && g_weekFriday && g_weekText.find("FRIDAY STOP") == 0 && (NqMetalGateBits() & NQ_K_WEEK_EDGE) != 0, "Friday 22:30 = 90 min before the close: FRIDAY STOP");',
+            'CHECK(!g_weekEdge && !g_weekFriday && g_weekText == "" && (NqMetalGateBits() & NQ_K_WEEK_EDGE) == 0, "Friday 22:30: OPEN (InpFridayStopMin = 0 on crypto: no Friday stop, nothing pulled)");')
+    t = rep(t, 'CHECK(g_weekEdge && !g_weekFriday && g_weekText.find("FIRST 60 MIN") == 0, "Monday 00:30: the first hour of the week");',
+            'CHECK(!g_weekEdge && !g_weekFriday && g_weekText == "", "Monday 00:30: OPEN (InpWeekOpenGuardMin = 0 on crypto)");')
+    t = rep(t, 'CHECK(g_weekEdge && g_weekText.find("WEEKEND") == 0, "Saturday 01:00: weekend");',
+            'CHECK(!g_weekEdge && !g_weekFriday && g_weekText == "WEEKEND - OPEN (crypto trades 24/7)" && (NqMetalGateBits() & NQ_K_WEEK_EDGE) == 0, "Saturday 01:00: WEEKEND - OPEN, no WEEK EDGE bit (v1.3.4)");')
     # crypto-only checks before the summary
     t = rep(t, '   std::printf("\\nEA TESTS: %d checks passed, %d failed\\n", g_pass, g_fail);\n', CRYPTO_CHECKS +
             '   std::printf("\\nCRYPTO EA TESTS: %d checks passed, %d failed\\n", g_pass, g_fail);\n')
@@ -650,6 +673,28 @@ CRYPTO_CHECKS = r'''
       SIM.macro15.clear();
    }
    end("C6");
+
+   begin("C7 the weekend is OPEN (v1.3.4): on a Saturday clock with the clock guards ON nothing week-related gates, the WEEK row says so, the rollover window still does");
+   {
+      load(btc, "BTCUSD", "BTC", 2, 0.01, 0.01);
+      startAt(START);
+      relax();
+      g_clockGuards = true;
+      datetime fri = T0 + 3 * 86400;   // T0 is Tuesday 2026-09-01: Friday the 4th
+      NqSessionScan(fri + 86400 + 15 * 3600);   // Saturday 15:00 server
+      CHECK(!g_weekEdge && (NqMetalGateBits() & (NQ_K_WEEK_EDGE | NQ_K_ROLLOVER)) == 0 && g_weekText == "WEEKEND - OPEN (crypto trades 24/7)", "Saturday 15:00: no WEEK EDGE, no ROLLOVER - open for business");
+      NqSessionScan(fri + 2 * 86400 + 23 * 3600 + 55 * 60);   // Sunday 23:55 server = 5 min before the 00:00 server rollover (17:00 NY on this clock)
+      CHECK(g_rollover && (NqMetalGateBits() & NQ_K_ROLLOVER) != 0 && !g_weekEdge, "Sunday 23:55: the rollover window still gates (the swap), the weekend itself does not");
+      SIM.now = fri + 86400 + 15 * 3600;
+      NqSessionScan(SIM.now);
+      NqDrawPanel();
+      std::string wk = lbl("v_e0h");
+      std::printf("    WEEK / SMART row: [%s]\n", wk.c_str());
+      CHECK(wk.find("WEEKEND - OPEN") != std::string::npos && wk.find("FRIDAY STOP") == std::string::npos, "the WEEK / SMART row reads WEEKEND - OPEN");
+      g_clockGuards = false;
+      OnDeinit(0);
+   }
+   end("C7");
 '''
 
 
