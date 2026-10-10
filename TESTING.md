@@ -53,7 +53,13 @@ EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 FOREX EA TESTS:   316 checks passed, 0 failed   (the 15 whole-EA sections on a EURUSD
                   5-digit market + a USDJPY 3-digit spec, plus the 9 forex sections below)
-MetaEditor F7:    NOT RUN (not available in the build environment) - for ALL THREE files
+-- BrotherSniperULTIMATE_v18_MT5.mq5 (18.12-mt5.1, the Pine twin) --
+EA SAFETY SCAN: PASS
+EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
+BS18 EA TESTS:    67 checks passed, 0 failed   (B1 init + witnesses, B2 tables + levels,
+                  B3 DST clock + ORG / NWOG / midnight, B4 scalp fire -> market order + journal,
+                  B5 pullback arm -> limit order, B6 risk gate, B7 full replay + DXY squelch)
+MetaEditor F7:    NOT RUN (not available in the build environment) - for ALL FOUR files
 ```
 
 ### Forex EA (`tests/test_ea_forex.cpp`)

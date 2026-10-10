@@ -23,7 +23,7 @@ struct MqlRates
    long long real_volume;
 };
 
-enum ENUM_TIMEFRAMES { PERIOD_CURRENT = 0, PERIOD_M1 = 1, PERIOD_M5 = 5, PERIOD_M15 = 15, PERIOD_H1 = 16385, PERIOD_H4 = 16388 };
+enum ENUM_TIMEFRAMES { PERIOD_CURRENT = 0, PERIOD_M1 = 1, PERIOD_M5 = 5, PERIOD_M15 = 15, PERIOD_H1 = 16385, PERIOD_H4 = 16388, PERIOD_D1 = 16408, PERIOD_W1 = 32769 };
 inline int PeriodSeconds(ENUM_TIMEFRAMES tf)
 {
    switch(tf)
@@ -33,6 +33,8 @@ inline int PeriodSeconds(ENUM_TIMEFRAMES tf)
       case PERIOD_M15: return 900;
       case PERIOD_H1: return 3600;
       case PERIOD_H4: return 14400;
+      case PERIOD_D1: return 86400;
+      case PERIOD_W1: return 604800;
       default: return 900;
    }
 }
@@ -74,11 +76,11 @@ enum { DEAL_SYMBOL = 1, DEAL_COMMENT };
 enum { DEAL_PROFIT = 1, DEAL_COMMISSION, DEAL_SWAP, DEAL_VOLUME, DEAL_PRICE };
 enum { DEAL_ENTRY_IN = 0, DEAL_ENTRY_OUT = 1, DEAL_ENTRY_INOUT = 2, DEAL_ENTRY_OUT_BY = 3 };
 enum { DEAL_TYPE_BUY = 0, DEAL_TYPE_SELL = 1 };
-enum { OBJ_LABEL = 1, OBJ_RECTANGLE_LABEL, OBJ_TEXT, OBJ_TREND, OBJ_ARROW };
+enum { OBJ_LABEL = 1, OBJ_RECTANGLE_LABEL, OBJ_TEXT, OBJ_TREND, OBJ_ARROW, OBJ_RECTANGLE, OBJ_HLINE };
 enum { OBJPROP_CORNER = 1, OBJPROP_XDISTANCE, OBJPROP_YDISTANCE, OBJPROP_XSIZE, OBJPROP_YSIZE, OBJPROP_BGCOLOR,
        OBJPROP_BORDER_TYPE, OBJPROP_COLOR, OBJPROP_WIDTH, OBJPROP_BACK, OBJPROP_SELECTABLE, OBJPROP_HIDDEN,
        OBJPROP_ZORDER, OBJPROP_ANCHOR, OBJPROP_TEXT, OBJPROP_FONT, OBJPROP_FONTSIZE, OBJPROP_TIME, OBJPROP_PRICE,
-       OBJPROP_TOOLTIP, OBJPROP_STYLE, OBJPROP_RAY_RIGHT, OBJPROP_ARROWCODE };
+       OBJPROP_TOOLTIP, OBJPROP_STYLE, OBJPROP_RAY_RIGHT, OBJPROP_ARROWCODE, OBJPROP_FILL };
 enum { CORNER_LEFT_UPPER = 0 };
 enum { ANCHOR_LEFT_UPPER = 0, ANCHOR_LEFT_LOWER, ANCHOR_CENTER, ANCHOR_UPPER, ANCHOR_LOWER, ANCHOR_TOP, ANCHOR_BOTTOM, ANCHOR_LEFT };
 enum { BORDER_FLAT = 0 };
@@ -202,6 +204,8 @@ struct SimState
    double bid = 0.0;
    std::vector<MqlRates> m1, m5, m15;   // full history, may extend past `now`
    std::vector<MqlRates> h1, h4;        // higher timeframes (empty = the broker serves none)
+   std::vector<MqlRates> d1, w1;        // daily / weekly (the Pine twin reads them)
+   std::map<std::string, std::map<int, std::vector<MqlRates>>> extraTf;   // a second symbol served per timeframe (DXY M1 + D1, a yield D1, oil H1)
    std::vector<MqlRates> macro15;       // optional M15 series of a second symbol (macro / lead filter)
    std::string macroSym;                // its name ("" = any second symbol answers); SymbolSelect sees it only when macro15 is loaded
    datetime now = 0;
@@ -250,6 +254,9 @@ inline const std::vector<MqlRates> &simSeries(ENUM_TIMEFRAMES tf)
    if(tf == PERIOD_M1) return SIM.m1;
    if(tf == PERIOD_H1) return SIM.h1;
    if(tf == PERIOD_H4) return SIM.h4;
+   if(tf == PERIOD_D1) return SIM.d1;
+   if(tf == PERIOD_W1) return SIM.w1;
+   if(tf == PERIOD_CURRENT) return simSeries(_Period);
    return tf == PERIOD_M5 ? SIM.m5 : SIM.m15;
 }
 // bars that exist at SIM.now: the last one is the forming bar (series index 0)
@@ -266,6 +273,14 @@ inline const std::vector<MqlRates> *simExtra(const string &sym)
    auto it = SIM.extra.find(sym);
    return it == SIM.extra.end() ? nullptr : &it->second;
 }
+inline const std::vector<MqlRates> *simExtraTf(const string &sym, int tf)
+{
+   auto it = SIM.extraTf.find(sym);
+   if(it == SIM.extraTf.end()) return nullptr;
+   auto jt = it->second.find(tf);
+   return jt == it->second.end() ? nullptr : &jt->second;
+}
+inline bool simHasExtraTf(const string &sym) { return SIM.extraTf.count(sym) > 0; }
 inline int simVisibleOf(const std::vector<MqlRates> &v)
 {
    int k = 0;
@@ -273,7 +288,7 @@ inline int simVisibleOf(const std::vector<MqlRates> &v)
    return k;
 }
 // Market Watch: this symbol always; a second symbol only while a macro series is loaded (and named, if a name was given)
-inline bool SymbolSelect(const string &sym, bool) { return !simIsMacro(sym) || simExtra(sym) != nullptr || (!SIM.macro15.empty() && (SIM.macroSym.empty() || SIM.macroSym == sym)); }
+inline bool SymbolSelect(const string &sym, bool) { return !simIsMacro(sym) || simHasExtraTf(sym) || simExtra(sym) != nullptr || (!SIM.macro15.empty() && (SIM.macroSym.empty() || SIM.macroSym == sym)); }
 // a second symbol the broker does not serve (macroSym set to another name): no bars, no rates
 inline bool simMacroServed(const string &sym) { return SIM.macroSym.empty() || SIM.macroSym == sym; }
 inline int simVisibleMacro()
@@ -285,7 +300,8 @@ inline int simVisibleMacro()
 inline int Bars(const string &sym, ENUM_TIMEFRAMES tf)
 {
    if(!simIsMacro(sym)) return simVisible(tf);
-   const auto *x = simExtra(sym);
+   const auto *x = simExtraTf(sym, (int)tf);
+   if(!x) x = simExtra(sym);
    if(x) return simVisibleOf(*x);
    return simMacroServed(sym) ? simVisibleMacro() : 0;
 }
@@ -320,7 +336,8 @@ inline int CopyRates(const string &sym, ENUM_TIMEFRAMES tf, int start, int count
    if(SIM.copyFail) return -1;
    if(simIsMacro(sym))
    {
-      const auto *x = simExtra(sym);
+      const auto *x = simExtraTf(sym, (int)tf);
+      if(!x) x = simExtra(sym);
       if(!x && !simMacroServed(sym)) return -1;
       const std::vector<MqlRates> &m = x ? *x : SIM.macro15;
       int vm = x ? simVisibleOf(m) : simVisibleMacro();
@@ -921,6 +938,7 @@ inline int WebRequest(const string &method, const string &url, const string &hea
 
 // ---- chart objects ----
 inline int ObjectFind(long, const string &name) { return SIM.objs.count(name) ? 0 : -1; }
+inline bool ObjectDelete(long, const string &name) { return SIM.objs.erase(name) > 0; }
 inline bool ObjectCreate(long, const string &name, int type, int, datetime t1, double p1, datetime t2 = 0, double p2 = 0)
 {
    (void)t2; (void)p2;

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Full local test suite for the THREE EAs (metal, the crypto twin, the forex EA).
+# Full local test suite for the FOUR EAs (metal, the crypto twin, the forex EA, the Pine twin).
 # See TESTING.md for what this does and does NOT prove.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -12,11 +12,12 @@ python3 tools/derive_crypto_ea.py --check || rc=1
 echo "== 0b. the forex EA's engine block is identical to the metal EA's (its asset layer is its own) =="
 python3 tools/check_forex_engine.py || rc=1
 
-for EA in NRTR_QML_MetalScalper.mq5 NRTR_QML_CryptoScalper.mq5 NRTR_QML_ForexScalper.mq5; do
+for EA in NRTR_QML_MetalScalper.mq5 NRTR_QML_CryptoScalper.mq5 NRTR_QML_ForexScalper.mq5 BrotherSniperULTIMATE_v18_MT5.mq5; do
   case "$EA" in
     NRTR_QML_MetalScalper.mq5)  TAG=ea;        TEST=tests/test_ea.cpp ;;
     NRTR_QML_CryptoScalper.mq5) TAG=ea_crypto; TEST=tests/test_ea_crypto.cpp ;;
     NRTR_QML_ForexScalper.mq5)  TAG=ea_forex;  TEST=tests/test_ea_forex.cpp ;;
+    BrotherSniperULTIMATE_v18_MT5.mq5) TAG=ea_bs18; TEST=tests/test_ea_bs18.cpp ;;
   esac
   echo
   echo "=================== EA: $EA ==================="
@@ -24,11 +25,12 @@ for EA in NRTR_QML_MetalScalper.mq5 NRTR_QML_CryptoScalper.mq5 NRTR_QML_ForexSca
   python3 tests/check_safety_ea.py "$EA" || rc=1
 
   echo "== 2. translate the real EA source (syntax only) =="
-  python3 tests/mql2cpp.py "$EA" "build/${TAG}_engine.inc" engine
+  [ "$TAG" != ea_bs18 ] && python3 tests/mql2cpp.py "$EA" "build/${TAG}_engine.inc" engine
   python3 tests/mql2cpp.py "$EA" "build/${TAG}_full.inc" full
   [ "$TAG" = ea ] && cp "build/${TAG}_engine.inc" build/ea_engine.inc && cp "build/${TAG}_full.inc" build/ea_full.inc
   [ "$TAG" = ea_crypto ] && cp "build/${TAG}_full.inc" build/ea_full_crypto.inc
   [ "$TAG" = ea_forex ] && cp "build/${TAG}_full.inc" build/ea_full_forex.inc
+  [ "$TAG" = ea_bs18 ] && cp "build/${TAG}_full.inc" build/ea_full_bs18.inc
 
   echo "== 3. surrogate compile of the WHOLE EA (g++ $FLAGS) =="
   printf '#include "../tests/mt5_sim_ea.h"\n#include "%s_full.inc"\nint main(){return 0;}\n' "$TAG" > "build/${TAG}_compile.cpp"
@@ -37,6 +39,8 @@ for EA in NRTR_QML_MetalScalper.mq5 NRTR_QML_CryptoScalper.mq5 NRTR_QML_ForexSca
   if [ "$TAG" = ea ]; then
     echo "== 4. EA engine tests (regime, trigger, QML/pullback plans, forecast, risk, lot, clock) =="
     g++ $FLAGS -Ibuild tests/test_ea_engine.cpp -o build/test_ea_engine && ./build/test_ea_engine || rc=1
+  elif [ "$TAG" = ea_bs18 ]; then
+    echo "== 4. (the Pine twin has no NRTR engine block: its logic is the Pine's, tested whole in step 5) =="
   else
     echo "== 4. EA engine tests: this engine block is byte-identical to the tested metal engine (step 0) =="
   fi

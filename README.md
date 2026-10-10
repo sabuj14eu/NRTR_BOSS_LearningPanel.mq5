@@ -1,4 +1,4 @@
-# NRTR QML Metal Scalper (MT5, Gold & Silver) + the Crypto twin (BTC, ETH, LTC, altcoins) + the Forex EA (any pair)
+# NRTR QML Metal Scalper (MT5, Gold & Silver) + the Crypto twin (BTC, ETH, LTC, altcoins) + the Forex EA (any pair) + the Pine twin (BrotherSniperULTIMATE v18.12 on MT5)
 
 One standalone Expert Advisor, `NRTR_QML_MetalScalper.mq5`, for **XAUUSD / Gold** and
 **XAGUSD / Silver** only. Nothing else. No Telegram, no DLLs. The only network use is two
@@ -729,6 +729,38 @@ false` for good measure, and leave the **Algo Trading button OFF** so the EA is 
 `NQ telemetry: snapshot accepted by SignalMesh (ANALYSIS ONLY)` once, and a failure count if the
 platform stops answering. Telemetry runs after `NqTrade()` and has no queue; it can never block
 or alter a decision, and a failed POST costs one `Print`.
+
+## The Pine twin: `BrotherSniperULTIMATE_v18_MT5.mq5` (sensor + execution)
+
+The TradingView indicator `BrotherSniperULTIMATE_v18_FINAL_v6.pine` (v18.12, in the
+Sniper-System repo under `pine/`) ported to MQL5 **line by line** so the same readings
+appear on the MT5 chart - and, because an EA can trade, so the Pine's two bot fires
+become orders on the EA's own account. One file, no dependency on the NRTR EAs.
+
+| | the Pine on TradingView | the twin on MT5 |
+|---|---|---|
+| MAIN DASHBOARD (54 rows), STRUCTURAL BRAIN (38), SMART SCALP panel, MANUAL MONITOR, PIVOT table | tables | the same rows, same words, same colours (positions + text size are inputs) |
+| swings, S/R lines, BOS, CHoCH, FVG boxes + mitigation, order blocks + mitigation, liquidity zones, sweeps, inducement, candle marks, scalp labels, MICRO / SWING labels, pivots, PDH/PDL, weekly H/L, NWOG, ORG, midnight open, EMA 20/50, session background | drawings | the same objects (EMAs as segments: an EA cannot plot; candle colouring and the 50% midline tint are not ported) |
+| sessions / killzones / news windows in Tokyo, London and New York time with DST | `time(..., "America/New_York")` | the broker's live GMT offset + the US / EU daylight rules, per bar |
+| H1 / H4 / D1 trend, pivots, PDH/PDL, DXY, 10-year yield, oil | `request.security(..., [1], lookahead_on)` | the LAST CLOSED higher-timeframe bar at each chart bar (same "confirmed" semantics) |
+| DXY volatility squelch on 1-minute intrabars | `request.security_lower_tf` | the dollar index's M1 bars inside the live chart bar (needs a dollar-index symbol at the broker; none = no squelch, said on the panel) |
+| SMART SCALP bot fire (score -> grade -> R:R -> location gate -> cooldown -> squelch -> news policy -> entry distance) | webhook JSON to the bots | **ONE market order** at the bar close with the Pine's SL and TP1 (`InpSplitTp2` = two half orders TP1 / TP2), lot from `InpRiskPct` and the real tick value |
+| PULLBACK arm (v18.7, validated n=640) | webhook when tapped | **ONE resting limit order** at the armed entry with the Pine's 1.5 ATR stop and TP1; pulled when the arm dies (TREND FLIP / EXPIRED / GAPPED THRU), while a DXY squelch is active or the news policy blocks; re-placed when alive again |
+| max trades / day, daily loss | display only ("BOT-SIDE") | **enforced by the EA on its own deals** (`InpMaxTradesPerDay`, `InpMaxDailyLossPct`, `InpMaxOpenPositions`) |
+| alerts | TradingView alerts | the SignalMesh journal door (`system: BS-MT5`, the Pine's payload fields, events fired / placed / executed / cancelled / closed) - NEVER the brain's signal door: this EA is not a second signal source for the council |
+
+**Honest differences.** The Pine's `var` state is replayed over the last `InpHistoryBars`
+(1500) bars on every tick, not the whole history; RSI / ATR / ADX / EMA warm up from the
+window start (converged after ~50 bars); D1 / W1 are the BROKER's day and week bars
+(TradingView's are the exchange's); the daily VWAP is anchored at New York midnight like the
+ICT levels; "FIRED" on the BOT GATE rows means the last CONFIRMED bar fired (the live bar
+never confirms); the squelch is a live guard (history is replayed without it).
+
+**Setup.** One chart per symbol (M5 or M15, like the Pine), magic `180918`, the Algo
+Trading button is the switch (demo or real, `InpAllowRealAccount` default true - the
+operator's decision), `InpSignalMeshSecret` arms the journal (address preset), allow
+`https://app.signalmesh.dev` under Tools > Options > Expert Advisors > WebRequest.
+Tests: `tests/test_ea_bs18.cpp` (B1-B7).
 
 ## Setting up SignalMesh once (v1.9.4 / 1.3.4 / 1.0.5)
 
