@@ -2599,8 +2599,7 @@ string BsSigIdOf(string cmt)
 {
    if(StringFind(cmt, "BS18-PB-BUY-") == 0) return "PB-BUY-" + StringSubstr(cmt, 12);
    if(StringFind(cmt, "BS18-PB-SELL-") == 0) return "PB-SELL-" + StringSubstr(cmt, 13);
-   int dash = StringFind(cmt, "-", StringFind(cmt, "-", 3) + 1);   // "SS-BUY-<stamp>" or "SS-BUY-<stamp>-1"
-   (void)dash;
+   // "SS-BUY-<stamp>" or "SS-BUY-<stamp>-1" (a half order): the stamp is the id
    string s = cmt;
    int k = StringLen(s);
    if(k > 2 && (StringSubstr(s, k - 2) == "-1" || StringSubstr(s, k - 2) == "-2")) s = StringSubstr(s, 0, k - 2);
