@@ -2085,7 +2085,7 @@ void f_b3B(int r, string t0, string t1, string t2, color c0, color c1, color c2,
 void f_m2(int r, string t0, string t1, color c1) { int px = BsFontDash(); BsCell(0, r, t0, cWhite, px, cBlack, false); BsCell(1, r, t1, c1, px, cBlack, false); }
 void f_pvt(int r, string nm, double lvl)
 {
-   color bgP = (g_out.nearestPivotName == nm) ? 0x40A0A0 : 0x202020;
+   color bgP = (g_out.nearestPivotName == nm) ? (color)0x40A0A0 : (color)0x202020;
    color clrP = BsHas(nm, "R") ? cRed : (BsHas(nm, "S") ? cLime : cWhite);
    f_b3B(r, nm, FS(lvl), NA(lvl) ? g_uDoubleDash : F2(RoundTo(MathAbs(g_out.close - lvl), 2)), clrP, clrP, cNote, bgP);
 }
