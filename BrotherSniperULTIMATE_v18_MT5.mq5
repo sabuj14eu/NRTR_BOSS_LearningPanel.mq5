@@ -39,7 +39,7 @@
 #property description "SMART SCALP fires = market orders at bar close; PULLBACK arms = limit orders; the Algo Trading button is the switch."
 #property strict
 
-#define BS_VERSION "18.12-mt5.1"
+#define BS_VERSION "18.12-mt5.2"
 
 //=== SECTION 1 - INPUTS (the Pine's inputs, same names, same defaults) ===
 enum BS_MARKET { MK_AUTO = 0, MK_SILVER, MK_GOLD, MK_EURUSD, MK_USDJPY, MK_DXY, MK_OIL, MK_US30, MK_NAS100, MK_BTC, MK_ETH, MK_XRP };
@@ -228,6 +228,20 @@ const bool FEATURE_RANGE_BROKEN = true;
 const bool FEATURE_PULLBACK     = true;
 const bool FEATURE_STRUCT_GATE  = false;
 
+input group "-- Chart --"
+input int            InpChartShiftPct = 50;     // Keep the last bar this far from the right edge (% of the chart width; 50 = the middle; 0 = leave the chart alone)
+
+input group "-- NEWS GUARD (MT5 economic calendar - beyond the Pine's fixed time windows) --"
+input bool           InpNewsGuard     = true;   // Close the gate around HIGH-impact events of the chart's currencies and pull resting orders
+input string         InpNewsCurrencies = "";    // Currencies to watch ("" = AUTO: the symbol's base + profit currencies, e.g. USD for gold / BTC, EUR+USD for EURUSD)
+input int            InpNewsBeforeMin = 30;     // ... from N minutes before the event
+input int            InpNewsAfterMin  = 30;     // ... to N minutes after it
+input int            InpNewsTopBeforeMin = 60;  // TOP TIER (FOMC, rate decisions, NFP, CPI, GDP, pressers): from N minutes before
+input int            InpNewsTopAfterMin = 60;   // ... to N minutes after
+input bool           InpNewsMediumBlocks = false; // MODERATE-impact events close the gate too (false = shown only)
+input bool           InpNewsUnknownBlocks = true; // A calendar that answers nothing = NEWS UNKNOWN = no new trade (false = trade blind, your choice)
+input double         InpNewsBankProfitR = 0.2;  // When a window opens, a position at least this many R in profit is closed (banked); 0 = never
+
 input group "-- SignalMesh (journal of every fire / fill / close; ANALYSIS side only) --"
 input bool           InpJournalToFile = true;   // Append every event to MQL5/Files/BS18_events_<symbol>.jsonl
 input string         InpSignalMeshUrl = "https://app.signalmesh.dev/webhooks/brain/signal";   // Journal door (preset; "" = off). Armed only when the secret is set
@@ -357,6 +371,29 @@ int      g_webFails;
 bool     g_jrFileWarned;
 bool     g_webWarned;
 
+// the MT5 calendar (events of the chart's currencies, read every minute)
+string   g_newsCcy;           // "USD" or "EUR,USD"
+datetime g_evT[];
+string   g_evCcy[];
+int      g_evImp[];
+string   g_evName[];
+bool     g_evTop[];
+int      g_nEvCal;
+bool     g_newsOk, g_newsTester, g_newsBlock, g_newsUnknown, g_newsLive;
+int      g_newsErr;
+string   g_newsText, g_newsWhy, g_newsState;
+datetime g_newsReadT, g_newsWinT, g_newsBankedWin;
+// our open positions, tracked so a fill and a close are journaled with their outcome
+ulong    g_posTk[];
+string   g_posCmt[];
+double   g_posOpen[];
+double   g_posSl[];
+double   g_posTp[];
+int      g_posDir[];
+int      g_nPos;
+ulong    g_closeTk;           // a position this EA closed itself, and why (the tracker journals it)
+string   g_closeWhy;
+
 // chart drawing state
 datetime g_drawnBar;          // the last bar the history annotations were drawn for
 int      g_evCount;
@@ -364,6 +401,8 @@ int      g_lineCount;
 
 //=== SMALL HELPERS ==================================================
 string NqRiskGate();
+bool   BsIsOurs(long magic, string sym);
+bool   BsClosePosition(ulong ticket, string why);
 string S(string x) { return x; }
 string U(int cp) { return ShortToString((ushort)cp); }
 string F2(double v) { return DoubleToString(v, 2); }
@@ -536,6 +575,150 @@ void BsEma(const double &src[], int n, int len, double &out[])
    out[0] = src[0];
    for(int i = 1; i < n; i++)
       out[i] = src[i] * k + out[i - 1] * (1.0 - k);
+}
+
+//=== NEWS GUARD: the MT5 economic calendar (events of the chart's currencies) ===
+string BsHhMm(long secs)
+{
+   if(secs < 0)
+      secs = 0;
+   return IntegerToString(secs / 3600) + "h" + IntegerToString((secs % 3600) / 60, 2, '0') + "m";
+}
+bool BsIsTopTier(string name)
+{
+   string u = name;
+   StringToUpper(u);
+   string keys = "FOMC,RATE DECISION,INTEREST RATE,CASH RATE,REFINANCING,NONFARM,NON-FARM,PAYROLL,CPI,CONSUMER PRICE,GDP,PRESS CONFERENCE,"
+                 "MONETARY POLICY,FED CHAIR,ECB PRESIDENT,BOE GOVERNOR,BOJ,RBA,RBNZ,BOC ,SNB,PCE,UNEMPLOYMENT RATE,ISM MANUFACTURING,ISM SERVICES,RETAIL SALES";
+   int pos = 0;
+   int n = StringLen(keys);
+   while(pos < n)
+   {
+      int c = StringFind(keys, ",", pos);
+      if(c < 0)
+         c = n;
+      string k = StringSubstr(keys, pos, c - pos);
+      pos = c + 1;
+      if(k != "" && StringFind(u, k) >= 0)
+         return true;
+   }
+   return false;
+}
+bool BsCcyIn(string csv, string c) { return c != "" && StringFind("," + csv + ",", "," + c + ",") >= 0; }
+string BsNewsCurrencies()
+{
+   if(InpNewsCurrencies != "")
+   {
+      string u = InpNewsCurrencies;
+      StringToUpper(u);
+      return u;
+   }
+   string b = SymbolInfoString(g_sym, SYMBOL_CURRENCY_BASE), q = SymbolInfoString(g_sym, SYMBOL_CURRENCY_PROFIT);
+   StringToUpper(b);
+   StringToUpper(q);
+   string fiat = "USD,EUR,GBP,JPY,CHF,AUD,NZD,CAD,CNY,SEK,NOK,DKK,PLN,CZK,HUF,TRY,ZAR,MXN,SGD,HKD,INR,BRL,KRW";
+   string out = "";
+   if(BsCcyIn(fiat, b)) out = b;
+   if(BsCcyIn(fiat, q) && q != b) out = (out == "") ? q : out + "," + q;
+   return (out == "") ? "USD" : out;
+}
+void BsReadCalendar()
+{
+   g_nEvCal = 0;
+   g_newsOk = false;
+   g_newsTester = (MQLInfoInteger(MQL_TESTER) != 0);
+   g_newsReadT = TimeTradeServer();
+   if(!InpNewsGuard || g_newsTester)
+      return;
+   datetime now = TimeTradeServer();
+   MqlCalendarValue vals[];
+   ResetLastError();
+   bool okCall = CalendarValueHistory(vals, now - 86400, now + 2 * 86400, NULL, NULL);
+   int n = ArraySize(vals);
+   if(!okCall || n <= 0)
+   {
+      g_newsErr = GetLastError();
+      return;
+   }
+   g_newsErr = 0;
+   g_newsOk = true;
+   for(int i = 0; i < n && g_nEvCal < 400; i++)
+   {
+      MqlCalendarEvent ev;
+      if(!CalendarEventById(vals[i].event_id, ev))
+         continue;
+      if(ev.importance < CALENDAR_IMPORTANCE_MODERATE)
+         continue;
+      MqlCalendarCountry co;
+      if(!CalendarCountryById(ev.country_id, co))
+         continue;
+      string ccy = co.currency;
+      StringToUpper(ccy);
+      if(!BsCcyIn(g_newsCcy, ccy))
+         continue;
+      ArrayResize(g_evT, g_nEvCal + 1, 64);
+      ArrayResize(g_evCcy, g_nEvCal + 1, 64);
+      ArrayResize(g_evImp, g_nEvCal + 1, 64);
+      ArrayResize(g_evName, g_nEvCal + 1, 64);
+      ArrayResize(g_evTop, g_nEvCal + 1, 64);
+      g_evT[g_nEvCal] = vals[i].time;
+      g_evCcy[g_nEvCal] = ccy;
+      g_evImp[g_nEvCal] = (int)ev.importance;
+      g_evName[g_nEvCal] = ev.name;
+      g_evTop[g_nEvCal] = BsIsTopTier(ev.name);
+      g_nEvCal++;
+   }
+}
+void BsNewsState()
+{
+   g_newsBlock = false;
+   g_newsUnknown = false;
+   g_newsText = "";
+   g_newsWhy = "";
+   g_newsState = "CLEAR";
+   if(!InpNewsGuard) { g_newsState = "OFF"; g_newsText = "news guard off"; g_newsLive = false; return; }
+   if(g_newsTester) { g_newsState = "N/A"; g_newsText = "N/A in the Strategy Tester (no calendar there) - not gated"; g_newsLive = false; return; }
+   if(!g_newsOk)
+   {
+      g_newsUnknown = true;
+      g_newsState = "UNKNOWN";
+      g_newsText = S("UNKNOWN - the calendar answered nothing") + ((g_newsErr != 0) ? (" (error " + IntegerToString(g_newsErr) + ")") : S("")) +
+                   (InpNewsUnknownBlocks ? S(" - not trading blind") : S(" - trading anyway (InpNewsUnknownBlocks = false)"));
+      g_newsLive = InpNewsUnknownBlocks;
+      return;
+   }
+   datetime now = TimeTradeServer();
+   datetime nextT = 0;
+   int nextI = -1;
+   for(int i = 0; i < g_nEvCal; i++)
+   {
+      bool hi = (g_evImp[i] >= (int)CALENDAR_IMPORTANCE_HIGH);
+      bool guarded = hi || (InpNewsMediumBlocks && g_evImp[i] >= (int)CALENDAR_IMPORTANCE_MODERATE);
+      if(!guarded)
+         continue;
+      int before = g_evTop[i] ? InpNewsTopBeforeMin : InpNewsBeforeMin;
+      int after = g_evTop[i] ? InpNewsTopAfterMin : InpNewsAfterMin;
+      if(now >= g_evT[i] - (long)before * 60 && now < g_evT[i] + (long)after * 60)
+      {
+         if(!g_newsBlock)
+         {
+            g_newsBlock = true;
+            g_newsWinT = g_evT[i];
+            string imp = g_evTop[i] ? "TOP TIER" : (hi ? "HIGH" : "MODERATE");
+            g_newsWhy = g_evCcy[i] + " " + g_evName[i] + " at " + TimeToString(g_evT[i], TIME_MINUTES) + " (" + imp + ", " +
+                        ((now < g_evT[i]) ? ("in " + BsHhMm((long)g_evT[i] - (long)now)) : (BsHhMm((long)now - (long)g_evT[i]) + " ago")) +
+                        ") - gate closed " + IntegerToString(before) + " min before to " + IntegerToString(after) + " min after";
+         }
+      }
+      if(g_evT[i] > now && (nextI < 0 || g_evT[i] < nextT)) { nextT = g_evT[i]; nextI = i; }
+   }
+   if(g_newsBlock) { g_newsState = "GUARD"; g_newsText = "GUARD - " + g_newsWhy; }
+   else if(nextI >= 0)
+      g_newsText = S("clear - next ") + (g_evTop[nextI] ? S("TOP TIER ") : S("HIGH ")) + g_evCcy[nextI] + " " + g_evName[nextI] + " in " + BsHhMm((long)nextT - (long)now) +
+                   " (gate closes " + IntegerToString(g_evTop[nextI] ? InpNewsTopBeforeMin : InpNewsBeforeMin) + " min before)";
+   else
+      g_newsText = "clear - no HIGH " + g_newsCcy + " event in the next 48h";
+   g_newsLive = g_newsBlock;
 }
 
 //=== DATA: the chart window, the higher timeframes, the macro witnesses =====
@@ -1085,6 +1268,7 @@ void BsPass(bool draw)
       double aeChaseMul = (InpUseAdaptive && volHigh) ? InpAeChaseHi : 1.0;
       double aeSLFloor = (InpUseAdaptive && (volHigh || inNewsWindow)) ? InpAeSLFloorHi : InpAeSLFloorLo;
       bool dxySquelched = (i >= n - 2) && squelchNow;
+      bool newsGuardLive = (i >= n - 2) && g_newsLive;
 
       // SECTION 5b - PDH/PDL, weekly H/L (the last CLOSED daily / weekly bar)
       double pdHigh = EMPTY_VALUE, pdLow = EMPTY_VALUE, dHigh = EMPTY_VALUE, dLow = EMPTY_VALUE, dClose2 = EMPTY_VALUE;
@@ -1502,7 +1686,7 @@ void BsPass(bool draw)
       if(!NA(V.pbSellE) && close > V.pbSellE + InpPbTapMax * atrValue) { V.pbSellE = EMPTY_VALUE; V.pbSellDeath = "GAPPED THRU"; }
       bool pbCoolOK = V.pbLastFire < 0 || (i - V.pbLastFire) >= InpPbCoolBars;
       bool pbHtfAln = (isUpTrend && h1Bull && h4Bull) || (isDownTrend && h1Bear && h4Bear);
-      bool newsOK = (!InpNewsBlockNew || !inNewsWindow);
+      bool newsOK = (!InpNewsBlockNew || !inNewsWindow) && !newsGuardLive;
       bool pbFireB = FEATURE_PULLBACK && InpPbEnable && InpSsEnable && tradeAllowed && pbCoolOK && V.pbFiresHr < InpPbMaxHr && !NA(V.pbBuyE) && low <= V.pbBuyE && close >= V.pbBuyE && g_symbolAllowed && !dxySquelched && newsOK && confirmed;
       bool pbFireS = FEATURE_PULLBACK && InpPbEnable && InpSsEnable && tradeAllowed && pbCoolOK && V.pbFiresHr < InpPbMaxHr && !NA(V.pbSellE) && high >= V.pbSellE && close <= V.pbSellE && g_symbolAllowed && !dxySquelched && newsOK && confirmed;
       double pbRRb = 0.0, pbRRs = 0.0;
@@ -1729,7 +1913,7 @@ void BsPass(bool draw)
          g_fire.armSellE = V.pbSellE; g_fire.armSellSL = V.pbSellSL; g_fire.armSellT1 = V.pbSellT1; g_fire.armSellT2 = V.pbSellT2; g_fire.armSellBar = V.pbSellArmBar;
          g_fire.armSellT = (V.pbSellArmBar >= 0) ? g_t[V.pbSellArmBar] : 0;
          g_fire.pbCoolOK = (V.pbLastFire < 0 || (i - V.pbLastFire) >= InpPbCoolBars); g_fire.pbHrOK = (V.pbFiresHr < InpPbMaxHr);
-         g_fire.squelched = squelchNow; g_fire.newsBlock = (InpNewsBlockNew && inNewsWindow);
+         g_fire.squelched = squelchNow; g_fire.newsBlock = (InpNewsBlockNew && inNewsWindow) || g_newsLive;
       }
 
       // shift the per-bar memories (the Pine's [1] / [2])
@@ -1815,8 +1999,8 @@ void BsPass(bool draw)
       // BOT GATE verdicts: the fire of the LAST CONFIRMED bar is what "FIRED" means on MT5 (the live bar never confirms)
       o.botBC = (V.ssFireBarT == g_t[n - 2] && V.ssFireBotBuy); o.botSC = (V.ssFireBarT == g_t[n - 2] && !V.ssFireBotBuy);
       bool bGradeOKd = (bGrade == "A+" || bGrade == "A" || bGrade == "B"), sGradeOKd = (sGrade == "A+" || sGrade == "A" || sGrade == "B");
-      o.botBuyWhy = fireBuyBot ? "ALL GATES PASS" : (!InpSsEnable ? "scalp OFF" : ((scoreBuy < threshold) ? "score " + FI(scoreBuy) + " < " + FI(threshold) : ((InpFcRequireDom && scoreBuy <= scoreSell) ? "SELL side scores >= BUY" : (!bGradeOKd ? "grade " + bGrade + " (need B+)" : ((buyRR < InpFcMinRR) ? "R:R " + F2(buyRR) + " < " + F1(InpFcMinRR) : (!locBuyOK ? "gate: " + locBuyTxt : (!lgBuyCooldownOK ? "cooldown" : (squelchNow ? "DXY squelch" : "session/veto"))))))));
-      o.botSellWhy = fireSellBot ? "ALL GATES PASS" : (!InpSsEnable ? "scalp OFF" : ((scoreSell < threshold) ? "score " + FI(scoreSell) + " < " + FI(threshold) : ((InpFcRequireDom && scoreSell <= scoreBuy) ? "BUY side scores >= SELL" : (!sGradeOKd ? "grade " + sGrade + " (need B+)" : ((sellRR < InpFcMinRR) ? "R:R " + F2(sellRR) + " < " + F1(InpFcMinRR) : (!locSellOK ? "gate: " + locSellTxt : (!lgSellCooldownOK ? "cooldown" : (squelchNow ? "DXY squelch" : "session/veto"))))))));
+      o.botBuyWhy = fireBuyBot ? "ALL GATES PASS" : (!InpSsEnable ? "scalp OFF" : ((scoreBuy < threshold) ? "score " + FI(scoreBuy) + " < " + FI(threshold) : ((InpFcRequireDom && scoreBuy <= scoreSell) ? "SELL side scores >= BUY" : (!bGradeOKd ? "grade " + bGrade + " (need B+)" : ((buyRR < InpFcMinRR) ? "R:R " + F2(buyRR) + " < " + F1(InpFcMinRR) : (!locBuyOK ? "gate: " + locBuyTxt : (!lgBuyCooldownOK ? "cooldown" : (squelchNow ? "DXY squelch" : (g_newsLive ? "news guard: " + g_newsState : "session/veto")))))))));
+      o.botSellWhy = fireSellBot ? "ALL GATES PASS" : (!InpSsEnable ? "scalp OFF" : ((scoreSell < threshold) ? "score " + FI(scoreSell) + " < " + FI(threshold) : ((InpFcRequireDom && scoreSell <= scoreBuy) ? "BUY side scores >= SELL" : (!sGradeOKd ? "grade " + sGrade + " (need B+)" : ((sellRR < InpFcMinRR) ? "R:R " + F2(sellRR) + " < " + F1(InpFcMinRR) : (!locSellOK ? "gate: " + locSellTxt : (!lgSellCooldownOK ? "cooldown" : (squelchNow ? "DXY squelch" : (g_newsLive ? "news guard: " + g_newsState : "session/veto")))))))));
       o.saActive = V.saActive; o.saDir = V.saDir; o.saEntry = V.saEntry; o.saSL = V.saSL; o.saTP1 = V.saTP1; o.saTP2 = V.saTP2; o.saRR = V.saRR; o.saLots = V.saLots; o.saScore = V.saScore; o.saBar = V.saBar; o.saGrade = V.saGrade; o.saEndWhy = V.saEndWhy;
       o.rsiValue = rsiValue; o.atrValue = atrValue; o.atrSL = atrSL; o.adxVal = adxVal; o.volAvg = volAvg; o.spreadVal = spreadVal; o.dVwap = dVwap; o.ma20 = ma20; o.ma50 = ma50; o.lgEma20 = lgEma20; o.vwapSide = vwapSide;
       o.volOk = volOk; o.spreadOk = spreadOk; o.adxTrendStrong = adxTrendStrong; o.adxTrendModerate = adxTrendModerate; o.adxTrendWeak = adxTrendWeak;
@@ -2061,6 +2245,8 @@ void BsCell(int col, int row, string text, color txt, int px, color bg, bool has
    }
    else if(ObjectFind(0, nb) >= 0)
       ObjectDelete(0, nb);
+   if(text == "")
+      text = " ";   // an empty OBJ_LABEL prints the word "Label" on MT5
    if(ObjectFind(0, base) < 0) ObjectCreate(0, base, OBJ_LABEL, 0, 0, 0);
    ObjectSetInteger(0, base, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, base, OBJPROP_XDISTANCE, x + 3);
@@ -2095,7 +2281,7 @@ void BsDrawMain()
 {
    BsOut o = g_out;
    int px = BsFontDash(), rh = px + 7, sc = (px * 100) / 8;
-   BsTable("main", InpDashPos, 3, 90 * sc / 100, 120 * sc / 100, 265 * sc / 100, 54, rh);
+   BsTable("main", InpDashPos, 3, 128 * sc / 100, 128 * sc / 100, 300 * sc / 100, 55, rh);
    BsCell(0, 0, g_market, cWhite, px, cNavy, true);
    BsCell(1, 0, o.sessionTxt, cWhite, px, o.sessionClr, true);
    BsCell(2, 0, F2(o.close), cYellow, px, cNavy, true);
@@ -2165,6 +2351,10 @@ void BsDrawMain()
    f_hdr(51, g_uDoubleDash + " LOCATION GATE " + g_uDoubleDash, InpUseLocationGate ? "ENABLED" : "OFF", S("MODE: ") + ((InpLgMarketMode == MM_AUTO) ? "AUTO" : ((InpLgMarketMode == MM_RANGE) ? "RANGE" : "TREND")) + (o.trendDayOK ? " | TREND DAY" : ""), cWhite, InpUseLocationGate ? cLime : cGray, cNote, cTeal);
    f_row(52, "US 10Y Yield", o.yieldTxt, o.yieldClr, o.yieldRising ? "headwind for BUY" : (o.yieldFalling ? "tailwind for BUY" : "neutral"));
    f_row(53, "Adaptive", !InpUseAdaptive ? "OFF" : (o.inNewsWindow ? "NEWS WINDOW" : (o.volHigh ? "HIGH-VOL MODE" : "normal")), !InpUseAdaptive ? cGray : (o.inNewsWindow ? cOrange : (o.volHigh ? cRed : cLime)), !InpUseAdaptive ? "fixed v18.4 math" : (o.inNewsWindow ? "SL floor widened - no blocking" : (o.volHigh ? "zones tighter, SL floor wider" : "standard thresholds")));
+   // beyond the Pine: the MT5 calendar's own reading (the Pine knew only two fixed clock windows)
+   string nt = g_newsText;
+   if(StringLen(nt) > 70) nt = StringSubstr(nt, 0, 70);
+   f_row(54, "NEWS (" + g_newsCcy + ")", g_newsState, (g_newsState == "GUARD") ? cRed : ((g_newsState == "UNKNOWN") ? (InpNewsUnknownBlocks ? cRed : cOrange) : ((g_newsState == "CLEAR") ? cLime : cGray)), nt);
 }
 
 // DASHBOARD 2 - STRUCTURAL BRAIN, 38 rows
@@ -2174,7 +2364,7 @@ void BsDrawBrain()
 {
    BsOut o = g_out;
    int px = BsFontBrain(), rh = px + 7, sc = (px * 100) / 9;
-   BsTable("pend", InpPendPos, 3, 110 * sc / 100, 170 * sc / 100, 170 * sc / 100, 38, rh);
+   BsTable("pend", InpPendPos, 3, 155 * sc / 100, 190 * sc / 100, 190 * sc / 100, 38, rh);
    string pT = o.pendInvalid ? g_uWarn + " FORMING " + F1(o.pendRngA) + "/1.0 ATR - stops live below" : "STRUCTURAL BRAIN";
    BsCell(0, 0, pT, o.pendInvalid ? cOrange : cAmber, px, o.pendInvalid ? cFillRedD : cNavy, true);
    BsCell(1, 0, o.pendBrokeUp ? g_uDn + " SELL " + g_uWarn + " RANGE BROKEN" : (o.pendSellAtMkt ? g_uDn + " SELL " + g_uWarn + " LIMIT BELOW MKT" : g_uDn + " SELL LMT"), o.pendBrokeUp ? cGray : (o.pendSellAtMkt ? cOrange : cRed), px, o.pendBrokeUp ? cFillGray : (o.pendSellAtMkt ? cFillOrange : cFillRedD), true);
@@ -2259,7 +2449,7 @@ void BsDrawSSPanel()
    if(!InpSsShowPanel) { ObjectsDeleteAll(0, BS_PREFIX + "T_ss_"); return; }
    BsOut o = g_out;
    int rh = 22;
-   BsTable("ss", InpSsPanelPos, 2, 120, 175, 0, 12, rh);
+   BsTable("ss", InpSsPanelPos, 2, 130, 200, 0, 12, rh);
    string modeT = (InpSsMode == SM_AGGRESSIVE) ? "Aggressive" : ((InpSsMode == SM_CONSERVATIVE) ? "Conservative" : "Balanced");
    BsCell(0, 0, g_uStar + " SMART SCALP " + modeT, cAmber, 9, cNavy, true);
    BsCell(1, 0, "", cAmber, 9, cNavy, true);
@@ -2394,13 +2584,110 @@ string BsEventJson(string type, string sigId, string dir, double entry, double s
               NqJsonI("trend_age", o.trendAge) + "," + NqJsonI("trades_today", g_tradesToday) + "," + NqJsonS("struct", o.structState) + "," +
               NqJsonS("choch", o.chochTxt) + "," + NqJsonS("inducement", o.inducementTxt) + "," + NqJsonS("sweep", o.sweepTxt) + "," + NqJsonS("zone", o.fibZoneTxt) + "," +
               NqJsonI("rsi", RoundI(o.rsiValue)) + "," + NqJsonI("adx", RoundI(o.adxVal)) + "," + NqJsonS("ny_regime", o.nyRegime) + "," +
-              NqJsonS("vol_regime", o.volLevel) + "," + NqJsonS("dxy_dir", o.dxyTxt) + "," + NqJsonS("yield_dir", o.yieldTxt) + "," +
+              NqJsonS("vol_regime", o.volLevel) + "," + NqJsonS("dxy_dir", o.dxyTxt) + "," + NqJsonS("yield_dir", o.yieldTxt) + "," + NqJsonS("news_guard", g_newsState) + "," +
               NqJsonS("event", event) + "," + NqJsonS("status", status) + "," + NqJsonS("outcome", "") + "," +
               NqJsonS("account_mode", g_isDemo ? "demo" : "real") + "," + NqJsonI("magic", InpMagic) + "," + NqJsonS("ea_version", BS_VERSION) + "," +
               NqJsonI("ts", (long)TimeTradeServer());
    if(extra != "")
       j = j + "," + extra;
    return j + "}";
+}
+
+//=== POSITION TRACKER: a limit fill and every close are journaled with the outcome ====
+int BsPosIdx(ulong tk) { for(int i = 0; i < g_nPos; i++) if(g_posTk[i] == tk) return i; return -1; }
+string BsSigIdOf(string cmt)
+{
+   if(StringFind(cmt, "BS18-PB-BUY-") == 0) return "PB-BUY-" + StringSubstr(cmt, 12);
+   if(StringFind(cmt, "BS18-PB-SELL-") == 0) return "PB-SELL-" + StringSubstr(cmt, 13);
+   int dash = StringFind(cmt, "-", StringFind(cmt, "-", 3) + 1);   // "SS-BUY-<stamp>" or "SS-BUY-<stamp>-1"
+   (void)dash;
+   string s = cmt;
+   int k = StringLen(s);
+   if(k > 2 && (StringSubstr(s, k - 2) == "-1" || StringSubstr(s, k - 2) == "-2")) s = StringSubstr(s, 0, k - 2);
+   return s;
+}
+string BsTypeOf(string cmt) { return (StringFind(cmt, "BS18-PB-") == 0) ? "PULLBACK" : "SMART_SCALP"; }
+void BsTrackPositions()
+{
+   // 1) new positions of ours: a filled PULLBACK limit is journaled as executed
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+      if(!BsIsOurs(PositionGetInteger(POSITION_MAGIC), PositionGetString(POSITION_SYMBOL))) continue;
+      if(BsPosIdx(tk) >= 0) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      int dir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+      int k = g_nPos;
+      ArrayResize(g_posTk, k + 1, 8); ArrayResize(g_posCmt, k + 1, 8); ArrayResize(g_posOpen, k + 1, 8); ArrayResize(g_posSl, k + 1, 8); ArrayResize(g_posTp, k + 1, 8); ArrayResize(g_posDir, k + 1, 8);
+      g_posTk[k] = tk; g_posCmt[k] = cmt; g_posOpen[k] = PositionGetDouble(POSITION_PRICE_OPEN); g_posSl[k] = PositionGetDouble(POSITION_SL); g_posTp[k] = PositionGetDouble(POSITION_TP); g_posDir[k] = dir;
+      g_nPos = k + 1;
+      if(StringFind(cmt, "BS18-PB-") == 0)
+         BsEmit(BsEventJson("PULLBACK", BsSigIdOf(cmt), (dir > 0) ? "BUY" : "SELL", g_posOpen[k], g_posSl[k], g_posTp[k], 0.0,
+                            (MathAbs(g_posOpen[k] - g_posSl[k]) > 0) ? MathAbs(g_posTp[k] - g_posOpen[k]) / MathAbs(g_posOpen[k] - g_posSl[k]) : 0.0, "",
+                            "executed", "executed", NqJsonS("outcome_hint", "open") + "," + NqJsonN("volume", PositionGetDouble(POSITION_VOLUME), 2)));
+   }
+   // 2) tracked positions that are gone: the closing deal says the price and the result
+   for(int k = g_nPos - 1; k >= 0; k--)
+   {
+      if(PositionSelectByTicket(g_posTk[k])) continue;
+      double pl = 0.0, px = 0.0;
+      bool found = false;
+      datetime nowS = TimeTradeServer();
+      if(HistorySelect((datetime)((long)nowS - 7 * 86400), (datetime)((long)nowS + 86400)))
+      {
+         int total = HistoryDealsTotal();
+         for(int i = total - 1; i >= 0; i--)
+         {
+            ulong dk = HistoryDealGetTicket(i);
+            if(dk == 0) continue;
+            if((ulong)HistoryDealGetInteger(dk, DEAL_POSITION_ID) != g_posTk[k]) continue;
+            if(HistoryDealGetInteger(dk, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
+            pl = HistoryDealGetDouble(dk, DEAL_PROFIT) + HistoryDealGetDouble(dk, DEAL_COMMISSION) + HistoryDealGetDouble(dk, DEAL_SWAP);
+            px = HistoryDealGetDouble(dk, DEAL_PRICE);
+            found = true;
+            break;
+         }
+      }
+      string why = (g_closeTk == g_posTk[k]) ? g_closeWhy : "";
+      if(why == "" && found && g_posSl[k] > 0 && MathAbs(px - g_posSl[k]) <= 2 * g_tick + g_stopsLevel * g_point) why = "sl";
+      if(why == "" && found && g_posTp[k] > 0 && MathAbs(px - g_posTp[k]) <= 2 * g_tick + g_stopsLevel * g_point) why = "tp";
+      if(why == "") why = found ? "closed" : "closed (deal not found)";
+      string outcome = !found ? "" : ((pl > 0.0) ? "win" : ((pl < 0.0) ? "loss" : "be"));
+      string cmt = g_posCmt[k];
+      BsEmit(BsEventJson(BsTypeOf(cmt), BsSigIdOf(cmt), (g_posDir[k] > 0) ? "BUY" : "SELL", g_posOpen[k], g_posSl[k], g_posTp[k], 0.0, 0.0, "", "closed", "closed",
+                         NqJsonS("outcome", outcome) + "," + NqJsonS("reason", why) + "," + NqJsonN("pl", pl, 2) + "," + NqJsonN("close_price", px, g_digits)));
+      if(g_closeTk == g_posTk[k]) { g_closeTk = 0; g_closeWhy = ""; }
+      for(int j = k; j < g_nPos - 1; j++)
+      {
+         g_posTk[j] = g_posTk[j + 1]; g_posCmt[j] = g_posCmt[j + 1]; g_posOpen[j] = g_posOpen[j + 1]; g_posSl[j] = g_posSl[j + 1]; g_posTp[j] = g_posTp[j + 1]; g_posDir[j] = g_posDir[j + 1];
+      }
+      g_nPos--;
+   }
+}
+// a news window opened: bank the positions already in profit (never the losers - their SL decides)
+void BsNewsBank()
+{
+   if(!g_newsBlock || InpNewsBankProfitR <= 0.0 || g_newsWinT == g_newsBankedWin)
+      return;
+   g_newsBankedWin = g_newsWinT;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+      if(!BsIsOurs(PositionGetInteger(POSITION_MAGIC), PositionGetString(POSITION_SYMBOL))) continue;
+      int pdir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+      double open = PositionGetDouble(POSITION_PRICE_OPEN), sl = PositionGetDouble(POSITION_SL);
+      double px = (pdir > 0) ? SymbolInfoDouble(g_sym, SYMBOL_BID) : SymbolInfoDouble(g_sym, SYMBOL_ASK);
+      double risk = (sl > 0) ? MathAbs(open - sl) : 0.0;
+      if(risk <= 0.0) continue;
+      double r = (px - open) * pdir / risk;
+      if(r >= InpNewsBankProfitR)
+      {
+         g_closeTk = tk; g_closeWhy = "news guard: banked " + F2(r) + "R before " + g_newsWhy;
+         BsClosePosition(tk, "NEWS GUARD: banking +" + F2(r) + "R - " + g_newsWhy);
+      }
+   }
 }
 
 //=== THE TRADE LAYER ==============================================================
@@ -2654,8 +2941,10 @@ void BsTrade(bool newBar)
          if(StringFind(c, "SS-") != 0) continue;
          bool isBuy = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY);
          if((isBuy && g_out.isDownTrend) || (!isBuy && g_out.isUpTrend))
-            if(BsClosePosition(tk, "SMART SCALP trend flip against the position"))
-               BsEmit(BsEventJson("SMART_SCALP", c, isBuy ? "BUY" : "SELL", PositionGetDouble(POSITION_PRICE_OPEN), PositionGetDouble(POSITION_SL), PositionGetDouble(POSITION_TP), 0.0, 0.0, "", "closed", "closed", NqJsonS("reason", "trend flip")));
+         {
+            g_closeTk = tk; g_closeWhy = "trend flip";
+            BsClosePosition(tk, "SMART SCALP trend flip against the position");
+         }
       }
 }
 
@@ -2709,6 +2998,16 @@ int OnInit()
    ArrayResize(g_webQ, 0); g_webN = 0; g_webLast = 0; g_webFails = 0; g_jrFileWarned = false; g_webWarned = false;
    ZeroMemory(g_fire);
    g_fire.armBuyE = EMPTY_VALUE; g_fire.armSellE = EMPTY_VALUE;
+   g_newsCcy = BsNewsCurrencies();
+   g_nEvCal = 0; g_newsOk = false; g_newsTester = false; g_newsBlock = false; g_newsUnknown = false; g_newsLive = false; g_newsErr = 0;
+   g_newsText = ""; g_newsWhy = ""; g_newsState = "CLEAR"; g_newsReadT = 0; g_newsWinT = 0; g_newsBankedWin = 0;
+   g_nPos = 0; ArrayResize(g_posTk, 0); g_closeTk = 0; g_closeWhy = "";
+   if(InpChartShiftPct > 0)
+   {
+      ChartSetInteger(0, CHART_AUTOSCROLL, true);
+      ChartSetInteger(0, CHART_SHIFT, true);
+      ChartSetDouble(0, CHART_SHIFT_SIZE, (double)MathMin(50, MathMax(10, InpChartShiftPct)));
+   }
    if(InpHistoryBars < 300 || InpHistoryBars > 5000 || InpRiskPct <= 0.0 || InpRiskPct > 5.0 || InpLength < 2 || InpLength > 20 || InpFcThreshold < 4 || InpFcThreshold > 9)
    {
       Print("BS18: an input is out of range (history 300-5000, risk 0-5%, swing length 2-20, score threshold 4-9)");
@@ -2736,9 +3035,15 @@ void BsUpdate(bool force)
       BsLoadHtf();
    BsBaseIndicators();
    BsDxySquelchScan();
+   if(g_newsReadT == 0 || (long)TimeTradeServer() - (long)g_newsReadT >= 60)
+      BsReadCalendar();
+   BsNewsState();
    BsScanAccount();
+   BsTrackPositions();
+   BsNewsBank();
    BsPass(newBar || force);
    BsTrade(newBar);
+   BsTrackPositions();
    BsDrawAll(newBar || force);
    if(newBar)
       g_drawnBar = g_t[g_n - 1];
@@ -2750,6 +3055,11 @@ void OnTick()
 void OnTimer()
 {
    NqWebFlush();
+   if(g_newsReadT != 0 && (long)TimeTradeServer() - (long)g_newsReadT >= 60)
+   {
+      BsReadCalendar();
+      BsNewsState();
+   }
 }
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
 {

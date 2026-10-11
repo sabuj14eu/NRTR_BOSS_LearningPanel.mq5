@@ -748,6 +748,9 @@ become orders on the EA's own account. One file, no dependency on the NRTR EAs.
 | PULLBACK arm (v18.7, validated n=640) | webhook when tapped | **ONE resting limit order** at the armed entry with the Pine's 1.5 ATR stop and TP1; pulled when the arm dies (TREND FLIP / EXPIRED / GAPPED THRU), while a DXY squelch is active or the news policy blocks; re-placed when alive again |
 | max trades / day, daily loss | display only ("BOT-SIDE") | **enforced by the EA on its own deals** (`InpMaxTradesPerDay`, `InpMaxDailyLossPct`, `InpMaxOpenPositions`) |
 | alerts | TradingView alerts | the SignalMesh journal door (`system: BS-MT5`, the Pine's payload fields, events fired / placed / executed / cancelled / closed) - NEVER the brain's signal door: this EA is not a second signal source for the council |
+| news | two fixed clock windows (08:25-09:05, 13:55-14:35 New York), tag only | **the MT5 economic calendar** (beyond the Pine): HIGH events of the chart's currencies close the gate 30 min before to 30 after (TOP TIER 60 / 60), pull the resting pullback limit, bank a position >= 0.2 R in profit; a calendar that answers nothing is UNKNOWN = no new trade; N/A in the tester. Row `NEWS (USD)` on the main dashboard, `news_guard` in every journal line |
+| outcomes | none (the bots journaled) | every fill and every close is journaled under the fire's own `signal_id`: a filled pullback limit = `executed`, a close = `closed` with `outcome` win / loss / be, the reason (tp / sl / trend flip / news guard) and the P/L from the closing deal |
+| chart | TradingView scrolls | `InpChartShiftPct` (50) keeps the last bar in the middle of the window (0 = leave the chart alone) |
 
 **Honest differences.** The Pine's `var` state is replayed over the last `InpHistoryBars`
 (1500) bars on every tick, not the whole history; RSI / ATR / ADX / EMA warm up from the

@@ -309,6 +309,98 @@ int main()
    }
    end("B7");
 
+   begin("B8 the MT5 calendar news guard: a HIGH USD event closes the gate, pulls a resting limit and banks a position in profit; silence is UNKNOWN; the tester is N/A");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      addWitnesses(7);
+      startAt(START);
+      CHECK(g_newsCcy == "USD", "gold watches USD (XAU is not a calendar currency)");
+      stepTo(START + 1);
+      CHECK(g_newsState == "CLEAR" && g_newsOk && !g_newsLive, "a working calendar with no HIGH USD event: CLEAR");
+      CHECK(cell("main", 54, 0) == "NEWS (USD)" && cell("main", 54, 1) == "CLEAR", "the new dashboard row");
+      // a HIGH USD event 20 minutes ahead: GUARD from 30 min before
+      simAddEvent("USD", SIM.now + 20 * 60, CALENDAR_IMPORTANCE_HIGH, "Factory Orders");
+      g_newsReadT = 0;
+      // a resting pullback limit + a position in profit, both ours
+      g_webUrl = "https://status.example/webhooks/brain/signal"; g_webSecret = "s3cr3t-token";
+      SIM.sent.clear(); SIM.web.clear(); SIM.pos.clear(); SIM.ord.clear();
+      SimOrder so; so.ticket = 9201; so.sym = "XAUUSD"; so.type = ORDER_TYPE_BUY_LIMIT; so.vol = 0.10; so.price = SIM.bid - 20.0; so.sl = SIM.bid - 30.0; so.tp = SIM.bid - 10.0;
+      so.time = SIM.now; so.magic = InpMagic; so.comment = "BS18-PB-BUY-12345678"; SIM.ord.push_back(so);
+      SimPos a; a.ticket = 9202; a.sym = "XAUUSD"; a.type = POSITION_TYPE_BUY; a.vol = 0.10; a.open = SIM.bid - 3.0; a.sl = a.open - 6.0; a.tp = a.open + 12.0;
+      a.time = SIM.now - 600; a.magic = InpMagic; a.comment = "SS-BUY-20260906001000"; SIM.pos.push_back(a);
+      stepTo(START + 2);
+      CHECK(g_newsState == "GUARD" && g_newsLive && g_newsWhy.find("USD Factory Orders") == 0, "GUARD - USD Factory Orders");
+      CHECK(cell("main", 54, 1) == "GUARD", "the row says GUARD");
+      bool pulled = false, banked = false;
+      for(const MqlTradeRequest &r : SIM.sent) { if(r.action == TRADE_ACTION_REMOVE && r.order == 9201) pulled = true; if(r.action == TRADE_ACTION_DEAL && r.position == 9202) banked = true; }
+      CHECK(pulled, "the resting pullback limit is pulled for the window");
+      CHECK(banked, "the +0.5R position is banked before the release (InpNewsBankProfitR 0.2)");
+      bool closedEv = false;
+      for(auto &w : SIM.web) if(w.body.find("\"event\":\"closed\"") != std::string::npos && w.body.find("news guard: banked") != std::string::npos && w.body.find("\"outcome\":\"win\"") != std::string::npos) closedEv = true;
+      CHECK(closedEv, "the close is journaled: closed, outcome win, reason news guard");
+      // the fire chain names the guard
+      CHECK(g_out.botBuyWhy.find("news guard") != std::string::npos || g_out.botBuyWhy.find("score") == 0 || g_out.botBuyWhy.find("grade") == 0 || g_out.botBuyWhy.find("R:R") == 0 || g_out.botBuyWhy.find("gate") == 0 || g_out.botBuyWhy.find("SELL side") == 0, "the why-chain still names the first failing link");
+      // silence: UNKNOWN blocks new fires (fail closed), the row says so
+      SIM.calOk = false; g_newsReadT = 0;
+      stepTo(START + 3);
+      CHECK(g_newsState == "UNKNOWN" && g_newsLive && cell("main", 54, 1) == "UNKNOWN", "a calendar that answers nothing = UNKNOWN = not trading blind");
+      // the Strategy Tester has no calendar: N/A, not gated
+      SIM.calOk = true; SIM.tester = true; g_newsReadT = 0;
+      stepTo(START + 4);
+      CHECK(g_newsState == "N/A" && !g_newsLive, "tester: N/A, not gated");
+      SIM.tester = false;
+      OnDeinit(0);
+   }
+   end("B8");
+
+   begin("B9 fills and closes are journaled with their outcome: a filled pullback limit = executed; a TP close = closed / win; an SL close = closed / loss");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      addWitnesses(7);
+      startAt(START);
+      stepTo(START + 1);
+      g_webUrl = "https://status.example/webhooks/brain/signal"; g_webSecret = "s3cr3t-token";
+      SIM.web.clear(); SIM.pos.clear(); SIM.ord.clear();
+      BsTrackPositions();
+      // the broker fills our resting limit: a position with the order's comment appears
+      ulong tk = simOpenPos("XAUUSD", POSITION_TYPE_BUY, 0.10, SIM.bid - 5.0, SIM.bid - 11.0, SIM.bid + 4.0, InpMagic, "BS18-PB-BUY-12345678", "limit");
+      BsTrackPositions();
+      CHECK(SIM.web.size() == 1 && SIM.web[0].body.find("\"type\":\"PULLBACK\"") != std::string::npos && SIM.web[0].body.find("\"signal_id\":\"PB-BUY-12345678\"") != std::string::npos && SIM.web[0].body.find("\"event\":\"executed\"") != std::string::npos, "the fill: PULLBACK executed under the arm's signal id");
+      BsTrackPositions();
+      CHECK(SIM.web.size() == 1, "a tracked position is journaled once");
+      // the broker closes it at TP
+      size_t idx = 0; for(size_t i = 0; i < SIM.pos.size(); i++) if(SIM.pos[i].ticket == tk) idx = i;
+      simClosePos(idx, SIM.bid + 4.0, "tp");
+      BsTrackPositions();
+      CHECK(SIM.web.size() == 2 && SIM.web[1].body.find("\"event\":\"closed\"") != std::string::npos && SIM.web[1].body.find("\"outcome\":\"win\"") != std::string::npos && SIM.web[1].body.find("\"reason\":\"tp\"") != std::string::npos, "closed at TP: outcome win, reason tp, P/L from the deal");
+      // a scalp position stopped out
+      ulong tk2 = simOpenPos("XAUUSD", POSITION_TYPE_SELL, 0.10, SIM.bid, SIM.bid + 6.0, SIM.bid - 7.0, InpMagic, "SS-SELL-20260906001500", "market");
+      BsTrackPositions();
+      CHECK(SIM.web.size() == 2, "a scalp fill was journaled by the trade layer already - not again");
+      for(size_t i = 0; i < SIM.pos.size(); i++) if(SIM.pos[i].ticket == tk2) idx = i;
+      simClosePos(idx, SIM.bid + 6.0, "sl");
+      BsTrackPositions();
+      CHECK(SIM.web.size() == 3 && SIM.web[2].body.find("\"type\":\"SMART_SCALP\"") != std::string::npos && SIM.web[2].body.find("\"signal_id\":\"SS-SELL-20260906001500\"") != std::string::npos && SIM.web[2].body.find("\"outcome\":\"loss\"") != std::string::npos && SIM.web[2].body.find("\"reason\":\"sl\"") != std::string::npos, "stopped out: closed, loss, reason sl");
+      CHECK(g_nPos == 0, "nothing left tracked");
+      OnDeinit(0);
+   }
+   end("B9");
+
+   begin("B10 the chart keeps the last bar away from the right edge (InpChartShiftPct); blank cells never print 'Label'");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      addWitnesses(7);
+      SIM_chartProps.clear();
+      startAt(START);
+      CHECK(SIM_chartProps[CHART_SHIFT] == 1 && SIM_chartProps[CHART_SHIFT_SIZE] == 50 && SIM_chartProps[CHART_AUTOSCROLL] == 1, "shift on, 50% = the last bar in the middle, autoscroll on");
+      stepTo(START + 1);
+      int blanks = 0;
+      for(auto &kv : SIM.objs) if(kv.first.compare(0, 7, "BS18_T_") == 0 && kv.second.type == OBJ_LABEL && kv.second.s[OBJPROP_TEXT].empty()) blanks++;
+      CHECK(blanks == 0 && cell("main", 6, 1) == " " && cell("ss", 0, 1) == " ", "no empty label text anywhere in the tables");
+      OnDeinit(0);
+   }
+   end("B10");
+
    std::printf("\nBS18 EA TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
 }

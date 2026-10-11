@@ -87,7 +87,7 @@ enum { BORDER_FLAT = 0 };
 enum { STYLE_SOLID = 0, STYLE_DASH, STYLE_DOT };
 enum { TIME_DATE = 1, TIME_MINUTES = 2, TIME_SECONDS = 4 };
 enum { CHARTEVENT_OBJECT_CLICK = 1, CHARTEVENT_CHART_CHANGE = 9 };
-enum { CHART_WIDTH_IN_PIXELS = 1, CHART_HEIGHT_IN_PIXELS };
+enum { CHART_WIDTH_IN_PIXELS = 1, CHART_HEIGHT_IN_PIXELS, CHART_SHIFT, CHART_AUTOSCROLL, CHART_SHIFT_SIZE };
 const color clrWhite = 0xFFFFFF;
 
 struct MqlTradeRequest
@@ -193,6 +193,7 @@ struct SimDeal
    long long magic;
    std::string comment;
    std::string reason;   // "market", "limit", "sl", "tp", "close"
+   ulong posId = 0;      // DEAL_POSITION_ID
 };
 struct SimState
 {
@@ -567,6 +568,7 @@ inline long long HistoryDealGetInteger(ulong tk, int prop)
       case DEAL_ENTRY: return d->entry;
       case DEAL_TYPE: return d->type;
       case DEAL_TIME: return d->time;
+      case DEAL_POSITION_ID: return (long long)d->posId;
    }
    return 0;
 }
@@ -594,6 +596,7 @@ inline void simDeal(const SimPos &p, int entry, double price, double profit, con
 {
    SimDeal d;
    d.ticket = SIM.nextTicket++;
+   d.posId = p.ticket;
    d.sym = p.sym;
    d.entry = entry;
    d.type = (entry == DEAL_ENTRY_IN) ? p.type : (p.type == POSITION_TYPE_BUY ? 1 : 0);
@@ -974,6 +977,9 @@ inline bool TextSetFont(const string &, int, unsigned = 0, int = 0) { return tru
 inline bool TextGetSize(const string &t, unsigned &w, unsigned &h) { w = (unsigned)t.size() * 7; h = 14; return true; }   // a fixed-pitch stand-in
 inline void ChartRedraw(long = 0) {}
 inline long long ChartGetInteger(long, int prop, int = 0) { return prop == CHART_WIDTH_IN_PIXELS ? 1400 : 900; }
+static std::map<int, double> SIM_chartProps;
+inline bool ChartSetInteger(long, int prop, long long v) { SIM_chartProps[prop] = (double)v; return true; }
+inline bool ChartSetDouble(long, int prop, double v) { SIM_chartProps[prop] = v; return true; }
 inline bool EventSetTimer(int) { return true; }
 inline void EventKillTimer() {}
 inline void Print(const string &s) { SIM.log.push_back(s); }
