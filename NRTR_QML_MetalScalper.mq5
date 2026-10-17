@@ -28,12 +28,22 @@
 //|  flashes EXIT WARNING on a position once half of it is given     |
 //|  back. Closing is never blocked; only opening is.                |
 //|                                                                  |
+//|  v1.10.0 (2026-10-17, explicit decisions): R is measured on the  |
+//|  plan's RECORDED risk (the lock moves the SL, never the yard-    |
+//|  stick); PROFIT LOCK is its own switch; SMART EXIT banks only AT |
+//|  OR ABOVE the lock threshold, never under water, never at a     |
+//|  small profit (the explicit STRUCTURAL CUT is off by default);  |
+//|  a position whose SL / TP you changed by hand is HAND-MANAGED   |
+//|  (the EA leaves it alone, only a MISSING SL is restored); TP2   |
+//|  is the default plan target; every journal event names its      |
+//|  SESSION; named-session masks per family (default ALL).         |
+//|                                                                  |
 //|  Supported symbols: Gold (XAUUSD / GOLD) and Silver (XAGUSD /    |
 //|  SILVER), any broker prefix/suffix. Nothing else.                |
 //|  Personal tool. No network, no Telegram, no DLL, no files.       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.94"
+#property version     "1.100"
 #property description "Gold/Silver: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar plans, macro vote (DXY, bond, USD news, H4/H1), news guard, smart exit."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -2671,6 +2681,18 @@ enum ENUM_NQ_LAYOUT
    NQ_LAYOUT_ONE   = 1    // One column: the engine table above the board (the former layout)
 };
 
+// named sessions as bits (1 Asia, 2 London, 4 New York - the same bits as g_sessOpen); ALL = 0 = no restriction
+enum ENUM_NQ_SESSIONS
+{
+   NQ_SESS_ALL         = 0,   // ALL sessions (no restriction)
+   NQ_SESS_ASIA        = 1,   // ASIA only
+   NQ_SESS_LONDON      = 2,   // LONDON only
+   NQ_SESS_ASIA_LONDON = 3,   // ASIA + LONDON
+   NQ_SESS_NY          = 4,   // NEW YORK only
+   NQ_SESS_ASIA_NY     = 5,   // ASIA + NEW YORK
+   NQ_SESS_LONDON_NY   = 6    // LONDON + NEW YORK
+};
+
 enum ENUM_NQ_BOND
 {
    NQ_BOND_AUTO  = 0,   // AUTO: NOTE/BOND/BUND/ZN = a price, US10Y / YIELD = a yield
@@ -2719,7 +2741,7 @@ input double         InpPbMinImpulseAtr  = 2.0;         // Pullback: impulse at 
 input double         InpPbSlBufAtr       = 0.2;         // Pullback SL buffer beyond the swing (x ATR5)
 input double         InpPlanTp1R         = 1.0;         // Plan TP1 (R)
 input double         InpPlanTp2R         = 2.0;         // Plan TP2 (R)
-input bool           InpPlanUseTp2       = false;       // Limit order TP = TP2 instead of TP1
+input bool           InpPlanUseTp2       = true;        // Limit order TP = TP2 (2R) instead of TP1 (1R) - the default since 1.10.0, an explicit decision
 input double         InpPlanMinRiskAtr   = 1.0;         // A plan's stop at least x ATR away (a structural stop inside the noise is pushed out; TP1/TP2 follow); 0 = off
 input bool           InpTradeQml         = true;        // Trade M5 QML plans
 input bool           InpTradePullback    = true;        // Trade M5 pullback plans
@@ -2753,17 +2775,24 @@ input bool           InpWeekendFlat      = true;        // At the Friday stop cl
 input double         InpWeekendMinProfitR = 0.0;        // ... in profit = at least this many R (0 = any non-negative result)
 input bool           InpWeekendCloseLosers = false;     // At the Friday stop close losing positions too (no weekend gap risk at all)
 input int            InpWeekOpenGuardMin = 60;          // No new trade in the first N minutes after the week opens
-input group "Smart exit (intelligent management: bank on a bias change, lock profit, never wait for the SL blindly)"
-input bool           InpSmartExit        = true;        // Manage open positions on bias changes (below) instead of leaving everything to the SL / TP
-input double         InpSmartFlipProfitR = 0.1;         // M5 regime flipped against a position at least this many R in profit: close and bank it
-input bool           InpSmartFlipCutLoss = true;        // M5 regime flipped against a position under water: close now (a smaller loss than the SL); false = the SL decides
-input double         InpSmartM1ProfitR   = 0.5;         // M1 bias turned against a position at least this many R in profit: close and bank it (0 = off)
-input double         InpSmartLockAtR     = 0.7;         // Once a position is this many R in profit, move the SL to ... (0 = off)
-input double         InpSmartLockR       = 0.1;         // ... entry + this many R (tightened only, never loosened)
+input group "Profit lock (its own switch): once a position has earned the threshold, the SL moves to entry + a margin - tightened only, never loosened"
+input bool           InpProfitLock       = true;        // Move the SL to lock profit once the position reaches InpSmartLockAtR (R = the plan's RECORDED risk)
+input double         InpSmartLockAtR     = 0.7;         // The threshold: the position is this many R in profit. Also the floor under EVERY smart-exit bank. 0 = lock and banks off
+input double         InpSmartLockR       = 0.1;         // ... SL to entry + this many R (tightened only, never loosened)
+input group "Smart exit (profit protection AT OR ABOVE the lock threshold only: it never closes a position under water or at a small profit)"
+input bool           InpSmartExit        = true;        // Bank a position on a bias change - only once it is at or above InpSmartLockAtR; below that the SL / TP decide
+input double         InpSmartFlipProfitR = 0.1;         // Extra floor for the M5-flip bank (kept for your .set files; the lock threshold above always applies as well)
+input double         InpSmartM1ProfitR   = 0.5;         // M1 bias turned against a position: bank when at or above BOTH this and the lock threshold (0 = M1 rule off)
+input group "Structural exits (separate from profit-taking: each is an explicit decision, off by default; a legitimate SL hit always stands)"
+input bool           InpSmartFlipCutLoss = false;       // M5 regime flipped against a PLAN position under water: close now instead of waiting for the SL (false = the SL decides)
 input group "Portfolio (this EA on several charts with the same magic)"
 input int            InpMaxOpenAcrossCharts = 2;        // Max open positions of this EA across ALL charts (0 = unlimited)
 input group "Clock (sessions live in New York / London / Asia time; AUTO converts them with the broker's live GMT offset)"
 input bool           InpClockAuto        = true;        // AUTO: NY 09:30-16:00, London 08:00, Asia 22:00 UTC from TimeTradeServer-TimeGMT + US/EU DST; false = the server hours below
+input group "Trade sessions (from the AUTO clock): which sessions may OPEN a new trade, per family. ALL = no restriction (the default: nothing changes until you decide)"
+input ENUM_NQ_SESSIONS InpSwingSessions  = NQ_SESS_ALL;  // M15 swing plans (QML + pullback) are placed only in these sessions; a resting order may still fill in the next session
+input ENUM_NQ_SESSIONS InpM5Sessions     = NQ_SESS_ALL;  // M5 plans (QML, pullback, NY trap, radar) are placed only in these sessions
+input ENUM_NQ_SESSIONS InpScalpSessions  = NQ_SESS_ALL;  // M1 scalps fire only in these sessions
 input group "NY trap + swing (server hours - used when InpClockAuto = false)"
 input int            InpNyStartHour      = 16;          // NY open, server hour   (EET broker: 16:30 all year)
 input int            InpNyStartMin       = 30;          // NY open, server minute
@@ -2873,6 +2902,11 @@ bool     g_newsUnknownBlocks;
 bool     g_newsMediumBlocks;
 bool     g_clockGuards;
 bool     g_smartExit;
+bool     g_profitLock;   // the profit lock, its own switch (tests flip it)
+bool     g_flipCutLoss;  // the explicit STRUCTURAL CUT (tests flip it)
+int      g_swingSess;    // named-session masks per family (bits as g_sessOpen); 0 = ALL
+int      g_m5Sess;
+int      g_scalpSess;
 // the calendar: USD events in a 3-day window (MODERATE and HIGH)
 datetime g_evT[];
 string   g_evCcy[];
@@ -2901,6 +2935,17 @@ int      g_dow;
 int      g_portfolioPos;
 bool     g_portfolioFull;
 string   g_smartNote;   // the last smart-exit action (panel)
+// HAND-MANAGED: what the EA last set (or, at first sight, expects from the plan) per open ticket. A live SL or TP
+// that differs belongs to the human: the EA then leaves the position alone (only a MISSING SL is restored).
+struct NqMgd
+{
+   ulong    ticket;
+   double   sl;       // the SL the EA sent, or expects
+   double   tp;       // the TP the EA sent, or expects
+   bool     hand;     // the human changed the SL or TP: hands off (sticky until the position closes)
+};
+NqMgd    g_mgd[];
+int      g_nMgd;
 // higher timeframes: H1 and H4 context (EMA200 + NRTR), confirmed structure and its breaks (BOS / CHoCH)
 NqSeries g_h1;
 NqSeries g_h4;
@@ -2933,7 +2978,7 @@ bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.9.4"
+#define NQ_EA_VERSION "1.10.0"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -3060,6 +3105,18 @@ string NqSessionName();
 bool   NqSmartExit(ulong tk, int pdir, string cmt, bool isScalp, int reg5);
 bool   NqRegimeAgreedSince(datetime opened, int pdir);
 double NqPosR(double open, double sl, double px, int pdir, string cmt);
+double NqRiskOf(string cmt, double open, double sl);
+double NqPlanTpSent(const NqPlan &p);
+bool   NqSessionAllows(int mask);
+string NqSessMaskText(int mask);
+int    NqFamilyMask(const NqPlan &p);
+bool   NqSamePx(double a, double b);
+int    NqMgdFind(ulong tk);
+void   NqMgdSet(ulong tk, double sl, double tp, bool hand);
+bool   NqMgdHand(ulong tk);
+void   NqMgdPrune();
+bool   NqExpectedSlTp(string cmt, double open, int pdir, double &sl, double &tp, double &tpAlt, double &slLock);
+bool   NqHandCheck(ulong tk, string cmt, int pdir);
 bool   NqModifySl(ulong ticket, double sl, double tp, string why);
 bool   NqSend(MqlTradeRequest &req, string why);
 bool   NqClosePosition(ulong ticket, string why);
@@ -3110,6 +3167,13 @@ int OnInit()
    g_newsMediumBlocks = InpNewsMediumBlocks;
    g_clockGuards = true;
    g_smartExit = InpSmartExit;
+   g_profitLock = InpProfitLock;
+   g_flipCutLoss = InpSmartFlipCutLoss;
+   g_swingSess = (int)InpSwingSessions;
+   g_m5Sess = (int)InpM5Sessions;
+   g_scalpSess = (int)InpScalpSessions;
+   ArrayResize(g_mgd, 0);
+   g_nMgd = 0;
    NqResolveWitnesses();
 
    g_P.atrPeriod = InpNrtrAtrPeriod;
@@ -3416,13 +3480,32 @@ void NqVerdict()
       double rNow = NqPosR(PositionGetDouble(POSITION_PRICE_OPEN), PositionGetDouble(POSITION_SL), pxNow, pdir, PositionGetString(POSITION_COMMENT));
       bool agreed = NqRegimeAgreedSince((datetime)PositionGetInteger(POSITION_TIME), pdir);
       string pl = "  P/L " + NqMoney(pr) + " (" + ((rNow >= 0.0) ? "+" : "") + DoubleToString(rNow, 2) + "R)  SL " + NqPx(PositionGetDouble(POSITION_SL)) + "  TP " + NqPx(PositionGetDouble(POSITION_TP));
+      if(NqMgdHand(tk))
+      {
+         g_verdict = pre + "HAND-MANAGED " + side + " #" + IntegerToString((long)tk) + " (" + kind + ") - your SL " + NqPx(PositionGetDouble(POSITION_SL)) +
+                     " / TP " + NqPx(PositionGetDouble(POSITION_TP)) + ": the EA leaves it to you (only a missing SL is restored)" + pl;
+         g_verdictClr = clrWhite;
+         return;
+      }
       if(reg != NQ_REG_CHOP && reg != pdir)
       {
-         bool smartWill = g_smartExit && agreed && (rNow >= InpSmartFlipProfitR || (InpSmartFlipCutLoss && kind != "scalp"));
-         bool botWill = smartWill || ((kind == "scalp") ? InpScalpCloseOnFlip : (kind == "radar" ? false : InpPlanCloseOnFlip));
-         g_verdict = pre + "EXIT " + side + " #" + IntegerToString((long)tk) + " - M5 REGIME FLIPPED " + NqRegimeText(reg) +
-                     (botWill && !manual ? (smartWill ? ((rNow >= InpSmartFlipProfitR) ? "  (SMART EXIT banks it at the next M1 close)" : "  (SMART EXIT cuts it at the next M1 close)") : "  (bot closes at the next M1 close)")
-                                         : (agreed ? "  (you decide)" : "  (you decide - the regime never agreed with this reversal trade, the plan runs on its SL/TP)")) + pl;
+         string rNowT = ((rNow >= 0.0) ? "+" : "") + DoubleToString(rNow, 2) + "R";
+         string thrT = "+" + DoubleToString(InpSmartLockAtR, 2) + "R";
+         bool aboveLock = (InpSmartLockAtR > 0.0 && rNow >= InpSmartLockAtR);
+         bool smartWill = g_smartExit && agreed && aboveLock && rNow > 0.0 && rNow >= InpSmartFlipProfitR;
+         bool cutWill = g_flipCutLoss && agreed && rNow < 0.0 && kind != "scalp";
+         bool botWill = smartWill || cutWill || ((kind == "scalp") ? InpScalpCloseOnFlip : (kind == "radar" ? false : InpPlanCloseOnFlip));
+         string tail = "";
+         if(botWill && !manual)
+            tail = smartWill ? ("  (SMART EXIT banks it at the next M1 close - " + rNowT + " is above the lock threshold " + thrT + ")")
+                             : (cutWill ? "  (STRUCTURAL CUT at the next M1 close - InpSmartFlipCutLoss, your explicit setting)" : "  (bot closes at the next M1 close)");
+         else if(!agreed)
+            tail = "  (you decide - the regime never agreed with this reversal trade, the plan runs on its SL/TP)";
+         else if(rNow < 0.0)
+            tail = "  (you decide - under water: no cut below the lock threshold, the SL decides)";
+         else
+            tail = "  (you decide - " + rNowT + " is under the lock threshold " + thrT + ", the SL decides)";
+         g_verdict = pre + "EXIT " + side + " #" + IntegerToString((long)tk) + " - M5 REGIME FLIPPED " + NqRegimeText(reg) + tail + pl;
          g_verdictClr = cBlock;
       }
       else if(InpSpikeGuard && g_spikeWarn && g_spikeDir == pdir)
@@ -3436,7 +3519,7 @@ void NqVerdict()
       else
       {
          string smart = "";
-         if(g_smartExit && InpSmartLockAtR > 0.0)
+         if(g_profitLock && InpSmartLockAtR > 0.0)
             smart = (rNow >= InpSmartLockAtR) ? "  SL locked" : ("  lock at +" + DoubleToString(InpSmartLockAtR, 1) + "R");
          g_verdict = pre + "HOLD " + side + " #" + IntegerToString((long)tk) + " (" + kind + ") - M5 " +
                      ((reg == NQ_REG_CHOP) ? "CHOP, no flip" : "regime intact") + pl + smart;
@@ -3464,7 +3547,7 @@ void NqVerdict()
          bestD = d;
          string side = (pl.dir > 0) ? (NqPlanIsStop(pl) ? "BUY STOP " : "BUY LIMIT ") : (NqPlanIsStop(pl) ? "SELL STOP " : "SELL LIMIT ");
          bestT = NqPlanKindText(pl.kind) + ((pl.tf == 900) ? " M15 " : " ") + side + NqPx(pl.entry) + "  SL " + NqPx(pl.sl) +
-                 "  TP " + NqPx(InpPlanUseTp2 ? pl.tp2 : pl.tp1);
+                 "  TP " + NqPx(NqPlanTpSent(pl));
          bestP = pl.entry;
          bestDir = pl.dir;
          bestPlaced = (NqFindPlanOrder(pl) != 0);
@@ -4573,15 +4656,36 @@ int NqMetalGateBits()
 //| bank on an M5 flip against a position in profit (cut under water, |
 //| switchable), bank on an M1 bias turn with a decent profit.        |
 //+------------------------------------------------------------------+
-double NqPosR(double open, double sl, double px, int pdir, string cmt)
+// the TP a plan sends to the broker (TP2 by default since 1.10.0)
+double NqPlanTpSent(const NqPlan &p)
 {
-   double risk = (sl > 0.0) ? MathAbs(open - sl) : 0.0;
-   if(risk <= 0.0)
+   return InpPlanUseTp2 ? p.tp2 : p.tp1;
+}
+
+// the R denominator: the plan's (or scalp's) RECORDED risk first - the lock moves the SL and must never move the
+// yardstick (before 1.10.0 a locked position read +7R at a true +0.7R and every bank rule fired on the next wobble);
+// the live SL distance only as a fallback for a position whose record is gone
+double NqRiskOf(string cmt, double open, double sl)
+{
+   if(StringFind(cmt, NQ_CMT_SCALP) == 0)
+   {
+      long ts = StringToInteger(StringSubstr(cmt, StringLen(NQ_CMT_SCALP)));
+      for(int k = g_nSig - 1; k >= 0; k--)
+         if((long)g_s1.t[g_sigs[k].idx] == ts && g_sigs[k].risk > 0.0)
+            return g_sigs[k].risk;
+   }
+   else
    {
       NqPlan p;
-      if(NqPlanByComment(cmt, p))
-         risk = p.risk;
+      if(NqPlanByComment(cmt, p) && p.risk > 0.0)
+         return p.risk;
    }
+   return (sl > 0.0) ? MathAbs(open - sl) : 0.0;
+}
+
+double NqPosR(double open, double sl, double px, int pdir, string cmt)
+{
+   double risk = NqRiskOf(cmt, open, sl);
    if(risk <= 0.0)
       return 0.0;
    return (px - open) * pdir / risk;
@@ -4607,7 +4711,7 @@ double NqPlanSlOf(string cmt, double &tp)
    if(!NqPlanByComment(cmt, p))
       return 0.0;
    if(tp <= 0.0)
-      tp = InpPlanUseTp2 ? p.tp2 : p.tp1;
+      tp = NqPlanTpSent(p);
    return p.sl;
 }
 
@@ -4638,33 +4742,206 @@ bool NqModifySl(ulong ticket, double sl, double tp, string why)
    req.tp = tp;
    bool done = NqSend(req, why);
    if(done)
-      NqEmitBroker(posCmt, "sl_moved", NqJsonI("ticket", (long)ticket) + "," + NqJsonN("sl", sl, g_digits) + "," + NqJsonS("reason", why));
+   {
+      NqMgdSet(ticket, sl, tp, NqMgdHand(ticket));   // what the EA set: the yardstick for the hand-managed check
+      NqEmitBroker(posCmt, "sl_moved", NqJsonI("ticket", (long)ticket) + "," + NqJsonN("sl", sl, g_digits) + "," + NqJsonN("tp", tp, g_digits) + "," + NqJsonS("reason", why));
+   }
    return done;
 }
 
-// true = the position was closed
+//+------------------------------------------------------------------+
+//| HAND-MANAGED positions (1.10.0). The EA remembers the SL / TP it  |
+//| sent per ticket (from the plan at first sight, from every SLTP   |
+//| request after that; a restart rebuilds the expectation from the  |
+//| plan: its stop or the lock's stop, and the TP it sends). A live   |
+//| SL or TP that differs means the human took the position over:    |
+//| no smart exit, no lock, no flip close, no time stop, no news /    |
+//| weekend banking, no TP restore. The one exception is a MISSING   |
+//| SL: the plan's disaster stop comes back (outage protection).      |
+//+------------------------------------------------------------------+
+bool NqSamePx(double a, double b)
+{
+   return MathAbs(a - b) <= g_tick * 0.5 + 1e-9;
+}
+
+int NqMgdFind(ulong tk)
+{
+   for(int i = 0; i < g_nMgd; i++)
+      if(g_mgd[i].ticket == tk)
+         return i;
+   return -1;
+}
+
+void NqMgdSet(ulong tk, double sl, double tp, bool hand)
+{
+   int i = NqMgdFind(tk);
+   if(i < 0)
+   {
+      i = g_nMgd;
+      g_nMgd++;
+      ArrayResize(g_mgd, g_nMgd);
+      g_mgd[i].ticket = tk;
+      g_mgd[i].hand = false;
+   }
+   g_mgd[i].sl = sl;
+   g_mgd[i].tp = tp;
+   g_mgd[i].hand = g_mgd[i].hand || hand;   // sticky: once the human took it, it stays theirs
+}
+
+bool NqMgdHand(ulong tk)
+{
+   int i = NqMgdFind(tk);
+   return (i >= 0) && g_mgd[i].hand;
+}
+
+// drop the records of positions that are gone
+void NqMgdPrune()
+{
+   for(int i = g_nMgd - 1; i >= 0; i--)
+   {
+      if(PositionSelectByTicket(g_mgd[i].ticket))
+         continue;
+      for(int k = i; k < g_nMgd - 1; k++)
+         g_mgd[k] = g_mgd[k + 1];
+      g_nMgd--;
+      ArrayResize(g_mgd, g_nMgd);
+   }
+}
+
+// what the EA set (or would set) for a position seen for the first time: the plan's stop, the TP it sends (and the other
+// TP, so a changed InpPlanUseTp2 across a restart is not read as a hand edit) and the lock's stop. false = no record in
+// the window: nothing to compare against
+bool NqExpectedSlTp(string cmt, double open, int pdir, double &sl, double &tp, double &tpAlt, double &slLock)
+{
+   double risk = 0.0;
+   if(StringFind(cmt, NQ_CMT_SCALP) == 0)
+   {
+      long ts = StringToInteger(StringSubstr(cmt, StringLen(NQ_CMT_SCALP)));
+      int found = -1;
+      for(int k = g_nSig - 1; k >= 0; k--)
+         if((long)g_s1.t[g_sigs[k].idx] == ts) { found = k; break; }
+      if(found < 0)
+         return false;
+      sl = g_sigs[found].sl;
+      tp = g_sigs[found].tp;
+      tpAlt = 0.0;
+      risk = g_sigs[found].risk;
+   }
+   else
+   {
+      NqPlan p;
+      if(!NqPlanByComment(cmt, p))
+         return false;
+      sl = p.sl;
+      tp = NqPlanTpSent(p);
+      tpAlt = InpPlanUseTp2 ? p.tp1 : p.tp2;
+      risk = p.risk;
+   }
+   slLock = (InpSmartLockAtR > 0.0 && risk > 0.0) ? NqRoundTick(open + pdir * InpSmartLockR * risk, g_tick, g_digits, (pdir > 0) ? -1 : 1) : 0.0;
+   return true;
+}
+
+// true = HAND-MANAGED. Called once per closed M1 candle for every position of this EA, before anything acts on it.
+bool NqHandCheck(ulong tk, string cmt, int pdir)
+{
+   int m = NqMgdFind(tk);
+   if(m >= 0 && g_mgd[m].hand)
+      return true;
+   if(!PositionSelectByTicket(tk))
+      return false;
+   double sl = PositionGetDouble(POSITION_SL);
+   double tp = PositionGetDouble(POSITION_TP);
+   double open = PositionGetDouble(POSITION_PRICE_OPEN);
+   double eSl = 0.0, eTp = 0.0, eTpAlt = 0.0, eLock = 0.0;
+   bool hand = false;
+   if(m < 0)
+   {
+      // first sight (a fresh fill, or a restart): the expectation comes from the plan
+      if(!NqExpectedSlTp(cmt, open, pdir, eSl, eTp, eTpAlt, eLock))
+         return false;
+      bool slOk = (sl <= 0.0) || NqSamePx(sl, eSl) || (eLock > 0.0 && NqSamePx(sl, eLock));   // a missing stop is the guard's business
+      bool tpOk = NqSamePx(tp, eTp) || (eTpAlt > 0.0 && NqSamePx(tp, eTpAlt));
+      hand = !(slOk && tpOk);
+      NqMgdSet(tk, (sl > 0.0) ? sl : eSl, tp, hand);
+   }
+   else
+   {
+      eSl = g_mgd[m].sl;
+      eTp = g_mgd[m].tp;
+      bool slOk = (sl <= 0.0) || NqSamePx(sl, eSl);
+      bool tpOk = NqSamePx(tp, eTp);
+      hand = !(slOk && tpOk);
+      if(hand)
+         g_mgd[m].hand = true;
+   }
+   if(hand)
+   {
+      string who = ((pdir > 0) ? "BUY #" : "SELL #") + IntegerToString((long)tk);
+      string why = "HAND-MANAGED: " + who + " SL " + NqPx(sl) + " / TP " + NqPx(tp) + " differ from the EA's SL " + NqPx(eSl) + " / TP " + NqPx(eTp) +
+                   " - the EA leaves it to you (no smart exit, lock, flip close, time stop or news / weekend banking; only a missing SL is restored)";
+      Print("NQ " + why);
+      g_smartNote = "HAND-MANAGED #" + IntegerToString((long)tk) + " (your SL / TP)";
+      NqEmitBroker(cmt, "hand_managed", NqJsonI("ticket", (long)tk) + "," + NqJsonN("sl", sl, g_digits) + "," + NqJsonN("tp", tp, g_digits) + "," +
+                   NqJsonN("expected_sl", eSl, g_digits) + "," + NqJsonN("expected_tp", eTp, g_digits) + "," + NqJsonS("reason", why));
+   }
+   return hand;
+}
+
+// named-session masks (the AUTO clock's g_sessOpen bits): ALL = 0 = no restriction. A mask that excludes the
+// current session blocks NEW orders only - a resting order placed in one session may fill in the next.
+bool NqSessionAllows(int mask)
+{
+   return (mask == 0) || ((g_sessOpen & mask) != 0);
+}
+
+string NqSessMaskText(int mask)
+{
+   if(mask == 0)
+      return "ALL";
+   string s = "";
+   if((mask & 1) != 0)
+      s = "ASIA";
+   if((mask & 2) != 0)
+      s = s + ((s == "") ? "" : "+") + "LONDON";
+   if((mask & 4) != 0)
+      s = s + ((s == "") ? "" : "+") + "NY";
+   return s;
+}
+
+int NqFamilyMask(const NqPlan &p)
+{
+   if(p.kind == NQ_PLAN_SCALP)
+      return g_scalpSess;
+   if(p.tf == 900)
+      return g_swingSess;
+   return g_m5Sess;
+}
+
+// true = the position was closed.
+// Profit protection lives AT OR ABOVE the lock threshold only (explicit decision, 2026-10-17): a position under water
+// or at a small profit is left to its SL / TP. Below the threshold the only exits are the SL itself and the explicit
+// structural exits (the STRUCTURAL CUT here, InpPlanCloseOnFlip / the scalp's own rules in the caller). Every action
+// names its rule, its R (on the plan's recorded risk) and the threshold, so a protective exit and an early close can
+// be told apart in the journal.
 bool NqSmartExit(ulong tk, int pdir, string cmt, bool isScalp, int reg5)
 {
-   if(!g_smartExit || !PositionSelectByTicket(tk))
+   if((!g_smartExit && !g_profitLock && !g_flipCutLoss) || !PositionSelectByTicket(tk))
       return false;
    double open = PositionGetDouble(POSITION_PRICE_OPEN);
    double sl = PositionGetDouble(POSITION_SL);
    double tp = PositionGetDouble(POSITION_TP);
    datetime opened = (datetime)PositionGetInteger(POSITION_TIME);
    double px = (pdir > 0) ? SymbolInfoDouble(g_sym, SYMBOL_BID) : SymbolInfoDouble(g_sym, SYMBOL_ASK);
-   double risk = (sl > 0.0) ? MathAbs(open - sl) : 0.0;
-   if(risk <= 0.0)
-   {
-      NqPlan p;
-      if(NqPlanByComment(cmt, p))
-         risk = p.risk;
-   }
+   double risk = NqRiskOf(cmt, open, sl);
    if(risk <= 0.0 || px <= 0.0)
       return false;
    double r = (px - open) * pdir / risk;
    string rT = ((r >= 0.0) ? "+" : "") + DoubleToString(r, 2) + "R";
-   // a) the lock: SL to entry + InpSmartLockR once +InpSmartLockAtR is reached, tightened only
-   if(InpSmartLockAtR > 0.0 && r >= InpSmartLockAtR)
+   string who = ((pdir > 0) ? "BUY #" : "SELL #") + IntegerToString((long)tk);
+   string thrT = "+" + DoubleToString(InpSmartLockAtR, 2) + "R";
+   bool aboveLock = (InpSmartLockAtR > 0.0 && r >= InpSmartLockAtR);
+   // a) PROFIT LOCK (its own switch): SL to entry + InpSmartLockR once the threshold is reached, tightened only
+   if(g_profitLock && aboveLock)
    {
       double want = NqRoundTick(open + pdir * InpSmartLockR * risk, g_tick, g_digits, (pdir > 0) ? -1 : 1);
       bool better = (pdir > 0) ? (want > sl + g_tick * 0.5) : (sl <= 0.0 || want < sl - g_tick * 0.5);
@@ -4672,34 +4949,42 @@ bool NqSmartExit(ulong tk, int pdir, string cmt, bool isScalp, int reg5)
       bool legal = (pdir > 0) ? (want < px - minDist) : (want > px + minDist);
       if(better && legal)
       {
-         if(NqModifySl(tk, want, tp, "SMART LOCK: " + rT + " reached, SL to entry " + ((InpSmartLockR > 0.0) ? ("+" + DoubleToString(InpSmartLockR, 2) + "R") : "")))
-            g_smartNote = "SMART LOCK #" + IntegerToString((long)tk) + " SL " + NqPx(want) + " (" + rT + ")";
+         if(NqModifySl(tk, want, tp, "PROFIT LOCK: " + who + " at " + rT + " reached the threshold " + thrT + " - SL to entry +" +
+                                      DoubleToString(InpSmartLockR, 2) + "R (" + NqPx(want) + "), tightened only, the TP stays"))
+            g_smartNote = "PROFIT LOCK #" + IntegerToString((long)tk) + " SL " + NqPx(want) + " (" + rT + ")";
       }
    }
-   // b) the M5 regime flipped against it (it agreed at some point since the open)
-   if(reg5 != NQ_REG_CHOP && reg5 != pdir && NqRegimeAgreedSince(opened, pdir))
+   bool flipped = (reg5 != NQ_REG_CHOP && reg5 != pdir && NqRegimeAgreedSince(opened, pdir));
+   // b) SMART EXIT on an M5 flip: bank only AT OR ABOVE the lock threshold - never under water, never at a small profit
+   if(g_smartExit && flipped)
    {
-      if(r >= InpSmartFlipProfitR)
+      if(aboveLock && r > 0.0 && r >= InpSmartFlipProfitR)
       {
-         if(NqClosePosition(tk, "SMART EXIT: M5 regime flipped " + NqRegimeText(reg5) + " against the position, banking " + rT + " before the TP"))
+         if(NqClosePosition(tk, "SMART EXIT (M5 flip): regime flipped " + NqRegimeText(reg5) + " against " + who + " at " + rT +
+                                " - above the lock threshold " + thrT + ", banking before the TP"))
          {
             g_smartNote = "SMART EXIT #" + IntegerToString((long)tk) + " banked " + rT + " (M5 flip)";
             return true;
          }
       }
-      else if(InpSmartFlipCutLoss && !isScalp)
+      else
+         g_smartNote = "SMART EXIT held #" + IntegerToString((long)tk) + ": M5 flipped at " + rT + ", under the lock threshold " + thrT + " - the SL decides";
+   }
+   // c) STRUCTURAL CUT (explicit, off by default): a PLAN position under water when the regime flips is closed before its SL
+   if(g_flipCutLoss && flipped && !isScalp && r < 0.0)
+   {
+      if(NqClosePosition(tk, "STRUCTURAL CUT (InpSmartFlipCutLoss): M5 regime flipped " + NqRegimeText(reg5) + " against " + who + " at " + rT +
+                             " - closed before the SL by your explicit setting; not a profit rule"))
       {
-         if(NqClosePosition(tk, "SMART EXIT: M5 regime flipped " + NqRegimeText(reg5) + " against the position at " + rT + " - cut before the SL"))
-         {
-            g_smartNote = "SMART EXIT #" + IntegerToString((long)tk) + " cut at " + rT + " (M5 flip)";
-            return true;
-         }
+         g_smartNote = "STRUCTURAL CUT #" + IntegerToString((long)tk) + " at " + rT + " (M5 flip)";
+         return true;
       }
    }
-   // c) the M1 bias turned against it with a decent profit
-   if(InpSmartM1ProfitR > 0.0 && r >= InpSmartM1ProfitR && g_s1.n > 0 && g_s1.dir[g_s1.n - 1] == -pdir)
+   // d) SMART EXIT on an M1 turn: the same threshold, plus its own floor
+   if(g_smartExit && InpSmartM1ProfitR > 0.0 && aboveLock && r >= InpSmartM1ProfitR && g_s1.n > 0 && g_s1.dir[g_s1.n - 1] == -pdir)
    {
-      if(NqClosePosition(tk, "SMART EXIT: M1 bias turned " + NqDirText(-pdir) + ", banking " + rT))
+      if(NqClosePosition(tk, "SMART EXIT (M1 turn): M1 bias turned " + NqDirText(-pdir) + " against " + who + " at " + rT +
+                             " - above the lock threshold " + thrT + ", banking"))
       {
          g_smartNote = "SMART EXIT #" + IntegerToString((long)tk) + " banked " + rT + " (M1 turn)";
          return true;
@@ -4744,7 +5029,7 @@ void NqReadAccount()
       string side = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? "BUY" : "SELL";
       string one = side + " " + DoubleToString(PositionGetDouble(POSITION_VOLUME), 2) + " @ " +
                    DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), g_digits) + " (" + kind + ") " +
-                   ((pr >= 0.0) ? "+" : "") + DoubleToString(pr, 2);
+                   ((pr >= 0.0) ? "+" : "") + DoubleToString(pr, 2) + (NqMgdHand(tk) ? " HAND-MANAGED" : "");
       g_posText = (g_posText == "") ? one : (g_posText + "  |  " + one);
    }
    if(g_posText == "")
@@ -5250,7 +5535,8 @@ string NqEventJson(const NqPlan &p, string event, string extra)
               NqJsonS("account_mode", g_isDemo ? "demo" : "real") + "," + NqJsonI("magic", InpMagic) + "," +
               NqJsonS("regime5", (n5 > 0) ? NqRegimeText(g_s5.regime[n5 - 1]) : "") + "," +
               NqJsonS("ctx15", (n15 > 0) ? NqContextText(g_s15.ctx[n15 - 1]) : "") + "," +
-              NqJsonN("risk_pct", InpRiskPct, 2);
+              NqJsonN("risk_pct", InpRiskPct, 2) + "," +
+              NqJsonS("session", NqSessionName());   // ASIA / LONDON / NY / OFF when the event was recorded (1.10.0, append-only)
    if(p.kind == NQ_PLAN_RADAR)
       j = j + "," + NqJsonI("radar_score", (p.dir > 0) ? g_rdUp.score : g_rdDn.score);
    if(extra != "")
@@ -5600,9 +5886,15 @@ string NqTelemetryJson()
    }
    j = j + "]},";
    j = j + "\"session\":{" + NqJsonS("now", NqSessionName()) + "," + NqJsonB("rollover", g_rollover) + "," + NqJsonB("week_edge", g_weekEdge) + "," +
-       NqJsonS("week_text", g_weekText) + "," + NqJsonI("dow", g_dow) + "," + NqJsonS("clock", g_clkText) + "},";
+       NqJsonS("week_text", g_weekText) + "," + NqJsonI("dow", g_dow) + "," + NqJsonS("trade_swing", NqSessMaskText(g_swingSess)) + "," +
+       NqJsonS("trade_m5", NqSessMaskText(g_m5Sess)) + "," + NqJsonS("trade_scalp", NqSessMaskText(g_scalpSess)) + "," + NqJsonS("clock", g_clkText) + "},";
    j = j + "\"portfolio\":{" + NqJsonI("positions", g_portfolioPos) + "," + NqJsonI("max", InpMaxOpenAcrossCharts) + "},";
-   j = j + "\"smart_exit\":{" + NqJsonB("on", g_smartExit) + "," + NqJsonN("flip_profit_r", InpSmartFlipProfitR, 2) + "," + NqJsonB("flip_cut_loss", InpSmartFlipCutLoss) + "," +
+   int handN = 0;
+   for(int hm = 0; hm < g_nMgd; hm++)
+      if(g_mgd[hm].hand)
+         handN++;
+   j = j + "\"smart_exit\":{" + NqJsonB("on", g_smartExit) + "," + NqJsonB("profit_lock", g_profitLock) + "," + NqJsonI("hand_managed", handN) + "," +
+       NqJsonN("flip_profit_r", InpSmartFlipProfitR, 2) + "," + NqJsonB("flip_cut_loss", g_flipCutLoss) + "," +
        NqJsonN("m1_profit_r", InpSmartM1ProfitR, 2) + "," + NqJsonN("lock_at_r", InpSmartLockAtR, 2) + "," + NqJsonN("lock_r", InpSmartLockR, 2) + "," + NqJsonS("last", g_smartNote) + "},";
    // the account as the EA sees it (this magic, this symbol) - no identity, no credentials
    j = j + "\"account\":{" + NqJsonN("balance", g_balance, 2) + "," + NqJsonN("floating", g_floating, 2) + "," +
@@ -5784,6 +6076,16 @@ void NqTrade()
 
    // 0) the week's edge and a news window: resting orders are pulled, a position in profit is
    //    banked. Closing is never blocked by the gate; these run before anything else.
+   // 0) HAND-MANAGED scan: a position whose live SL / TP is not what the EA set belongs to the human from now on
+   NqMgdPrune();
+   int totH = PositionsTotal();
+   for(int i = 0; i < totH; i++)
+   {
+      ulong tkH = PositionGetTicket(i);
+      if(tkH == 0 || !NqIsOurs(PositionGetInteger(POSITION_MAGIC), PositionGetString(POSITION_SYMBOL)))
+         continue;
+      NqHandCheck(tkH, PositionGetString(POSITION_COMMENT), (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1);
+   }
    bool bankNews = (g_newsBlock && InpNewsBankProfitR > 0.0 && g_newsWinT != 0);
    if(g_weekFriday || g_newsBlock)
    {
@@ -5812,6 +6114,8 @@ void NqTrade()
          if(!NqIsOurs(PositionGetInteger(POSITION_MAGIC), PositionGetString(POSITION_SYMBOL)))
             continue;
          int pdir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+         if(NqMgdHand(tk))
+            continue;   // HAND-MANAGED: no news / weekend banking
          double px = (pdir > 0) ? SymbolInfoDouble(g_sym, SYMBOL_BID) : SymbolInfoDouble(g_sym, SYMBOL_ASK);
          double r = NqPosR(PositionGetDouble(POSITION_PRICE_OPEN), PositionGetDouble(POSITION_SL), px, pdir, PositionGetString(POSITION_COMMENT));
          string rT = ((r >= 0.0) ? "+" : "") + DoubleToString(r, 2) + "R";
@@ -5841,9 +6145,10 @@ void NqTrade()
       string cmt = PositionGetString(POSITION_COMMENT);
       int pdir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
       datetime opened = (datetime)PositionGetInteger(POSITION_TIME);
+      bool hand = NqMgdHand(tk);
       // radar FALSE BREAK: the M5 bar that filled the stop, or the next one, CLOSED
-      // back through the level -> out at once, whatever the SL says
-      if(StringFind(cmt, NQ_CMT_RD) == 0)
+      // back through the level -> out at once, whatever the SL says (not on a hand-managed position)
+      if(!hand && StringFind(cmt, NQ_CMT_RD) == 0)
       {
          NqPlan rp;
          if(g_newBar5 && g_fresh && NqPlanByComment(cmt, rp))
@@ -5860,11 +6165,15 @@ void NqTrade()
       }
       bool isScalp = (StringFind(cmt, NQ_CMT_SCALP) == 0);
       // SL GUARD: a position of ours without a stop (a broker that stripped it, a hand edit) gets the plan's
-      // stop back; if the price is already beyond it, the position is closed now
+      // stop back; if the price is already beyond it, the position is closed now. On a HAND-MANAGED position
+      // only the disaster stop comes back - the human's TP (even none) is not touched
       if(g_fresh && PositionGetDouble(POSITION_SL) <= 0.0)
       {
          double tpWant = PositionGetDouble(POSITION_TP);
+         double tpKeep = tpWant;
          double want = NqPlanSlOf(cmt, tpWant);
+         if(hand)
+            tpWant = tpKeep;
          if(want > 0.0)
          {
             double pxG = (pdir > 0) ? SymbolInfoDouble(g_sym, SYMBOL_BID) : SymbolInfoDouble(g_sym, SYMBOL_ASK);
@@ -5877,10 +6186,13 @@ void NqTrade()
             double minDistG = g_stopsLevel * g_point;
             bool legal = (pdir > 0) ? (want < pxG - minDistG) : (want > pxG + minDistG);
             if(legal)
-               NqModifySl(tk, want, tpWant, "SL MISSING: the plan's stop " + NqPx(want) + " restored");
+               NqModifySl(tk, want, tpWant, hand ? ("SL MISSING (HAND-MANAGED): the plan's disaster stop " + NqPx(want) + " restored for outage protection, your TP untouched")
+                                                 : ("SL MISSING: the plan's stop " + NqPx(want) + " restored"));
             PositionSelectByTicket(tk);
          }
       }
+      if(hand)
+         continue;   // HAND-MANAGED: no smart exit, no lock, no flip close, no time stop
       if(g_fresh && NqSmartExit(tk, pdir, cmt, isScalp, reg5))
          continue;
       if(!isScalp)
@@ -5990,6 +6302,13 @@ void NqTrade()
                continue;
             if(g_gate != 0)
                continue;
+            int fmask = NqFamilyMask(pl);
+            if(!NqSessionAllows(fmask))
+            {
+               g_note = NqPlanKindText(pl.kind) + ((pl.tf == 900) ? " M15" : "") + ": OUTSIDE ITS TRADE SESSIONS (now " + NqSessionName() +
+                        ", allowed " + NqSessMaskText(fmask) + ") - not placed";
+               continue;
+            }
             if(NqSpikeBlocks(pl))
             {
                g_note = "SPIKE GUARD: " + NqPlanKindText(pl.kind) + " " + ((pl.dir > 0) ? "BUY" : "SELL") + " in the direction of a " +
@@ -6025,7 +6344,7 @@ void NqTrade()
                g_note = "RADAR: VOLATILITY EXPANSION - needs score " + IntegerToString(InpVolExpandRadar) + " (" + IntegerToString(rdScore) + "/10)";
                continue;
             }
-            double tp = InpPlanUseTp2 ? pl.tp2 : pl.tp1;
+            double tp = NqPlanTpSent(pl);
             double lot = 0.0;
             int og = NqOrderGate(pl.dir, pl.entry, pl.sl, tp, lot, (int)NqPlanOrderType(pl));
             if(og != 0)
@@ -6073,6 +6392,11 @@ void NqTrade()
    if(g_gate != 0)
    {
       g_note = "SCALP TRIGGER " + sideT + " - " + NqGateAtX(g_gate, 0);
+      return;
+   }
+   if(!NqSessionAllows(g_scalpSess))
+   {
+      g_note = "SCALP TRIGGER " + sideT + " - OUTSIDE ITS TRADE SESSIONS (now " + NqSessionName() + ", allowed " + NqSessMaskText(g_scalpSess) + ")";
       return;
    }
    if(InpSpikeGuard && g_spikeDir != 0 && st == g_spikeDir)
@@ -6813,7 +7137,8 @@ void NqDrawPanel()
    color newsC = g_newsBlock ? cBlock : (g_newsUnknown ? (g_newsUnknownBlocks ? cBlock : cWait) : cVal);
    NqRow("e0n", kx, vx, yr, "NEWS (USD)", newsT, newsC, cKey, fs);
    yr += rh;
-   string wkT = NqSessionName() + "   rollover " + IntegerToString(g_clk.roll / 60, 2, '0') + ":" + IntegerToString(g_clk.roll % 60, 2, '0') + (g_rollover ? " NOW" : "") +
+   string wkT = NqSessionName() + (((g_swingSess | g_m5Sess | g_scalpSess) != 0) ? ("   trade: swing " + NqSessMaskText(g_swingSess) + " / M5 " + NqSessMaskText(g_m5Sess) +
+                " / scalp " + NqSessMaskText(g_scalpSess)) : "") + "   rollover " + IntegerToString(g_clk.roll / 60, 2, '0') + ":" + IntegerToString(g_clk.roll % 60, 2, '0') + (g_rollover ? " NOW" : "") +
                 ((g_weekText == "") ? "   week open" : ("   " + g_weekText)) + (g_clockGuards ? "" : " (guards off)") +
                 ((g_portfolioPos > 0) ? ("   portfolio " + IntegerToString(g_portfolioPos) + " pos (max " + IntegerToString(InpMaxOpenAcrossCharts) + ")") : "") +
                 ((g_smartNote == "") ? "" : ("   last: " + g_smartNote));
@@ -7143,7 +7468,7 @@ void NqDrawPanel()
          cRow = NqDirColor(pl.dir);
          vE = NqPx(pl.entry);
          vS = NqPx(pl.sl);
-         double tpSent = InpPlanUseTp2 ? pl.tp2 : pl.tp1;
+         double tpSent = NqPlanTpSent(pl);
          vT = NqPx(tpSent);
          double dist = NqPlanIsStop(pl) ? NqDistAtrStop(pl.dir, pl.entry, bidP, askP, atr5) : NqDistAtr(pl.dir, pl.entry, bidP, askP, atr5);
          bool isNear = (atr5 > 0.0 && dist >= 0.0 && dist <= InpNearAtr && pl.status == NQ_PL_ACTIVE);
@@ -7371,8 +7696,9 @@ void NqDrawPanel()
       NqLabel(id + "3", cx3, yr, NqPx(PositionGetDouble(POSITION_SL)), cDn, fs, "Arial", ANCHOR_LEFT_UPPER);
       NqLabel(id + "4", cx4, yr, NqPx(PositionGetDouble(POSITION_TP)), cUp, fs, "Arial", ANCHOR_LEFT_UPPER);
       NqLabel(id + "5", cx5, yr, NqMoney(pr), (pr >= 0.0) ? cUp : cDn, fs, "Arial", ANCHOR_LEFT_UPPER);
-      NqLabel(id + "6", cx6, yr, "RUNNING  #" + IntegerToString((long)tk) + " " + kindT + " " + DoubleToString(PositionGetDouble(POSITION_VOLUME), 2) +
-              " lot  " + NqHhMm(age), cUp, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
+      bool handRow = NqMgdHand(tk);
+      NqLabel(id + "6", cx6, yr, (handRow ? "HAND-MANAGED  #" : "RUNNING  #") + IntegerToString((long)tk) + " " + kindT + " " + DoubleToString(PositionGetDouble(POSITION_VOLUME), 2) +
+              " lot  " + NqHhMm(age), handRow ? cWait : cUp, fs, "Arial Bold", ANCHOR_LEFT_UPPER);
       yr += rh;
       shown++;
    }

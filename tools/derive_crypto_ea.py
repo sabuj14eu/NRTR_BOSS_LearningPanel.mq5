@@ -64,6 +64,10 @@ HEADER = '''//+-----------------------------------------------------------------
 //|     the levels (Asia / London / NY), it never stops the bot.     |
 //|     v1.3.4: the WEEKEND IS OPEN (InpWeekendTrading, default   |
 //|     on); the Friday stop and the week-open guard default to 0.  |
+//|   * v1.4.0 (with metal 1.10.0): R on the plan's recorded risk, |
+//|     PROFIT LOCK its own switch, SMART EXIT above the threshold |
+//|     only, HAND-MANAGED positions, TP2 default, journal session,|
+//|     named-session masks (default ALL: nothing changes).        |
 //|                                                                  |
 //|  M15 = CONTEXT ONLY        (EMA200 + NRTR: shades, never gates)  |
 //|   M5 = REGIME + STRUCTURE  (NRTR + confirmed HH/HL or LH/LL)     |
@@ -79,7 +83,7 @@ HEADER = '''//+-----------------------------------------------------------------
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.34"
+#property version     "1.40"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -412,7 +416,7 @@ def derive_ea(m: str) -> str:
             '   yr += rh;\n'
             '   string volT = "---";\n')
     # 14. version + helper functions (after NqReadAccount's spread read block: append before NqEvaluate's doc comment)
-    t = rep(t, '#define NQ_EA_VERSION "1.9.4"', '#define NQ_EA_VERSION "1.3.4"')
+    t = rep(t, '#define NQ_EA_VERSION "1.10.0"', '#define NQ_EA_VERSION "1.4.0"')
     # 14b. v1.3.4 - the weekend is OPEN: crypto never closes, so the metal's WEEKEND block must not
     #      apply; the Friday stop and the week-open guard are off unless the operator sets them
     #      (a broker that closes crypto at the weekend). Nothing else of the week logic changes.
@@ -451,7 +455,7 @@ def derive_test(s: str) -> str:
     t = rep(t, 'find("GOLD / SILVER ONLY")', 'find("CRYPTO ONLY")')
     t = rep(t, '"\\"metal\\":\\"GOLD\\""', '"\\"coin\\":\\"BTC\\""')
     t = rep(t, '"\\"source\\":\\"NRTR_QML_MetalScalper\\""', '"\\"source\\":\\"NRTR_QML_CryptoScalper\\""')
-    t = rep(t, '"\\"ea_version\\":\\"1.9.4\\""', '"\\"ea_version\\":\\"1.3.4\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
+    t = rep(t, '"\\"ea_version\\":\\"1.10.0\\""', '"\\"ea_version\\":\\"1.4.0\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
     t = rep(t, 'CHECK(rows == 12, "12 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, VOL REGIME + the 7 engine rows)");', 'CHECK(rows == 13, "13 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, COIN PROFILE, VOL REGIME + the 7 engine rows)");')
     t = rep(t, "   SIM.tickValue = tickValue;\n", "   SIM.tickValue = tickValue;\n   SIM.contract = 1.0;   // crypto CFD: one coin per lot\n")
     # price offsets of the hand-made broker items, scaled from a $4,150 metal to a $61,500 coin
@@ -470,6 +474,7 @@ def derive_test(s: str) -> str:
     t = rep(t, "p.open = nb.close - 0.5; p.sl = p.open - 1.0; p.tp = p.open + 3.0;", "p.open = nb.close - 50.0; p.sl = p.open - 100.0; p.tp = p.open + 300.0;")
     t = rep(t, "l.open = nb.close - 0.5; l.sl = l.open + 1.0; l.tp = l.open - 3.0;", "l.open = nb.close - 50.0; l.sl = l.open + 100.0; l.tp = l.open - 300.0;")
     t = rep(t, "Market silver = makeMarket(5, 60.9, 0.001, 0.006, (int)DAYS);", "Market silver = makeMarket(5, 112.9, 0.001, 0.05, (int)DAYS);")
+    t = rep(t, "Market silverM9 = makeMarket(5, 60.9, 0.001, 0.006, (int)DAYS);", "Market silverM9 = makeMarket(5, 112.9, 0.001, 0.05, (int)DAYS);")
     t = t.replace("XAGUSD", "LTCUSD").replace('"XAG"', '"LTC"')
     t = t.replace("silver", "ltc").replace("gold,", "btc,").replace("Market gold", "Market btc").replace("(gold)", "(btc)")
     t = rep(t, "A10 ltc spec (3 digits, tick value 5)", "A10 LTC spec (3 digits, tick value 5)")

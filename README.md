@@ -37,7 +37,7 @@ the journal and telemetry so it can be judged on evidence (n >= 100 trades), not
 | **MACRO VOTE** per direction, every voter 1: dollar index (up = metal down), a US 10-year bond (`InpBondSymbol`, price up = yields down = metal up; a yield the other way), the calendar's reading of USD releases of the last 4 h (USD positive = metal down), H4 and H1 context, a fresh H1 CHoCH. A vote against of `InpMacroBlockLevel` (2) blocks every entry kind unless the metal's OWN structure is A+ (M15 + M5 with the trade, a radar break with score `InpMacroOverrideScore`) | yes | yes, with the **BTC lead counting double** in place of the dollar index (`InpMacroInverse` flips it) | `MACRO VOTE` row, `macro` / `witnesses` in telemetry |
 | **News guard** on the MT5 economic calendar, **USD events**: HIGH events close the gate 30 min before to 30 after (TOP TIER 60 / 60), resting orders pulled, a position >= 0.2 R in profit banked; calendar silence = NEWS UNKNOWN = no trading blind; N/A in the tester; re-read every minute | yes | yes | `NEWS (USD)` row, `news` in telemetry |
 | **H4 / H1** context + structure, every M5 / H1 / H4 break classified **BOS** (with the structure) or **CHoCH** (against it) | yes | yes | `H4 / H1` row, chart marks, `h4_ctx` / `h1_ctx` / `h1_break` / `m5_break` in the journal |
-| **SMART EXIT**: bank on an M5 flip in profit (0.1 R), cut under water, bank on an M1 turn (0.5 R), lock the SL at +0.7 R to entry + 0.1 R; a reversal plan whose regime never agreed is left alone | yes | yes | the verdict (`SMART EXIT banks it`), `smart_exit` in telemetry, journal event `sl_moved` |
+| **SMART EXIT** (rewritten in 1.10.0, see below): PROFIT LOCK at +0.7 R to entry + 0.1 R (its own switch); banks on an M5 flip or an M1 turn **only at or above the lock threshold**, never under water, never at a small profit; the STRUCTURAL CUT under water is explicit and off; a reversal plan whose regime never agreed is left alone; a hand-changed SL / TP = HAND-MANAGED, hands off | yes | yes | the verdict (`SMART EXIT banks it ... above the lock threshold`), `smart_exit` in telemetry, journal events `sl_moved` / `hand_managed` |
 | **Friday stop** (orders pulled, profits banked 2 h before the Friday 17:00 NY close), **week-open guard** (first 60 min), **rollover window** (15 min each side of 17:00 NY) | yes | **the weekend is OPEN** (v1.3.4, `InpWeekendTrading = true`): no WEEKEND block; the Friday stop and the week-open guard default to 0 and apply only if you set them (a broker that closes crypto at the weekend); the rollover window stays | `WEEK / SMART` row (`WEEKEND - OPEN (crypto trades 24/7)`) |
 | **Portfolio cap** across charts (`InpMaxOpenAcrossCharts`, 2) | yes | yes | gate `PORTFOLIO FULL` |
 
@@ -46,6 +46,29 @@ witnesses, home sessions, the session tilt, the same-currency exposure cap - tho
 pair of currencies. The former radar-only DXY filter (`InpMacroBlocks`) and the crypto
 `InpLeadOverrideScore` are gone: the dollar index / the lead are voters now, the override score
 is `InpMacroOverrideScore` for all three EAs.
+
+## v1.10.0 (metal) / v1.4.0 (crypto, by derivation): the exit discipline release (2026-10-17)
+
+Six explicit decisions, each one a small verified diff. The forex EA is **not** in this release
+(its engine block is unchanged and still byte-identical; its own copy of the smart exit still
+carries the old R yardstick - the next release ports these items there).
+
+| Item | What changed | Why |
+|---|---|---|
+| **R yardstick** | R is measured on the plan's (or scalp's) **recorded risk**; the live SL distance is only a fallback for a position whose record is gone (`NqRiskOf`) | before, R used the live SL distance, so once the lock had moved the SL to entry + 0.1R the denominator shrank tenfold: a true +0.7R read **+7R**, and every bank rule fired on the next wobble. The panel and the journal `pl`/R text were wrong after a lock too |
+| **PROFIT LOCK is its own switch** | `InpProfitLock` (on). At `InpSmartLockAtR` (0.7R) the SL moves to entry + `InpSmartLockR` (0.1R), tightened only; the TP stays. Log: `PROFIT LOCK: BUY #4242 at +0.80R reached the threshold +0.70R - SL to entry +0.10R (...), tightened only, the TP stays` | the lock is protection, not profit-taking; it works with the smart exit off |
+| **SMART EXIT banks AT OR ABOVE the lock threshold only** | `InpSmartExit` (on). The M5-flip bank and the M1-turn bank fire only when R >= `InpSmartLockAtR` (and their own floors, kept for your `.set` files). Under the threshold the SL / TP decide; a position under water or at +0.01R is **never** closed by a profit rule. Log: `SMART EXIT (M5 flip): regime flipped BEARISH against BUY #4242 at +0.85R - above the lock threshold +0.70R, banking before the TP`; held: the panel note `SMART EXIT held #4242: M5 flipped at +0.30R, under the lock threshold +0.70R - the SL decides` and the verdict `EXIT ... (you decide - +0.30R is under the lock threshold +0.70R, the SL decides)` | with TP2 (2R) as the target, a bank at +0.1R or +0.5R could never let a trade reach it; a small floating result is not a reason |
+| **STRUCTURAL CUT is explicit and off** | `InpSmartFlipCutLoss` moved to its own group, **default false**. On, it closes a PLAN position under water when the M5 regime flips, before the SL, and says so: `STRUCTURAL CUT (InpSmartFlipCutLoss): ... at -0.30R - closed before the SL by your explicit setting; not a profit rule`. Scalps keep their own flip rule (`InpScalpCloseOnFlip`) | a loser is closed by its SL or by a rule you switched on in words, never by the profit logic |
+| **HAND-MANAGED positions** | the EA remembers the SL / TP it sent per ticket (from the plan at first sight, from every SLTP it sends; a restart rebuilds the expectation from the plan: its stop or the lock's stop, and the TP it sends or the other one). A live SL or TP that differs = **HAND-MANAGED**: no smart exit, no lock, no flip close, no radar false-break close, no time stop, no news / weekend banking, no TP restore. Board row `HAND-MANAGED #4242`, verdict `HAND-MANAGED BUY #4242 (pullback) - your SL ... / TP ...: the EA leaves it to you`, journal event `hand_managed` (with `expected_sl` / `expected_tp`), the SLOT line `... HAND-MANAGED`. **Exception:** a MISSING SL still gets the plan's disaster stop back (`SL MISSING (HAND-MANAGED): the plan's disaster stop ... restored for outage protection, your TP untouched`) | you change a stop or a target by hand = you took the trade; the EA must not fight you. The outage lesson (positions left with no stop) keeps the one exception |
+| **TP2 is the default** | `InpPlanUseTp2 = true`: plan orders carry TP2 (2R). Scalps keep their validated 1.0 ATR ladder. The board's TP SENT column shows what went to MT5 | explicit decision. Note the constitution's evidence that fixed 2R targets failed validation on **v7's** population - a different population; this EA's own journal decides, n >= 100 |
+| **Journal: `session`** | every event carries `session`: `ASIA` / `LONDON` / `NY` / `OFF` at the moment it was recorded (append-only); `sl_moved` also carries `tp` | so the platform's performance matrix can finally say which session earns its slot |
+| **Trade-session masks** | `InpSwingSessions`, `InpM5Sessions`, `InpScalpSessions` (`ALL` / `ASIA` / `LONDON` / `ASIA + LONDON` / `NY` / `ASIA + NY` / `LONDON + NY`), from the AUTO clock. **Default ALL = no restriction, nothing changes until you decide.** A mask gates NEW orders only: **a resting order placed in London may still fill in New York** - it is never pulled by the mask (plan lifetime and the slot rule are unchanged). Outside every named window (`OFF`, between the NY close and the Asian open) a restricted family places nothing; `ALL` places there too. Blocked: `QML: OUTSIDE ITS TRADE SESSIONS (now ASIA, allowed LONDON) - not placed`. The WEEK / SMART row shows `trade: swing ALL / M5 ASIA+LONDON / scalp ALL` while any mask is restricted; telemetry carries `trade_swing` / `trade_m5` / `trade_scalp` | the decision on Asia / London for gold and silver is yours and separate; the mask is the switch, the journal `session` field is the evidence |
+
+**Before you deploy 1.10.0: re-save every `.set` file.** An old `.set` carries
+`InpPlanUseTp2 = false` and `InpSmartFlipCutLoss = true` and would silently restore TP1 and the
+cut; it has no `InpProfitLock` or session masks (those take their defaults). F7 in MetaEditor
+first (metal and crypto), a demo chart second, the real terminal last - tests passing is not a
+reason to flip the Algo button.
 
 ## The CRYPTO twin: `NRTR_QML_CryptoScalper.mq5` (BTC / ETH / LTC / altcoins)
 
@@ -183,14 +206,19 @@ last smart-exit action.
 
 ### SMART EXIT (intelligent management)
 
+**The forex EA still runs the v1.9 rules below. The metal and crypto EAs run the 1.10.0 rules**
+(see "v1.10.0 ... the exit discipline release" above): R on the plan's recorded risk, the PROFIT
+LOCK as its own switch, banks only at or above the lock threshold, the cut explicit and off,
+HAND-MANAGED positions. The forex port is the next release.
+
 Open positions are managed on every closed M1 candle (`InpSmartExit`), on top of the SL / TP:
 
-| Rule | Default | What happens |
-|---|---|---|
-| **Bank on an M5 flip** | `InpSmartFlipProfitR` 0.1 R | the M5 regime flipped against a position that is at least 0.1 R in profit: closed, `SMART EXIT: M5 regime flipped BEARISH against the position, banking +0.42R before the TP` |
-| **Cut on an M5 flip** | `InpSmartFlipCutLoss` on | flipped against a position under water: closed now, a smaller loss than the SL (`false` = the SL decides). Scalps keep their own flip rule |
-| **Bank on an M1 turn** | `InpSmartM1ProfitR` 0.5 R | the M1 NRTR turned against a position at least 0.5 R in profit: closed and banked |
-| **Profit lock** | `InpSmartLockAtR` 0.7 R, `InpSmartLockR` 0.1 R | once a position reaches +0.7 R the SL moves to entry + 0.1 R (one `TRADE_ACTION_SLTP`, journal event `sl_moved`), tightened only, never loosened |
+| Rule | Default (forex v1.0.x) | Metal 1.10.0 / crypto 1.4.0 | What happens |
+|---|---|---|---|
+| **Bank on an M5 flip** | `InpSmartFlipProfitR` 0.1 R | only at or above `InpSmartLockAtR` (0.7 R), never at a loss | the M5 regime flipped against a position in profit: closed, `SMART EXIT (M5 flip): ... at +0.85R - above the lock threshold +0.70R, banking before the TP` |
+| **Cut on an M5 flip** | `InpSmartFlipCutLoss` on | **off** (explicit STRUCTURAL CUT, its own group) | flipped against a plan position under water: closed before the SL (`false` = the SL decides). Scalps keep their own flip rule |
+| **Bank on an M1 turn** | `InpSmartM1ProfitR` 0.5 R | and at or above the lock threshold | the M1 NRTR turned against a position in profit: closed and banked |
+| **Profit lock** | `InpSmartLockAtR` 0.7 R, `InpSmartLockR` 0.1 R | `InpProfitLock` on, its own switch | once a position reaches +0.7 R the SL moves to entry + 0.1 R (one `TRADE_ACTION_SLTP`, journal event `sl_moved`), tightened only, never loosened; the TP stays |
 
 "Flipped" means the regime **agreed with the position at some point since the open** and now
 points against it (read from the M5 history, so a restart changes nothing). A reversal plan
@@ -365,8 +393,10 @@ money risk stays at `InpRiskPct`.
   order is cancelled and nothing is opened. If two limits fill inside the same minute, the
   first keeps the slot and the second is closed immediately. Each kind can be switched off
   (`InpTradeQml`, `InpTradePullback`, `InpTradeNyTrap`, `InpTradeSwing`).
-* Filled orders are managed by their SL/TP only. `InpPlanUseTp2` sends TP2 instead of TP1;
-  the board's **TP SENT** column always shows the TP that actually went to MT5.
+* Filled orders run on their SL/TP plus the PROFIT LOCK and the SMART EXIT above the lock
+  threshold (1.10.0). `InpPlanUseTp2` (**on since 1.10.0**) sends TP2 (2R) instead of TP1 (1R);
+  the board's **TP SENT** column always shows the TP that actually went to MT5. A position whose
+  SL or TP you change by hand is HAND-MANAGED: the EA leaves it to you (only a missing SL comes back).
 
 ## 3. IMPULSE RADAR (breakout / breakdown BEFORE the break, STOP orders)
 
@@ -634,7 +664,10 @@ Every order is printed to the **Experts** log, e.g.
 | Dollar index / bond symbol / bond kind | AUTO / AUTO / AUTO | `"-"` = off; a symbol the broker lacks = NO DATA, no vote |
 | News guard: before / after / top tier / bank R / unknown blocks | 30 / 30 / 60 / 0.2 / on | USD events on the MT5 calendar |
 | Friday stop / weekend flat / week open / rollover guard | 120 min / on / 60 min / 15 min | from the AUTO clock |
-| Smart exit: flip profit R / cut loss / M1 profit R / lock at / lock to | 0.1 / on / 0.5 / 0.7 / 0.1 | see v1.9 |
+| Profit lock (own switch) / lock at / lock to | on / 0.7 R / 0.1 R | 1.10.0: R on the plan's recorded risk; the lock threshold is also the floor under every smart-exit bank |
+| Smart exit / flip floor R / M1 floor R | on / 0.1 / 0.5 | 1.10.0: banks only at or above the lock threshold, never under water |
+| Structural cut on an M5 flip (`InpSmartFlipCutLoss`) | **off** | 1.10.0: an explicit decision; on = a plan position under water is closed before its SL when the regime flips |
+| Trade sessions: swing / M5 plans / scalps | ALL / ALL / ALL | 1.10.0: named-session masks from the AUTO clock; a mask gates NEW orders only |
 | Max open across charts | 2 | this EA on several charts, same magic |
 | Vol gate / average bars / DEAD / EXPANSION / EXTREME | on / 288 / 0.5 / 1.5 / 2.5 | ATR(M5) against its own average, see above |
 | Expansion radar score / scalp needs M15 | 8 / on | stronger confirmation during EXPANSION |
@@ -646,7 +679,7 @@ Every order is printed to the **Experts** log, e.g.
 | Journal to file / SignalMesh URL / secret | on / preset `.../webhooks/brain/signal` / empty | see the journal section; the URL is armed only when the secret is set |
 | Telemetry URL / every N s / demo only | preset `.../webhooks/<metal|crypto|forex>/telemetry` / 60 / on | see the telemetry section; `""` = off; armed only when the secret is set |
 | Pullback retrace / min impulse / SL buffer | 50 % / 2 × ATR5 / 0.2 × ATR5 | |
-| Plan TP1 / TP2 | 1R / 2R | |
+| Plan TP1 / TP2 / TP sent | 1R / 2R / **TP2** (`InpPlanUseTp2` on since 1.10.0) | |
 | Plan minimum risk | 1.0 x ATR | a structural stop (QML head, pullback swing, NY sweep, radar swing) closer than this is pushed out to the floor, never in; TP1 / TP2 follow the widened R; 0 = off |
 | Bias arrow: votes needed / arrows drawn | 3 / last 300 candles | strong, one-sided votes only |
 | History used | 8 days | |
@@ -681,8 +714,10 @@ plan's stable `signal_id` (`NQ:<symbol>:<comment>`), `system: NQ-EA`, symbol, tf
 entry / SL / TP1 / TP2 / rr, `grade` = plan kind, the platform status (`pending`, `executed`,
 `closed`, `cancelled`, never `approved`), the outcome (`win` / `loss` / `open`), `fired_at` (plan
 creation) and `ts` (event time), plus `plan_status`, `level`, `level2`, `risk`, `account_mode`,
-`magic`, `regime5`, `ctx15`, `risk_pct`, and `radar_score` for radar plans. The contract is
-APPEND-ONLY: fields are added, never renamed or removed. The platform side (`docs/EA_EVENTS.md`
+`magic`, `regime5`, `ctx15`, `risk_pct`, `session` (1.10.0: `ASIA` / `LONDON` / `NY` / `OFF` when the
+event was recorded), and `radar_score` for radar plans. Broker events: `sl_moved` (ticket, sl, tp,
+reason), `closed_by_ea` (ticket, reason, pl), `hand_managed` (1.10.0: ticket, sl, tp, `expected_sl`,
+`expected_tp`, reason). The contract is APPEND-ONLY: fields are added, never renamed or removed. The platform side (`docs/EA_EVENTS.md`
 in the SignalMesh repo) reads these into a per-kind performance matrix.
 
 ## SignalMesh telemetry (ANALYSIS ONLY - the METAL ANALYSIS page)
@@ -799,10 +834,17 @@ cancelled**, does not occupy the slot, and is listed on the SLOT line as
 
 ## Which sessions
 
-The QML, pullback, swing and scalp plans run in every session (Asia, London, New York) and
-the BROKER rows show every live order and position of this EA at any hour. Only the NY trap
-is session-bound: it needs a pre-NY range and the NY window. There is no Asia or London trap
-state machine.
+By default the QML, pullback, swing and scalp plans run in every session (Asia, London, New
+York) and the BROKER rows show every live order and position of this EA at any hour. Only the
+NY trap is session-bound by design: it needs a pre-NY range and the NY window. There is no Asia
+or London trap state machine.
+
+Since 1.10.0 each family has a **trade-session mask** (`InpSwingSessions`, `InpM5Sessions`,
+`InpScalpSessions`; default `ALL`). A mask restricts where a family may **open** a new order;
+it never pulls a resting order, so a swing limit placed in London may fill in New York and is
+then managed exactly like any other fill. The NY trap is an M5 plan: an `InpM5Sessions` without
+NY switches it off in practice. The sessions come from the AUTO clock (or the manual server
+hours); the journal's `session` field on every event is the evidence the decision rests on.
 
 ## Honest limitations
 
@@ -812,6 +854,11 @@ state machine.
 * Money rows trust the broker's `SYMBOL_TRADE_TICK_VALUE`; the daily result trusts the deal
   history (commission and swap included when the broker reports them).
 * Some brokers rewrite order comments; a plan's order is then matched by type and price.
+* HAND-MANAGED is judged against what the EA sent. At first sight of a position (a fresh fill
+  or a restart) a TP that is neither TP1 nor TP2 of its plan - including **no TP** - reads as
+  yours; a broker that strips a TP on fill therefore hands that position to you (the disaster
+  SL still comes back). A position whose plan has left the history window has no record and
+  is managed as before.
 * The forecast is a momentum vote. Its hit rate is measured and shown; nothing else is
   claimed for it.
 * MetaEditor was not available in the build environment: the file is compiled and run under

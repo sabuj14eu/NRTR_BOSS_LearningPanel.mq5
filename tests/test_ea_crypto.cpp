@@ -104,6 +104,8 @@ static void relax()
    g_clockGuards = false;
    g_macroGate = false;
    g_smartExit = false;
+   g_profitLock = false;
+   g_flipCutLoss = false;
    NqUpdate();
 }
 static int countSent(int action, bool openingOnly)
@@ -206,7 +208,7 @@ int main()
                NqPlan p;
                if(!NqPlanByComment(r.comment, p)) { bad++; continue; }
                if(p.status != NQ_PL_ACTIVE) bad++;
-               if(!near(p.entry, r.price) || !near(p.sl, r.sl) || !near(p.tp1, r.tp)) bad++;
+               if(!near(p.entry, r.price) || !near(p.sl, r.sl) || !near(NqPlanTpSent(p), r.tp)) bad++;
                bool isBuy = (r.type == ORDER_TYPE_BUY_LIMIT || r.type == ORDER_TYPE_BUY_STOP);
                bool isStop = (r.type == ORDER_TYPE_BUY_STOP || r.type == ORDER_TYPE_SELL_STOP);
                if((p.dir > 0) != isBuy) bad++;
@@ -251,10 +253,10 @@ int main()
          if(p.status != NQ_PL_FILLED && p.status != NQ_PL_TP1 && p.status != NQ_PL_SL) fillBad++;
          // the position (or its exit deal) carries the plan's SL/TP
          bool found = false;
-         for(const SimPos &ps : SIM.pos) if(ps.comment == d.comment && near(ps.sl, p.sl) && near(ps.tp, p.tp1)) found = true;
+         for(const SimPos &ps : SIM.pos) if(ps.comment == d.comment && near(ps.sl, p.sl) && near(ps.tp, NqPlanTpSent(p))) found = true;
          for(const SimDeal &x : SIM.deals)
             if(x.comment == d.comment && x.entry == DEAL_ENTRY_OUT &&
-               ((x.reason == "sl" && near(x.price, p.sl)) || (x.reason == "tp" && near(x.price, p.tp1)))) found = true;
+               ((x.reason == "sl" && near(x.price, p.sl)) || (x.reason == "tp" && near(x.price, NqPlanTpSent(p))))) found = true;
          if(!found) fillBad++;
       }
       std::printf("    QML placed %d, pullback placed %d\n", qmlPlaced, pbPlaced);
@@ -262,7 +264,7 @@ int main()
       CHECK(limitFills > 0, "some limit orders were filled");
       std::printf("    %d limit orders placed, %d cancelled, %d filled\n", placed, cancels, limitFills);
       CHECK(placed > 0, "plans were placed");
-      CHECK(bad == 0, "orders match ACTIVE plans (entry, SL, TP1, side) and never linger after the plan ends");
+      CHECK(bad == 0, "orders match ACTIVE plans (entry, SL, the TP SENT = TP2 by default, side) and never linger after the plan ends");
       CHECK(twice == 0, "a plan never has two orders, nor an order beside its own open position");
       CHECK(overRisk == 0, "every limit order risks at most 0.5% of the balance at the SL");
       CHECK(wrongCancel == 0, "ONE SLOT: never two positions, and no waiting order while a position is open");
@@ -858,7 +860,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_CryptoScalper\"", "\"ea_version\":\"1.3.4\"", "\"prof_risk\":1.00", "\"prof_spread_atr\":0.15", "\"lead_symbol\":\"\"", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_CryptoScalper\"", "\"ea_version\":\"1.4.0\"", "\"prof_risk\":1.00", "\"prof_spread_atr\":0.15", "\"lead_symbol\":\"\"", "\"trade_swing\":\"ALL\"", "\"profit_lock\":false", "\"hand_managed\":0", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
                            "\"symbol\":\"BTCUSD\"", "\"coin\":\"BTC\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"clock\":\"AUTO\"", "\"clock_offset_min\":180", "\"ny_dst\":true", "\"ny_open_min\":990", "\"london_open_min\":600", "\"asia_open_min\":60", "\"rollover_min\":0", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
@@ -1193,12 +1195,14 @@ int main()
    }
    end("M1");
 
-   begin("M2 smart exit: bank on an M5 flip in profit, cut under water, lock the SL at +0.7R, bank on an M1 turn; a reversal plan whose regime never agreed is left alone");
+   begin("M2 smart exit 1.10.0: nothing banks under the lock threshold, nothing closes a loser but the SL or the explicit cut; the lock is its own switch; a reversal plan whose regime never agreed is left alone");
    {
       load(btc, "BTCUSD", "BTC", 2, 0.01, 0.01);
       startAt(START);
       relax();
       g_smartExit = true;
+      g_profitLock = true;
+      g_flipCutLoss = false;
       size_t i = START + 1;
       int reg = 0;
       for(; i <= END; i++) { stepTo(i); reg = g_s5.regime[(size_t)g_s5.n - 1]; if(reg == NQ_REG_BULL) break; }
@@ -1209,46 +1213,65 @@ int main()
       auto plant = [&](ulong tk, int type, double open, const char *cmt) {
          SIM.pos.clear();
          SIM.ord.clear();
+         ArrayResize(g_mgd, 0);
+         g_nMgd = 0;
          SimPos p;
          p.ticket = tk; p.sym = "BTCUSD"; p.type = type; p.vol = 0.10; p.open = open;
          p.sl = (type == POSITION_TYPE_BUY) ? open - risk : open + risk; p.tp = (type == POSITION_TYPE_BUY) ? open + 3 * risk : open - 3 * risk;
          p.time = g_s5.t[n5 - 2]; p.magic = InpMagic; p.comment = cmt;
          SIM.pos.push_back(p);
       };
+      auto alive = [&](ulong tk) { for(const SimPos &p : SIM.pos) if(p.ticket == tk) return true; return false; };
       auto closedWith = [&](ulong tk, const char *txt) {
-         for(const SimPos &p : SIM.pos) if(p.ticket == tk) return false;
+         if(alive(tk)) return false;
          for(const std::string &l : SIM.log) if(l.find(txt) != std::string::npos) return true;
          return false;
       };
-      // a) the regime agreed (bar n-2 BULL), then flipped (bar n-1 BEAR): +0.3R is banked
+      // a) the regime agreed (bar n-2 BULL), then flipped (bar n-1 BEAR): +0.3R is UNDER the lock threshold -> kept
       g_s5.regime[n5 - 2] = NQ_REG_BULL; g_s5.regime[n5 - 1] = NQ_REG_BEAR;
       plant(8001, POSITION_TYPE_BUY, SIM.bid - 0.3 * risk, "NQ-P8001");
       CHECK(NqRegimeAgreedSince(g_s5.t[n5 - 2], 1), "the regime agreed since the open");
       NqVerdict();
-      CHECK(g_verdict.find("EXIT BUY #8001") == 0 && g_verdict.find("SMART EXIT banks it") != std::string::npos && g_verdict.find("+0.30R") != std::string::npos,
-            "the verdict says the smart exit will bank +0.30R at the next M1 close");
+      CHECK(g_verdict.find("EXIT BUY #8001") == 0 && g_verdict.find("you decide - +0.30R is under the lock threshold +0.70R, the SL decides") != std::string::npos,
+            "the verdict says the smart exit will NOT act under the threshold and why");
       NqTrade();
-      CHECK(closedWith(8001, "SMART EXIT: M5 regime flipped BEARISH against the position, banking +0.30R"), "banked with the reason");
-      // b) under water: cut before the SL
+      CHECK(alive(8001) && g_smartNote.find("SMART EXIT held #8001: M5 flipped at +0.30R, under the lock threshold +0.70R") == 0, "kept; the panel note says held and why");
+      // b) under water on a flip, the cut off (default): kept, the SL decides
       plant(8002, POSITION_TYPE_BUY, SIM.bid + 0.3 * risk, "NQ-P8002");
+      NqVerdict();
+      CHECK(g_verdict.find("you decide - under water: no cut below the lock threshold, the SL decides") != std::string::npos, "the verdict: under water, the SL decides");
       NqTrade();
-      CHECK(closedWith(8002, "SMART EXIT: M5 regime flipped BEARISH against the position at -0.30R - cut before the SL"), "cut at -0.30R with the reason");
-      // c) a scalp under water on a flip: the scalp rule, not the smart cut
+      CHECK(alive(8002), "a -0.30R position is not closed by a profit rule");
+      // b2) a one-dollar profit on a flip: kept (no arbitrary money threshold - the R rule holds)
+      plant(8009, POSITION_TYPE_BUY, SIM.bid - 0.01 * risk, "NQ-P8009");
+      NqTrade();
+      CHECK(alive(8009), "+0.01R on a flip: kept");
+      // b3) the explicit STRUCTURAL CUT on: under water on a flip -> closed, named as the cut, not as a profit rule
+      g_flipCutLoss = true;
+      plant(8010, POSITION_TYPE_BUY, SIM.bid + 0.3 * risk, "NQ-P8010");
+      NqVerdict();
+      CHECK(g_verdict.find("STRUCTURAL CUT at the next M1 close - InpSmartFlipCutLoss") != std::string::npos, "the verdict names the explicit cut");
+      NqTrade();
+      CHECK(closedWith(8010, "STRUCTURAL CUT (InpSmartFlipCutLoss): M5 regime flipped BEARISH against BUY #8010 at -0.30R - closed before the SL by your explicit setting"),
+            "cut with its own reason");
+      plant(8011, POSITION_TYPE_BUY, SIM.bid - 0.3 * risk, "NQ-P8011");
+      NqTrade();
+      CHECK(alive(8011), "the cut is a loss rule only: +0.30R under the threshold is still kept");
+      g_flipCutLoss = false;
+      // c) a scalp under water on a flip: the scalp's own flip rule, not the smart exit
       plant(8003, POSITION_TYPE_BUY, SIM.bid + 0.3 * risk, "NQ-S8003");
       NqTrade();
       CHECK(closedWith(8003, "M5 regime turned BEARISH against the scalp"), "a scalp keeps its own flip rule");
       // d) the regime never agreed (a reversal plan filled against it): the flip means nothing, the plan runs
       g_s5.regime[n5 - 2] = NQ_REG_BEAR;
-      plant(8004, POSITION_TYPE_BUY, SIM.bid - 0.3 * risk, "NQ-Q8004");
+      plant(8004, POSITION_TYPE_BUY, SIM.bid - 0.9 * risk, "NQ-Q8004");
       int keepD1 = g_s1.dir[(size_t)g_s1.n - 1];
       g_s1.dir[(size_t)g_s1.n - 1] = 1;
       NqVerdict();
       CHECK(g_verdict.find("EXIT BUY #8004") == 0 && g_verdict.find("never agreed") != std::string::npos, "the verdict explains why the bot will not act");
       NqTrade();
-      bool stillThere = false;
-      for(const SimPos &p : SIM.pos) if(p.ticket == 8004) stillThere = true;
-      CHECK(stillThere, "left to its SL / TP");
-      // e) the lock: +0.8R with the regime intact moves the SL to entry + 0.1R, once
+      CHECK(alive(8004), "left to its SL / TP even above the threshold");
+      // e) the lock: +0.8R with the regime intact moves the SL to entry + 0.1R, once, with the rule named
       g_s5.regime[n5 - 2] = NQ_REG_BULL; g_s5.regime[n5 - 1] = NQ_REG_BULL;
       plant(8005, POSITION_TYPE_BUY, SIM.bid - 0.8 * risk, "NQ-P8005");
       size_t before = SIM.sent.size();
@@ -1259,37 +1282,45 @@ int main()
          if(SIM.sent[k].action == TRADE_ACTION_SLTP && SIM.sent[k].position == 8005 && near(SIM.sent[k].sl, wantSl, 1e-9)) locked = true;
       CHECK(locked && !SIM.pos.empty() && near(SIM.pos[0].sl, wantSl, 1e-9), "SL moved to entry + 0.1R by a SLTP request; the position stays");
       bool logged = false;
-      for(const std::string &l : SIM.log) if(l.find("SMART LOCK: +0.80R reached") != std::string::npos) logged = true;
-      CHECK(logged, "logged with the reason");
+      for(const std::string &l : SIM.log) if(l.find("PROFIT LOCK: BUY #8005 at +0.80R reached the threshold +0.70R - SL to entry +0.10R") != std::string::npos) logged = true;
+      CHECK(logged, "logged with the rule, the R and the threshold");
       before = SIM.sent.size();
       NqTrade();
       int again = 0;
       for(size_t k = before; k < SIM.sent.size(); k++) if(SIM.sent[k].action == TRADE_ACTION_SLTP) again++;
       CHECK(again == 0, "never loosened, never repeated");
-      NqVerdict();
-      CHECK(g_verdict.find("HOLD BUY #8005") == 0 && g_verdict.find("SL locked") != std::string::npos, "HOLD ... SL locked");
-      // f) the M1 bias turned against a +0.6R position: banked; at +0.3R not
+      // f) the M1 bias turned against a +0.6R position: UNDER the threshold -> kept; +0.9R -> banked, named
       g_s1.dir[(size_t)g_s1.n - 1] = -1;
       plant(8006, POSITION_TYPE_BUY, SIM.bid - 0.6 * risk, "NQ-P8006");
       NqTrade();
-      CHECK(closedWith(8006, "SMART EXIT: M1 bias turned BEARISH, banking +0.60R"), "M1 turn with +0.6R: banked");
-      plant(8007, POSITION_TYPE_BUY, SIM.bid - 0.3 * risk, "NQ-P8007");
+      CHECK(alive(8006), "M1 turn with +0.6R: under the lock threshold, kept");
+      plant(8007, POSITION_TYPE_BUY, SIM.bid - 0.9 * risk, "NQ-P8007");
       NqTrade();
-      stillThere = false;
-      for(const SimPos &p : SIM.pos) if(p.ticket == 8007) stillThere = true;
-      CHECK(stillThere, "+0.3R is under the M1 threshold: kept");
-      // g) smart exit off: the hard rules only (a plan position on a flip says EXIT, you decide)
+      CHECK(closedWith(8007, "SMART EXIT (M1 turn): M1 bias turned BEARISH against BUY #8007 at +0.90R - above the lock threshold +0.70R, banking"), "M1 turn with +0.9R: banked with the reason");
+      g_s1.dir[(size_t)g_s1.n - 1] = 1;
+      // g) smart exit off, lock on: a flip above the threshold is NOT banked, the SL is locked
       g_smartExit = false;
       g_s5.regime[n5 - 1] = NQ_REG_BEAR;
-      plant(8008, POSITION_TYPE_BUY, SIM.bid - 0.3 * risk, "NQ-P8008");
+      plant(8008, POSITION_TYPE_BUY, SIM.bid - 0.8 * risk, "NQ-P8008");
       NqTrade();
-      stillThere = false;
-      for(const SimPos &p : SIM.pos) if(p.ticket == 8008) stillThere = true;
       NqVerdict();
-      CHECK(stillThere && g_verdict.find("you decide") != std::string::npos, "off: the plan position is left to the human");
+      CHECK(alive(8008) && near(SIM.pos[0].sl, wantSl, 1e-9) && g_verdict.find("you decide") != std::string::npos, "off: locked but left to the human on the flip");
+      // h) lock off, smart exit on: banked above the threshold with no SL moved
+      g_smartExit = true;
+      g_profitLock = false;
+      plant(8012, POSITION_TYPE_BUY, SIM.bid - 0.8 * risk, "NQ-P8012");
+      before = SIM.sent.size();
+      NqTrade();
+      int sltp = 0;
+      for(size_t k = before; k < SIM.sent.size(); k++) if(SIM.sent[k].action == TRADE_ACTION_SLTP) sltp++;
+      CHECK(closedWith(8012, "SMART EXIT (M5 flip): regime flipped BEARISH against BUY #8012 at +0.80R - above the lock threshold +0.70R, banking before the TP") && sltp == 0,
+            "the threshold gates the bank even without the lock switch; nothing else moved");
+      g_profitLock = true;
       g_s1.dir[(size_t)g_s1.n - 1] = keepD1;
       g_s5.regime[n5 - 1] = keep1; g_s5.regime[n5 - 2] = keep2;
       SIM.pos.clear();
+      ArrayResize(g_mgd, 0);
+      g_nMgd = 0;
       OnDeinit(0);
    }
    end("M2");
@@ -1496,10 +1527,28 @@ int main()
          NqTrade();
          bool restored = false;
          for(size_t k = before; k < SIM.sent.size(); k++)
-            if(SIM.sent[k].action == TRADE_ACTION_SLTP && SIM.sent[k].position == 9301 && near(SIM.sent[k].sl, pp.sl, 1e-9) && near(SIM.sent[k].tp, pp.tp1, 1e-9)) restored = true;
+            if(SIM.sent[k].action == TRADE_ACTION_SLTP && SIM.sent[k].position == 9301 && near(SIM.sent[k].sl, pp.sl, 1e-9) && near(SIM.sent[k].tp, 0.0, 1e-9)) restored = true;
          bool logged = false;
+         for(const std::string &l : SIM.log) if(l.find("SL MISSING (HAND-MANAGED): the plan's disaster stop") != std::string::npos) logged = true;
+         CHECK(restored && logged && !SIM.pos.empty() && near(SIM.pos[0].sl, pp.sl, 1e-9) && NqMgdHand(9301),
+               "no stop and no TP at the broker: the TP is not the EA's, so the position is HAND-MANAGED; the disaster stop alone is restored by one SLTP request, logged");
+         // the same position with the EA's TP in place: the EA's own, SL restored with the plain reason, TP kept
+         SIM.pos.clear();
+         ArrayResize(g_mgd, 0);
+         g_nMgd = 0;
+         p.ticket = 9303;
+         p.tp = NqPlanTpSent(pp);
+         SIM.pos.push_back(p);
+         before = SIM.sent.size();
+         NqTrade();
+         restored = false;
+         for(size_t k = before; k < SIM.sent.size(); k++)
+            if(SIM.sent[k].action == TRADE_ACTION_SLTP && SIM.sent[k].position == 9303 && near(SIM.sent[k].sl, pp.sl, 1e-9) && near(SIM.sent[k].tp, NqPlanTpSent(pp), 1e-9)) restored = true;
+         logged = false;
          for(const std::string &l : SIM.log) if(l.find("SL MISSING: the plan's stop") != std::string::npos) logged = true;
-         CHECK(restored && logged && !SIM.pos.empty() && near(SIM.pos[0].sl, pp.sl, 1e-9), "no stop at the broker: the plan's SL and TP1 are restored by one SLTP request, logged");
+         CHECK(restored && logged && !NqMgdHand(9303), "no stop but the EA's TP: the plan's SL is restored, the TP kept, not hand-managed");
+         ArrayResize(g_mgd, 0);
+         g_nMgd = 0;
          SIM.pos.clear();
          p.ticket = 9302;
          SIM.pos.push_back(p);
@@ -1516,6 +1565,322 @@ int main()
       OnDeinit(0);
    }
    end("M6");
+
+
+   begin("M7 the R yardstick (1.10.0): on a plan-backed position the lock moves the SL and R still reads +0.80R; the bank above the threshold names it; a legitimate SL closes a loser the EA left alone");
+   {
+      load(btc, "BTCUSD", "BTC", 2, 0.01, 0.01);
+      startAt(START);
+      relax();
+      run(START + 1, START + 300);
+      int kp = -1;
+      for(int k = g_nPlans - 1; k >= 0; k--) if(g_plans[(size_t)k].dir > 0 && g_plans[(size_t)k].sl > 0.0 && g_plans[(size_t)k].risk > 0.0) { kp = k; break; }
+      CHECK(kp >= 0, "a BUY plan with a recorded risk exists in the window");
+      if(kp >= 0)
+      {
+         NqPlan pp = g_plans[(size_t)kp];
+         std::string cmt = NqPlanComment(pp);
+         size_t n5 = (size_t)g_s5.n;
+         int keep1 = g_s5.regime[n5 - 1], keep2 = g_s5.regime[n5 - 2];
+         int keepD1 = g_s1.dir[(size_t)g_s1.n - 1];
+         double keepBid = SIM.bid;
+         auto plantPlan = [&](ulong tk, double rNow) {
+            SIM.pos.clear();
+            SIM.ord.clear();
+            ArrayResize(g_mgd, 0);
+            g_nMgd = 0;
+            SimPos p;
+            p.ticket = tk; p.sym = SIM.sym; p.type = POSITION_TYPE_BUY; p.vol = 0.10; p.open = pp.entry;
+            p.sl = pp.sl; p.tp = NqPlanTpSent(pp); p.time = g_s5.t[n5 - 2]; p.magic = InpMagic; p.comment = cmt;
+            SIM.pos.push_back(p);
+            SIM.bid = pp.entry + rNow * pp.risk;
+         };
+         auto alive = [&](ulong tk) { for(const SimPos &p : SIM.pos) if(p.ticket == tk) return true; return false; };
+         auto logged = [&](const char *txt) { for(const std::string &l : SIM.log) if(l.find(txt) != std::string::npos) return true; return false; };
+         g_smartExit = true;
+         g_profitLock = true;
+         g_flipCutLoss = false;
+         g_s1.dir[(size_t)g_s1.n - 1] = 1;
+         // the lock on a plan-backed position: R is the plan's risk before AND after the SL moves
+         g_s5.regime[n5 - 2] = NQ_REG_BULL; g_s5.regime[n5 - 1] = NQ_REG_BULL;
+         plantPlan(7001, 0.8);
+         CHECK(near(NqRiskOf(cmt, pp.entry, pp.sl), pp.risk, 1e-9) && near(NqPosR(pp.entry, pp.sl, SIM.bid, 1, cmt), 0.8, 1e-6), "before the lock: R = +0.80R on the plan's risk");
+         size_t before = SIM.sent.size();
+         NqTrade();
+         double wantSl = NqRoundTick(pp.entry + 0.1 * pp.risk, 0.01, 2, -1);
+         bool locked = false;
+         for(size_t k = before; k < SIM.sent.size(); k++)
+            if(SIM.sent[k].action == TRADE_ACTION_SLTP && SIM.sent[k].position == 7001 && near(SIM.sent[k].sl, wantSl, 1e-9) && near(SIM.sent[k].tp, NqPlanTpSent(pp), 1e-9)) locked = true;
+         CHECK(locked && alive(7001) && near(SIM.pos[0].sl, wantSl, 1e-9), "PROFIT LOCK moved the SL to entry + 0.1R and kept the TP");
+         double rAfter = NqPosR(pp.entry, SIM.pos[0].sl, SIM.bid, 1, cmt);
+         std::printf("    R after the lock: %.4f (the SL now sits %.2f ABOVE entry; the plan risk is %.2f)\n", rAfter, SIM.pos[0].sl - SIM.pos[0].open, pp.risk);
+         CHECK(near(rAfter, 0.8, 1e-6), "REGRESSION: after the lock R still reads +0.80R, not +8.00R (the yardstick is the plan's recorded risk)");
+         NqVerdict();
+         CHECK(g_verdict.find("HOLD BUY #7001") == 0 && g_verdict.find("(+0.80R)") != std::string::npos && g_verdict.find("SL locked") != std::string::npos, "HOLD shows the true R and the lock");
+         CHECK(!NqMgdHand(7001) && g_nMgd == 1 && near(g_mgd[0].sl, wantSl, 1e-9), "the lock's SL is recorded as the EA's own, not a hand edit");
+         before = SIM.sent.size();
+         NqTrade();
+         int again = 0;
+         for(size_t k = before; k < SIM.sent.size(); k++) if(SIM.sent[k].action == TRADE_ACTION_SLTP) again++;
+         CHECK(again == 0 && alive(7001), "a second candle: nothing repeated, nothing closed");
+         // the regime flips against the locked +0.80R position: banked, the reason names the R and the threshold
+         g_s5.regime[n5 - 1] = NQ_REG_BEAR;
+         NqVerdict();
+         CHECK(g_verdict.find("SMART EXIT banks it at the next M1 close - +0.80R is above the lock threshold +0.70R") != std::string::npos, "the verdict announces the bank with the numbers");
+         NqTrade();
+         CHECK(!alive(7001) && logged("SMART EXIT (M5 flip): regime flipped BEARISH against BUY #7001 at +0.80R - above the lock threshold +0.70R, banking before the TP"),
+               "banked at the true +0.80R (a wrong yardstick would have printed +8.00R)");
+         // the same flip at +0.30R on the plan: kept
+         plantPlan(7002, 0.3);
+         NqTrade();
+         CHECK(alive(7002) && g_smartNote.find("SMART EXIT held #7002: M5 flipped at +0.30R") == 0, "+0.30R on the plan's risk: held");
+         // a legitimate SL: a -0.9R loser with the regime intact is left alone by the EA and closed by the broker's stop
+         g_s5.regime[n5 - 1] = NQ_REG_BULL;
+         plantPlan(7003, -0.9);
+         before = SIM.sent.size();
+         NqTrade();
+         NqVerdict();
+         CHECK(alive(7003) && SIM.sent.size() == before && g_verdict.find("HOLD BUY #7003") == 0 && g_verdict.find("(-0.90R)") != std::string::npos,
+               "the EA sends nothing for a loser above its stop: HOLD at -0.90R");
+         MqlRates bar = {SIM.now, SIM.bid, SIM.bid, pp.sl - 0.5 * pp.risk, pp.sl - 0.3 * pp.risk, 100, 0, 0};
+         simBarPath(bar);
+         bool slDeal = false;
+         for(const SimDeal &d : SIM.deals) if(d.posId == 7003 && d.entry == DEAL_ENTRY_OUT && d.reason == "sl") slDeal = true;
+         CHECK(!alive(7003) && slDeal, "the broker's SL closes it: a legitimate stop always stands");
+         g_s1.dir[(size_t)g_s1.n - 1] = keepD1;
+         g_s5.regime[n5 - 1] = keep1; g_s5.regime[n5 - 2] = keep2;
+         SIM.bid = keepBid;
+      }
+      SIM.pos.clear();
+      ArrayResize(g_mgd, 0);
+      g_nMgd = 0;
+      OnDeinit(0);
+   }
+   end("M7");
+
+   begin("M8 HAND-MANAGED (1.10.0): a changed SL or TP hands the position to the human - no lock, no smart exit, no flip close, no time stop, no news / weekend banking, no TP restore; a missing SL still comes back; a restart rebuilds the expectation");
+   {
+      load(btc, "BTCUSD", "BTC", 2, 0.01, 0.01);
+      startAt(START);
+      relax();
+      run(START + 1, START + 300);
+      int kp = -1;
+      for(int k = g_nPlans - 1; k >= 0; k--) if(g_plans[(size_t)k].dir > 0 && g_plans[(size_t)k].sl > 0.0 && g_plans[(size_t)k].risk > 0.0) { kp = k; break; }
+      int ks = -1;
+      for(int k = g_nSig - 1; k >= 0; k--) if(g_sigs[(size_t)k].dir > 0 && g_sigs[(size_t)k].risk > 0.0) { ks = k; break; }
+      CHECK(kp >= 0 && ks >= 0, "a BUY plan and a BUY scalp record exist in the window");
+      if(kp >= 0 && ks >= 0)
+      {
+         NqPlan pp = g_plans[(size_t)kp];
+         std::string cmt = NqPlanComment(pp);
+         size_t n5 = (size_t)g_s5.n;
+         int keep1 = g_s5.regime[n5 - 1], keep2 = g_s5.regime[n5 - 2];
+         double keepBid = SIM.bid;
+         const std::string fname = "NQ_events_BTCUSD.jsonl";
+         auto plantPlan = [&](ulong tk, double rNow, double sl, double tp) {
+            SIM.pos.clear();
+            SIM.ord.clear();
+            ArrayResize(g_mgd, 0);
+            g_nMgd = 0;
+            SimPos p;
+            p.ticket = tk; p.sym = SIM.sym; p.type = POSITION_TYPE_BUY; p.vol = 0.10; p.open = pp.entry;
+            p.sl = sl; p.tp = tp; p.time = g_s5.t[n5 - 2]; p.magic = InpMagic; p.comment = cmt;
+            SIM.pos.push_back(p);
+            SIM.bid = pp.entry + rNow * pp.risk;
+         };
+         auto alive = [&](ulong tk) { for(const SimPos &p : SIM.pos) if(p.ticket == tk) return true; return false; };
+         auto logged = [&](const char *txt) { for(const std::string &l : SIM.log) if(l.find(txt) != std::string::npos) return true; return false; };
+         auto count = [&](const std::string &body, const char *txt) { size_t n = 0, pos = 0; while((pos = body.find(txt, pos)) != std::string::npos) { n++; pos++; } return n; };
+         g_smartExit = true;
+         g_profitLock = true;
+         g_flipCutLoss = false;
+         g_s5.regime[n5 - 2] = NQ_REG_BULL; g_s5.regime[n5 - 1] = NQ_REG_BULL;
+         // first sight of a fresh fill: the plan's SL / TP are the expectation
+         plantPlan(8101, 0.2, pp.sl, NqPlanTpSent(pp));
+         NqTrade();
+         CHECK(!NqMgdHand(8101) && g_nMgd == 1 && near(g_mgd[0].sl, pp.sl, 1e-9) && near(g_mgd[0].tp, NqPlanTpSent(pp), 1e-9), "first sight: recorded as the EA's own");
+         // the human widens the stop
+         size_t handBefore = count(SIM.files[fname], "\"event\":\"hand_managed\"");
+         SIM.pos[0].sl = pp.sl - 0.5 * pp.risk;
+         NqTrade();
+         CHECK(NqMgdHand(8101) && alive(8101) && logged("HAND-MANAGED: BUY #8101 SL ") && logged("differ from the EA's SL "), "a widened stop: HAND-MANAGED, logged with both pairs");
+         std::string body = SIM.files[fname];
+         CHECK(count(body, "\"event\":\"hand_managed\"") == handBefore + 1 && body.find("\"expected_sl\":") != std::string::npos && body.find("\"expected_tp\":") != std::string::npos,
+               "one journal event hand_managed with the EA's expected SL / TP (append-only fields)");
+         // +0.8R, regime intact: no lock
+         SIM.bid = pp.entry + 0.8 * pp.risk;
+         size_t before = SIM.sent.size();
+         NqTrade();
+         CHECK(alive(8101) && SIM.sent.size() == before && near(SIM.pos[0].sl, pp.sl - 0.5 * pp.risk, 1e-9), "no PROFIT LOCK on a hand-managed position");
+         NqVerdict();
+         CHECK(g_verdict.find("HAND-MANAGED BUY #8101") == 0 && g_verdict.find("the EA leaves it to you") != std::string::npos, "the verdict says HAND-MANAGED");
+         OnTimer();
+         CHECK(lbl("bb06").find("HAND-MANAGED  #8101") == 0, "the broker row says HAND-MANAGED");
+         // the regime flips: no smart exit
+         g_s5.regime[n5 - 1] = NQ_REG_BEAR;
+         NqTrade();
+         CHECK(alive(8101), "no SMART EXIT on a hand-managed position");
+         g_s5.regime[n5 - 1] = NQ_REG_BULL;
+         // news banking: the EA's own position is banked, the hand-managed one stays
+         SimPos q = SIM.pos[0];
+         q.ticket = 8102; q.sl = pp.sl; q.tp = NqPlanTpSent(pp);
+         SIM.pos.push_back(q);
+         g_newsBlock = true; g_newsWinT = 1; g_newsWhy = "TEST USD release";
+         NqTrade();
+         CHECK(alive(8101) && !alive(8102) && logged("NEWS: banking +0.80R before TEST USD release"), "news banking skips the hand-managed position and banks the EA's own");
+         g_newsBlock = false; g_newsWinT = 0; g_newsWhy = "";
+         // the Friday flat: the hand-managed position stays
+         g_weekFriday = true; g_weekEdge = true;
+         NqTrade();
+         CHECK(alive(8101), "the Friday flat leaves a hand-managed position");
+         g_weekFriday = false; g_weekEdge = false;
+         // a TP removed by hand: hand-managed and never restored; then the SL goes missing: the disaster stop comes back, the TP stays yours
+         plantPlan(8103, 0.2, pp.sl, NqPlanTpSent(pp));
+         NqTrade();
+         SIM.pos[0].tp = 0.0;
+         NqTrade();
+         CHECK(NqMgdHand(8103) && alive(8103) && near(SIM.pos[0].tp, 0.0, 1e-9), "a removed TP: hand-managed, the TP is NOT restored");
+         SIM.pos[0].sl = 0.0;
+         before = SIM.sent.size();
+         NqTrade();
+         bool restored = false;
+         for(size_t k = before; k < SIM.sent.size(); k++)
+            if(SIM.sent[k].action == TRADE_ACTION_SLTP && SIM.sent[k].position == 8103 && near(SIM.sent[k].sl, pp.sl, 1e-9) && near(SIM.sent[k].tp, 0.0, 1e-9)) restored = true;
+         CHECK(restored && logged("SL MISSING (HAND-MANAGED): the plan's disaster stop") && near(SIM.pos[0].sl, pp.sl, 1e-9) && near(SIM.pos[0].tp, 0.0, 1e-9),
+               "a missing SL comes back on a hand-managed position too (outage protection), logged, the TP untouched");
+         // a scalp with a hand-changed TP is not time-stopped; the EA's own scalp still is
+         const NqSignal &sg = g_sigs[(size_t)ks];
+         std::string scmt = std::string("NQ-S") + std::to_string((long long)g_s1.t[(size_t)sg.idx]);
+         auto plantScalp = [&](ulong tk, double tp) {
+            SIM.pos.clear();
+            SIM.ord.clear();
+            ArrayResize(g_mgd, 0);
+            g_nMgd = 0;
+            SimPos s;
+            s.ticket = tk; s.sym = SIM.sym; s.type = POSITION_TYPE_BUY; s.vol = 0.10; s.open = sg.entry;
+            s.sl = sg.sl; s.tp = tp; s.time = SIM.now - 3600 * 2; s.magic = InpMagic; s.comment = scmt;
+            SIM.pos.push_back(s);
+            SIM.bid = sg.entry + 0.1 * sg.risk;
+         };
+         plantScalp(8104, sg.tp + 0.5 * sg.risk);
+         NqTrade();
+         CHECK(NqMgdHand(8104) && alive(8104), "a scalp whose TP you moved: hand-managed, no time stop");
+         plantScalp(8105, sg.tp);
+         NqTrade();
+         CHECK(!alive(8105) && logged("scalp time stop"), "the EA's own stale scalp is still time-stopped");
+         // a restart rebuilds the expectation from the plan: the lock's stop and either TP are the EA's own, anything else is the human's
+         double lockSl = NqRoundTick(pp.entry + 0.1 * pp.risk, 0.01, 2, -1);
+         plantPlan(8106, 0.8, lockSl, NqPlanTpSent(pp));
+         NqTrade();
+         CHECK(!NqMgdHand(8106), "after a restart a position at the lock's stop is the EA's own");
+         plantPlan(8107, 0.2, pp.sl, InpPlanUseTp2 ? pp.tp1 : pp.tp2);
+         NqTrade();
+         CHECK(!NqMgdHand(8107), "after a restart the other TP (InpPlanUseTp2 changed) is still the EA's own");
+         plantPlan(8108, 0.2, pp.sl - 0.3 * pp.risk, NqPlanTpSent(pp));
+         NqTrade();
+         CHECK(NqMgdHand(8108), "after a restart a stop that is neither the plan's nor the lock's is the human's");
+         g_s5.regime[n5 - 1] = keep1; g_s5.regime[n5 - 2] = keep2;
+         SIM.bid = keepBid;
+      }
+      SIM.pos.clear();
+      ArrayResize(g_mgd, 0);
+      g_nMgd = 0;
+      OnDeinit(0);
+   }
+   end("M8");
+
+   begin("M9 trade sessions (1.10.0): a family mask blocks NEW orders outside its sessions and never pulls a resting one; ALL changes nothing; scalps obey their mask; every journal event names its session");
+   {
+      load(btc, "BTCUSD", "BTC", 2, 0.01, 0.01);
+      startAt(START);
+      relax();
+      size_t i = START + 1;
+      bool found = false;
+      for(; i <= START + 700; i++) { stepTo(i); if(!SIM.ord.empty() && SIM.pos.empty() && g_gate == 0 && g_fresh) { found = true; break; } }
+      CHECK(found, "a candle with resting plan orders and no position");
+      auto countAct = [&](size_t from, int action) { int n = 0; for(size_t k = from; k < SIM.sent.size(); k++) if((int)SIM.sent[k].action == action) n++; return n; };
+      int keepOpen = g_sessOpen;
+      // every family LONDON-only while the clock says ASIA: the orders are not re-placed and the note says why
+      g_swingSess = NQ_SESS_LONDON; g_m5Sess = NQ_SESS_LONDON; g_scalpSess = NQ_SESS_LONDON;
+      g_sessOpen = 1;
+      SIM.ord.clear();
+      size_t before = SIM.sent.size();
+      NqTrade();
+      CHECK(countAct(before, TRADE_ACTION_PENDING) == 0 && g_note.find("OUTSIDE ITS TRADE SESSIONS (now ASIA, allowed LONDON)") != std::string::npos,
+            "ASIA with a LONDON mask: nothing placed, the note (a plan's or a scalp's) names the session and the mask");
+      // LONDON: placed
+      g_sessOpen = 2;
+      before = SIM.sent.size();
+      NqTrade();
+      int placed = countAct(before, TRADE_ACTION_PENDING);
+      CHECK(placed > 0 && !SIM.ord.empty(), "LONDON with a LONDON mask: placed");
+      // the clock moves to NY: the resting orders stay (the mask gates NEW orders only)
+      g_sessOpen = 4;
+      size_t resting = SIM.ord.size();
+      before = SIM.sent.size();
+      NqTrade();
+      CHECK(countAct(before, TRADE_ACTION_REMOVE) == 0 && SIM.ord.size() == resting, "NY with a LONDON mask: the London orders rest on - a resting order may fill in the next session");
+      // ALL: placed even in OFF time
+      g_swingSess = NQ_SESS_ALL; g_m5Sess = NQ_SESS_ALL; g_scalpSess = NQ_SESS_ALL;
+      g_sessOpen = 0;
+      SIM.ord.clear();
+      before = SIM.sent.size();
+      NqTrade();
+      CHECK(countAct(before, TRADE_ACTION_PENDING) > 0, "ALL = no restriction, OFF time included (the default changes nothing)");
+      g_sessOpen = keepOpen;
+      CHECK(NqSessMaskText(0) == "ALL" && NqSessMaskText(3) == "ASIA+LONDON" && NqSessMaskText(6) == "LONDON+NY" && NqSessMaskText(5) == "ASIA+NY" && NqSessMaskText(4) == "NY",
+            "the mask names");
+      g_m5Sess = NQ_SESS_ASIA_LONDON;
+      OnTimer();
+      CHECK(lbl("v_e0h").find("trade: swing ALL / M5 ASIA+LONDON / scalp ALL") != std::string::npos, "the WEEK / SMART row shows a restricted family");
+      g_m5Sess = NQ_SESS_ALL;
+      OnTimer();
+      CHECK(lbl("v_e0h").find("trade:") == std::string::npos, "with every mask ALL the row says nothing about it");
+      // the journal: every event line carries the session
+      std::string body = SIM.files["NQ_events_BTCUSD.jsonl"];
+      size_t lines = 0, withSession = 0, pos = 0;
+      for(char ch : body) if(ch == '\n') lines++;
+      while((pos = body.find("\"session\":\"", pos)) != std::string::npos) { withSession++; pos++; }
+      CHECK(lines > 0 && withSession == lines, "every journal line carries \"session\"");
+      if(g_nPlans > 0)
+      {
+         std::string js = NqEventJson(g_plans[0], "armed", "");
+         CHECK(js.find("\"session\":\"" + NqSessionName() + "\"") != std::string::npos, "the event names the session in force (ASIA / LONDON / NY / OFF)");
+      }
+      OnDeinit(0);
+      // scalps: the gold market always has a plan order waiting (A1), the ltc market opens scalps (A10). With ALL, count the
+      // scalps per session; then with the mask of ONE session that had scalps, every scalp that opens must open in that session
+      Market ltcM9 = makeMarket(5, 112.9, 0.001, 0.05, (int)DAYS);
+      auto scalpsIn = [&](int mask, int per[8]) {
+         load(ltcM9, "LTCUSD", "LTC", 3, 0.001, 5.0);
+         startAt(START);
+         relax();
+         g_scalpSess = mask;
+         int n = 0;
+         for(int b0 = 0; b0 < 8; b0++) per[b0] = 0;
+         for(size_t q = START + 1; q <= END; q++)
+         {
+            size_t d0 = SIM.deals.size();
+            stepTo(q);
+            for(size_t k = d0; k < SIM.deals.size(); k++)
+               if(SIM.deals[k].entry == DEAL_ENTRY_IN && SIM.deals[k].comment.compare(0, 4, "NQ-S") == 0) { n++; per[(g_sessOpen == 0) ? 0 : (g_sessOpen & 7)]++; }
+         }
+         OnDeinit(0);
+         return n;
+      };
+      int perAll[8], perMask[8];
+      int scAll = scalpsIn(NQ_SESS_ALL, perAll);
+      int pick = (perAll[1] >= perAll[2] && perAll[1] >= perAll[4]) ? 1 : ((perAll[2] >= perAll[4]) ? 2 : 4);
+      int scMask = scalpsIn(pick, perMask);
+      int outside = 0;
+      for(int b0 = 0; b0 < 8; b0++) if(b0 != pick) outside += perMask[b0];
+      std::printf("    ltc scalps with ALL: %d (off %d / asia %d / london %d / ny %d); with the mask %s: %d, outside it %d\n",
+                  scAll, perAll[0], perAll[1], perAll[2], perAll[4], NqSessMaskText(pick).c_str(), scMask, outside);
+      CHECK(scAll > 0 && perAll[pick] > 0, "with ALL the ltc run opens scalps (otherwise this check would prove nothing)");
+      CHECK(scMask > 0 && outside == 0, "with a one-session mask every scalp that opens opens in that session, none outside it");
+      g_scalpSess = NQ_SESS_ALL;
+   }
+   end("M9");
 
 
    begin("C1 coin detector: BTC / ETH / LTC / ALT by name or base, dollar quote only, InpCoinClass forces");
