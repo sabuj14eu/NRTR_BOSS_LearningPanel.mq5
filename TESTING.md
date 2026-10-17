@@ -32,36 +32,34 @@ the build environment. The EA was therefore verified like this:
 it behaves on a real broker feed. **Press F7 in MetaEditor and do the manual checks below
 before relying on it.** If F7 reports anything, send the exact message.
 
-## Results (2026-10-07)
+## Results (2026-10-17, metal 1.10.0 / crypto 1.4.0)
 
 ```
 CRYPTO TWIN:      derived files match; engine block identical apart from the asset detector
 FOREX EA:         engine block identical to the metal EA apart from the asset detector
--- NRTR_QML_MetalScalper.mq5 (v1.9.4) --
+-- NRTR_QML_MetalScalper.mq5 (v1.10.0) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-EA ENGINE TESTS:  122 checks passed, 0 failed   (E13 = the clock, E14 = the risk floor)
-EA TESTS:         247 checks passed, 0 failed   (A1-A15 + A10 with the v1.9 gates relaxed, plus M1-M6)
--- NRTR_QML_CryptoScalper.mq5 (v1.3.4) --
+EA ENGINE TESTS:  122 checks passed, 0 failed   (E13 = the clock, E14 = the risk floor; the engine block is unchanged)
+EA TESTS:         297 checks passed, 0 failed   (A1-A15 + A10 with the v1.9 / 1.10 switches relaxed, plus M1-M9;
+                  M2 rewritten, M7-M9 new: the R yardstick, HAND-MANAGED, trade sessions + journal session)
+-- NRTR_QML_CryptoScalper.mq5 (v1.4.0) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-CRYPTO EA TESTS:  284 checks passed, 0 failed   (the 15 whole-EA sections re-run on a
-                  BTC-sized market + an LTC 3-digit spec, plus the 7 crypto sections below;
-                  C7 = the weekend is OPEN)
--- NRTR_QML_ForexScalper.mq5 (v1.0.5) --
+CRYPTO EA TESTS:  334 checks passed, 0 failed   (the metal sections re-run on a BTC-sized market + an LTC 3-digit
+                  spec, plus the 7 crypto sections; C7 = the weekend is OPEN)
+-- NRTR_QML_ForexScalper.mq5 (v1.0.5, unchanged in this release) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-FOREX EA TESTS:   316 checks passed, 0 failed   (the 15 whole-EA sections on a EURUSD
-                  5-digit market + a USDJPY 3-digit spec, plus the 9 forex sections below)
--- BrotherSniperULTIMATE_v18_MT5.mq5 (18.12-mt5.1, the Pine twin) --
+FOREX EA TESTS:   316 checks passed, 0 failed
+-- BrotherSniperULTIMATE_v18_MT5.mq5 (18.12-mt5.2, the Pine twin, unchanged) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-BS18 EA TESTS:    86 checks passed, 0 failed   (B1 init + witnesses, B2 tables + levels,
-                  B3 DST clock + ORG / NWOG / midnight, B4 scalp fire -> market order + journal,
-                  B5 pullback arm -> limit order, B6 risk gate, B7 full replay + DXY squelch,
-                  B8 MT5 calendar news guard, B9 fills + closes journaled with outcomes, B10 chart shift)
+BS18 EA TESTS:    86 checks passed, 0 failed
 MetaEditor F7:    NOT RUN (not available in the build environment) - for ALL FOUR files
 ```
+
+Previous run (2026-10-07, metal 1.9.4 / crypto 1.3.4): engine 122, EA 247, crypto 284, forex 316, BS18 86, all 0 failed.
 
 ### Forex EA (`tests/test_ea_forex.cpp`)
 
@@ -88,20 +86,24 @@ symbols by name (the majors, oil, gold, bonds, the index), H1 / H4 series, `MQL_
 | F8 | The Friday stop: the resting order pulled, the +0.2R BUY banked, the losing SELL kept, with the reasons. The portfolio: two USD longs on other charts = USD +2 (they do not take this chart's slot); a EURUSD SELL (a third USD long) is blocked by `EXPOSURE`, a BUY is not; three positions across pairs = `PORTFOLIO FULL` closes the gate; the SESSION row shows `portfolio 3 pos USD+3` | PASS |
 | F9 | Higher timeframes on a 40-day market: 400 H1 and 200+ H4 bars, EMA200 ready, the `H4 / H1` row; BOS / CHoCH / BREAK classification; H4 and H1 context vote 1 each and cancel when opposed; a fresh H1 CHoCH down = -1 for a BUY, an old one nothing; no H1 / H4 at the broker = NO DATA, no vote, everything else runs | PASS |
 
-### Metal v1.9 layer (`tests/test_ea.cpp`, sections M1-M5; the crypto twin runs them too)
+### Metal v1.9 layer + the 1.10.0 exit discipline (`tests/test_ea.cpp`, sections M1-M9; the crypto twin runs them too)
 
 The panel has 12 engine rows (H4 / H1, MACRO VOTE, NEWS (USD), WEEK / SMART, VOL REGIME + 7;
 13 on crypto with COIN PROFILE); the telemetry carries `htf`, `witnesses`, `macro`, `news`,
 `session`, `portfolio`, `smart_exit`. The A sections run with `relax()` (clock guards, macro
-gate and smart exit off) so the engine's behaviour is checked as before.
+gate, smart exit, profit lock and the structural cut off) so the engine's behaviour is checked as
+before; the M sections switch each rule on in words.
 
 | # | Case | Result |
 |---|---|---|
 | M1 | News guard (USD): CLEAR with no HIGH event; a HIGH USD event 20 min ahead = NEWS GUARD naming it, the resting order pulled; GBP and EUR events are not the metal's business, a USD presser is TOP TIER; windows, MODERATE, the release vote (USD POSITIVE = metal down = -1 for a BUY, a NEGATIVE release cancels it, older than 4 h nothing), banking +0.5R when a window opens, the timer re-read, a failed calendar call = UNKNOWN with error 5402 and no order over 186 candles, an empty answer = UNKNOWN, `InpNewsUnknownBlocks = false`, the tester = N/A | PASS |
-| M2 | Smart exit on gold: bank +0.30R on an agreed-then-flipped regime (the verdict said so first), cut -0.30R under water, a scalp keeps its own flip rule, a reversal plan whose regime never agreed is left alone, the +0.7R lock by one SLTP request never loosened, the M1 turn at +0.6R banked and +0.3R kept, smart exit off = the human decides | PASS |
+| M2 (rewritten 1.10.0) | Smart exit on hand-planted positions (no plan record, so R falls back to the SL distance): an agreed-then-flipped regime at +0.30R is **kept** (verdict `you decide - +0.30R is under the lock threshold +0.70R`, panel note `SMART EXIT held`); -0.30R under water is kept (`under water: no cut below the lock threshold`); +0.01R is kept (no money threshold); the explicit STRUCTURAL CUT on closes -0.30R with its own name and never touches +0.30R; a scalp keeps its own flip rule; a reversal plan whose regime never agreed is left alone even at +0.9R; the +0.7R PROFIT LOCK by one SLTP request, logged with rule, R and threshold, never loosened or repeated; the M1 turn at +0.6R kept, at +0.9R banked and named; smart exit off + lock on = locked, not banked; lock off + smart exit on = banked above the threshold with no SL moved | PASS |
 | M3 | The Friday stop: order pulled, +0.2R BUY banked, losing SELL kept; the portfolio: positions on other charts counted, two = `PORTFOLIO FULL` closes the gate, the WEEK / SMART row shows it | PASS |
 | M4 | H1 / H4 on a 40-day gold market: EMA200 ready, the row, BOS / CHoCH / BREAK classification, the context voters, a fresh H1 CHoCH, no H1 / H4 = NO DATA and no vote | PASS |
-| M6 (F10 on forex) | Compact board: a detail line exactly for the slots that hold a plan, broker rows only as many as there are; a click on the desk header folds the desk to its header (a click on a split piece unfolds), a click on the title folds the board to its banner and a refresh keeps it, a click elsewhere does nothing; the SL guard: a BUY position without a stop gets the plan's SL and TP1 by one SLTP request (logged), one whose price is already beyond the stop is closed with the reason | PASS |
+| M6 (F10 on forex) | Compact board: a detail line exactly for the slots that hold a plan, broker rows only as many as there are; a click on the desk header folds the desk to its header (a click on a split piece unfolds), a click on the title folds the board to its banner and a refresh keeps it, a click elsewhere does nothing; the SL guard (1.10.0): a BUY position with neither stop nor TP is HAND-MANAGED (the TP is not the EA's) and gets the disaster stop alone by one SLTP request, logged `SL MISSING (HAND-MANAGED)`; the same position carrying the EA's TP gets its SL back with the plain reason and stays the EA's own; one whose price is already beyond the stop is closed with the reason | PASS |
+| M7 (new) | The R yardstick on a plan-backed position: R = +0.80R on the plan's risk before the lock; the PROFIT LOCK moves the SL to entry + 0.1R and keeps the TP; **after the lock R still reads +0.80R** (the regression that read +8.00R before 1.10.0); HOLD shows `(+0.80R) ... SL locked`; the lock's stop is recorded as the EA's own; a second candle repeats nothing; the regime flips -> banked with `at +0.80R - above the lock threshold +0.70R`; the same flip at +0.30R is held; a -0.90R loser with the regime intact: the EA sends nothing (`HOLD ... (-0.90R)`) and the broker's SL closes it (deal reason `sl`) | PASS |
+| M8 (new) | HAND-MANAGED: first sight records the plan's SL / TP as the EA's own; a widened stop = HAND-MANAGED, logged with both pairs, one journal event `hand_managed` with `expected_sl` / `expected_tp`; at +0.8R no lock; the verdict and the broker row say HAND-MANAGED; a regime flip = no smart exit; a news window banks the EA's own position and skips the hand-managed one; the Friday flat leaves it; a removed TP = hand-managed and never restored, then a missing SL brings the disaster stop back with the TP untouched; a scalp whose TP was moved is not time-stopped while the EA's own stale scalp is; after a restart a position at the lock's stop, or carrying the other TP, is the EA's own, a stop that is neither the plan's nor the lock's is the human's | PASS |
+| M9 (new) | Trade sessions: with every family LONDON-only and the clock on ASIA nothing is placed and the note names `OUTSIDE ITS TRADE SESSIONS (now ASIA, allowed LONDON)`; on LONDON the orders are placed; the clock moving to NY pulls nothing (a resting order may fill in the next session); ALL places in OFF time too; the mask names; the WEEK / SMART row shows `trade: swing ALL / M5 ASIA+LONDON / scalp ALL` only while a mask is restricted; every journal line carries `"session"` and a fresh event names the session in force; on the silver market (the gold market always has a plan order waiting) scalps fire with ALL and a mask excluding every session they fired in opens none | PASS |
 | M5 | The week's edges and the rollover on the server clock: Friday 22:30 = FRIDAY STOP, 19:00 open, 23:50 = rollover, Monday 00:30 = first hour, Saturday = weekend, guards off = nothing | PASS |
 
 The crypto twin's C4 / C6 keep their meaning: the lead is a voter of weight 2, so a lead
@@ -177,6 +179,15 @@ the crypto EA only by running the script, never by hand.
    green or red one and a new white `NEXT` arrow must appear on the new candle.
 5. Optional: attach to EURUSD. It must show **GOLD / SILVER ONLY**.
 6. **v1.9:** the `H4 / H1`, `MACRO VOTE`, `NEWS (USD)` and `WEEK / SMART` rows must be filled: `NEWS (USD)` must read `clear - next ...` or `GUARD - ...` with a time that matches the terminal's calendar window (View > Toolbox > Calendar); `UNKNOWN` = no calendar at this broker (set `InpNewsUnknownBlocks = false` to trade without it); `MACRO VOTE` names the dollar-index and bond symbols it found (`NO DATA` = the broker lacks the symbol, type it into the input if you know its name).
+8. **v1.10.0:** on a DEMO chart with a position of the EA's own: drag its SL by hand; within one
+   closed M1 candle the broker row must read `HAND-MANAGED  #ticket`, the banner `HAND-MANAGED BUY
+   #ticket ... the EA leaves it to you`, the Experts log one `NQ HAND-MANAGED: ...` line with both
+   SL / TP pairs, and the position must never be locked, banked or time-stopped afterwards. Remove
+   its SL entirely: the plan's stop must come back with `SL MISSING (HAND-MANAGED)` and the TP
+   untouched. On the EA's own position watch one PROFIT LOCK: the log line must read `PROFIT LOCK:
+   ... at +0.7xR reached the threshold +0.70R` and the HOLD banner must keep showing ~+0.7R, not
+   +7R. The WEEK / SMART row must show no `trade:` text with every session mask at ALL. **Re-save
+   every `.set` file** (an old one restores TP1 and the structural cut).
 7. **v1.7:** the `VOL REGIME` row must read `NORMAL  ATR5 1.0x its 24h avg` (or DEAD /
    EXPANSION / EXTREME with its consequence) once the chart has a day of M5 history; on a
    news spike the row must add `SPIKE UP/DOWN n ATR (x normal), n% back` and, with a
