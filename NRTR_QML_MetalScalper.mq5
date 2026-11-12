@@ -50,13 +50,20 @@
 //|  context = no entry). COPPER is the third metal. NO DATA = no    |
 //|  vote, no gate; nothing is ever invented.                        |
 //|                                                                  |
+//|  v1.12.0 (2026-11-12): CANDLE INTEGRITY. A hole in the M1 / M5 / |
+//|  M15 candles is classified: WEEKEND and DAILY CLOSE are          |
+//|  legitimate and only named; a DATA GAP or a LONG CLOSE closes    |
+//|  the gate for NEW entries until an hour of candles has closed    |
+//|  again, and the pattern studies do not vote while a hole sits    |
+//|  in their window. Telemetry is sent from a REAL account too.     |
+//|                                                                  |
 //|  Supported symbols: Gold (XAUUSD / GOLD), Silver (XAGUSD /       |
 //|  SILVER) and Copper (XCUUSD / COPPER / HG), any broker prefix /  |
 //|  suffix. Nothing else.                                           |
 //|  Personal tool. No network, no Telegram, no DLL, no files.       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.110"
+#property version     "1.120"
 #property description "Gold/Silver/Copper: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot, MH15 PLUS table."
 #property description "Auto scalp + QML/pullback/NY-trap/radar plans, macro vote (DXY, bond, USD news, H4/H1), news guard, smart exit."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -3813,6 +3820,126 @@ int NqValueVote(const NqStudySet &S, int d)
       return -d;
    return 0;
 }
+//+------------------------------------------------------------------+
+//| CANDLE INTEGRITY (metal 1.12.0 / forex 1.2.0 / crypto 1.6.0).      |
+//| ATR, NRTR, swings and the pattern studies read candle SEQUENCES,   |
+//| so a hole in the sequence must be named, never silently bridged.   |
+//| A hole = minHoleSec or more without a candle. It is one of:        |
+//|  WEEKEND     a Saturday noon (server clock) lies inside it         |
+//|  DAILY CLOSE the rollover (17:00 New York) lies inside or within   |
+//|              the tolerance of it, and it is no longer than a daily |
+//|              break                          -> both are LEGITIMATE |
+//|  LONG CLOSE  around the rollover but longer (holiday, early close) |
+//|  DATA GAP    anything else: candles are missing                    |
+//| After a LONG CLOSE or a DATA GAP the timeframe is not valid until  |
+//| needBars candles have closed since.                                |
+//+------------------------------------------------------------------+
+#define NQ_GAP_NONE    0
+#define NQ_GAP_WEEKEND 1
+#define NQ_GAP_CLOSE   2
+#define NQ_GAP_LONG    3
+#define NQ_GAP_DATA    4
+#define NQ_GAP_TOL_SEC 7200   // a daily break may sit up to two hours off the rollover minute (a broker's own schedule)
+
+struct NqGapInfo
+{
+   int      kind;         // the newest hole that needs candles to return (NQ_GAP_LONG / NQ_GAP_DATA), else NONE
+   datetime from;         // close of the last candle before it
+   datetime to;           // open of the first candle after it
+   int      barsSince;    // candles closed since it (the first one after it included)
+   int      needBars;     // candles needed before the timeframe is valid again
+   bool     active;       // barsSince < needBars: do not trade this timeframe yet
+   int      nData;        // LONG CLOSE + DATA GAP holes inside the scanned window
+   int      nLegit;       // WEEKEND + DAILY CLOSE holes inside the window
+   int      lastLegit;    // the newest legitimate hole (0 = none) and where the candles came back
+   datetime lastLegitTo;
+};
+
+void NqGapReset(NqGapInfo &g, int needBars)
+{
+   g.kind = NQ_GAP_NONE;
+   g.from = 0;
+   g.to = 0;
+   g.barsSince = 0;
+   g.needBars = needBars;
+   g.active = false;
+   g.nData = 0;
+   g.nLegit = 0;
+   g.lastLegit = NQ_GAP_NONE;
+   g.lastLegitTo = 0;
+}
+
+// a = the close of the last candle before the hole, b = the open of the first one after it (server clock)
+int NqGapClassify(datetime a, datetime b, int rollMin, int minHoleSec, int maxCloseSec, int tolSec)
+{
+   long la = (long)a;
+   long lb = (long)b;
+   long hole = lb - la;
+   if(minHoleSec <= 0 || hole < minHoleSec)
+      return NQ_GAP_NONE;
+   long dayA = la / 86400;
+   int dow = (int)((dayA + 4) % 7);                      // 0 = Sunday
+   long sat = (dayA + ((6 - dow + 7) % 7)) * 86400 + 43200;
+   if(sat < la)
+      sat += 7 * 86400;
+   if(sat < lb)
+      return NQ_GAP_WEEKEND;
+   for(int k = -1; k <= 1; k++)
+   {
+      long r = (dayA + k) * 86400 + (long)rollMin * 60;
+      if(la <= r + tolSec && lb >= r - tolSec)
+         return (hole <= maxCloseSec) ? NQ_GAP_CLOSE : NQ_GAP_LONG;
+   }
+   return NQ_GAP_DATA;
+}
+
+// the last `window` candles of a closed series, newest first
+void NqGapScan(const NqSeries &s, int window, int rollMin, int minHoleSec, int maxCloseSec, int tolSec, int needBars, NqGapInfo &g)
+{
+   NqGapReset(g, needBars);
+   int n = s.n;
+   int from = n - window;
+   if(from < 1)
+      from = 1;
+   for(int i = n - 1; i >= from; i--)
+   {
+      datetime a = s.t[i - 1] + s.sec;
+      int k = NqGapClassify(a, s.t[i], rollMin, minHoleSec, maxCloseSec, tolSec);
+      if(k == NQ_GAP_NONE)
+         continue;
+      if(k == NQ_GAP_WEEKEND || k == NQ_GAP_CLOSE)
+      {
+         g.nLegit++;
+         if(g.lastLegit == NQ_GAP_NONE)
+         {
+            g.lastLegit = k;
+            g.lastLegitTo = s.t[i];
+         }
+         continue;
+      }
+      g.nData++;
+      if(g.kind == NQ_GAP_NONE)
+      {
+         g.kind = k;
+         g.from = a;
+         g.to = s.t[i];
+         g.barsSince = n - i;
+      }
+   }
+   g.active = (g.kind != NQ_GAP_NONE && g.barsSince < needBars);
+}
+
+string NqGapKindText(int kind)
+{
+   switch(kind)
+   {
+      case NQ_GAP_WEEKEND: return "WEEKEND";
+      case NQ_GAP_CLOSE:   return "DAILY CLOSE";
+      case NQ_GAP_LONG:    return "LONG CLOSE";
+      case NQ_GAP_DATA:    return "DATA GAP";
+   }
+   return "none";
+}
 //=== NB_STUDIES_END ===
 
 //+------------------------------------------------------------------+
@@ -3882,6 +4009,7 @@ enum ENUM_NQ_BOND
 #define NQ_K_ROLLOVER     0x10000
 #define NQ_K_WEEK_EDGE    0x20000
 #define NQ_K_PORTFOLIO    0x40000
+#define NQ_K_DATA_GAP     0x80000   // candle integrity: a hole in the M1 / M5 / M15 candles, NEW entries wait
 
 input group "Engine (M15 context / M5 regime / M1 trigger are fixed)"
 input int            InpNrtrAtrPeriod    = 14;          // NRTR ATR period
@@ -3952,6 +4080,11 @@ input double         InpSmartFlipProfitR = 0.1;         // Extra floor for the M
 input double         InpSmartM1ProfitR   = 0.5;         // M1 bias turned against a position: bank when at or above BOTH this and the lock threshold (0 = M1 rule off)
 input group "Structural exits (separate from profit-taking: each is an explicit decision, off by default; a legitimate SL hit always stands)"
 input bool           InpSmartFlipCutLoss = false;       // M5 regime flipped against a PLAN position under water: close now instead of waiting for the SL (false = the SL decides)
+input group "Candle integrity: a hole in the M1 / M5 / M15 candles is named; an unexpected one closes the gate for NEW entries until candles return"
+input bool           InpGapGuard         = true;        // DATA GAP guard (false = holes are shown only)
+input int            InpGapMinutes       = 15;          // A hole = this many minutes without a candle (the weekend and the daily close are legitimate and only named)
+input int            InpGapRecoverMin    = 60;          // After a DATA GAP / LONG CLOSE: no new entry until this many minutes of candles have closed on that timeframe
+input int            InpGapCloseMaxMin   = 240;         // A break around the rollover up to this long is the DAILY CLOSE (legitimate); longer = LONG CLOSE (holiday / early close)
 input group "MH15 PLUS: DAY FORECAST + ROTATION LADDER + PATTERN STUDIES. Each gate only REMOVES an entry; NO DATA = no gate"
 input bool           InpStudies          = true;        // Master switch: compute and show the MH15 PLUS table (false = exactly 1.10.0: nothing computed, nothing gated)
 input bool           InpStudyTable       = true;        // Show the table (click its header to fold it)
@@ -4019,7 +4152,7 @@ input string         InpSignalMeshSecret = "";          // X-Brain-Secret for bo
 input group "SignalMesh telemetry (ANALYSIS ONLY - a data witness for the METAL ANALYSIS page, never a signal)"
 input string         InpTelemetryUrl     = "https://app.signalmesh.dev/webhooks/metal/telemetry";   // Telemetry door for the METAL ANALYSIS page (preset; "" = off). Armed only when the secret is set
 input int            InpTelemetrySec     = 60;          // Heartbeat every N seconds, and on every closed M1 candle (min 5)
-input bool           InpTelemetryDemoOnly = true;       // Send telemetry from a DEMO account only: a REAL account is never the witness
+input bool           InpTelemetryDemoOnly = false;      // false (default since this release) = telemetry is sent from a REAL account too, marked account_mode real; true = DEMO only
 input group "Forecast arrows"
 input int            InpForecastMinScore = 3;           // Votes needed for a bias arrow (1-5); 3 = strong, one-sided
 input int            InpArrowBars        = 300;         // Arrows drawn on the last N candles
@@ -4183,8 +4316,14 @@ double   g_myLv[];       // MY LEVELS
 int      g_nMyLv;
 bool     g_fcCollapsed;  // the MH15 PLUS table folded to its header
 string   g_studyNote;    // the last entry a study gate removed (panel)
+// candle integrity: the newest hole per timeframe, and the gate's words
+bool     g_gapGuard;
+NqGapInfo g_gap1;
+NqGapInfo g_gap5;
+NqGapInfo g_gap15;
+string   g_gapText;      // "" = every timeframe valid
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.11.0"
+#define NQ_EA_VERSION "1.12.0"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -4331,6 +4470,12 @@ void   NqDrawWarn();
 void   NqLabelOne(string id, int x, int y, string txt, color clr, int size, string font, int anchor);
 int    NqSplitLabel(string txt, string &parts[]);
 void   NqStudiesInit();
+void   NqGapsInit();
+void   NqReadGaps();
+int    NqGapGateBits();
+bool   NqStudyGapped();
+string NqGapRowText();
+string NqGapJson();
 void   NqResolvePeers();
 void   NqReadStudies();
 void   NqPeerAdopt();
@@ -4407,6 +4552,12 @@ int OnInit()
    g_nMgd = 0;
    NqResolveWitnesses();
    NqStudiesInit();
+   if(InpGapMinutes < 1 || InpGapMinutes > 720 || InpGapRecoverMin < 0 || InpGapRecoverMin > 1440 || InpGapCloseMaxMin < 30 || InpGapCloseMaxMin > 1440)
+   {
+      Print("NQ: invalid candle-integrity inputs (hole 1-720 min, recover 0-1440 min, daily close 30-1440 min)");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   NqGapsInit();
 
    g_P.atrPeriod = InpNrtrAtrPeriod;
    g_P.nrtrMult = InpNrtrMultiplier;
@@ -5002,6 +5153,7 @@ void NqRecompute()
    NqReadWitnesses();      // the dollar index + the bond: M15 NRTR of each, NO DATA = no vote
    NqReadCalendar();       // the MT5 economic calendar, USD events
    NqReadHtf();            // H1 / H4 context, structure, BOS / CHoCH
+   NqReadGaps();           // candle integrity: holes in M1 / M5 / M15 (weekend and daily close are legitimate)
    NqReadStudies();        // MH15 PLUS: the day forecast, the ladder, the pattern studies (NO DATA = no gate)
    // swing plans: the same QML / pullback engine on M15 structure
    NqSeriesResize(g_s15r, g_s15.n);
@@ -5232,6 +5384,8 @@ string NqGateNameX(int bit)
       return "ROLLOVER WINDOW - SPREADS WIDEN, NO NEW TRADE";
    if(bit == NQ_K_WEEK_EDGE)
       return "WEEK EDGE - " + g_weekText;
+   if(bit == NQ_K_DATA_GAP)
+      return "DATA GAP - " + g_gapText + " - no new entry from incomplete candles";
    if(bit == NQ_K_PORTFOLIO)
       return "PORTFOLIO FULL - " + IntegerToString(g_portfolioPos) + " POSITIONS ACROSS CHARTS (MAX " + IntegerToString(InpMaxOpenAcrossCharts) + ")";
    return NqGateName(bit);
@@ -5239,7 +5393,7 @@ string NqGateNameX(int bit)
 
 string NqGateAtX(int g, int nth)
 {
-   int extras[7];
+   int extras[8];
    extras[0] = NQ_K_VOL_DEAD;
    extras[1] = NQ_K_VOL_EXTREME;
    extras[2] = NQ_K_NEWS;
@@ -5247,8 +5401,9 @@ string NqGateAtX(int g, int nth)
    extras[4] = NQ_K_ROLLOVER;
    extras[5] = NQ_K_WEEK_EDGE;
    extras[6] = NQ_K_PORTFOLIO;
+   extras[7] = NQ_K_DATA_GAP;
    int mask = 0;
-   for(int i = 0; i < 7; i++)
+   for(int i = 0; i < 8; i++)
       mask |= extras[i];
    int engine = g & ~mask;   // an int variable: ~ on a literal is uint in MQL5 (compiler warning)
    string s = NqGateAt(engine, nth);
@@ -5258,7 +5413,7 @@ string NqGateAtX(int g, int nth)
    while(NqGateAt(engine, c) != "")
       c++;
    int k = nth - c;
-   for(int i = 0; i < 7; i++)
+   for(int i = 0; i < 8; i++)
    {
       if((g & extras[i]) == 0)
          continue;
@@ -6366,6 +6521,7 @@ void NqEvaluate()
       NqReadCalendar();          // the calendar is re-read every minute on the timer too, not only on a new candle
    NqNewsState();                // the calendar's verdict for this minute
    g_gate |= NqMetalGateBits();  // news / week / portfolio bits (named by NqGateAtX)
+   g_gate |= NqGapGateBits();    // candle integrity: a DATA GAP / LONG CLOSE closes the gate until candles return
 
    if(!g_ready || g_s1.n < 1 || g_s5.n < 1 || g_s15.n < 1)
    {
@@ -7138,7 +7294,7 @@ string NqTelemetryJson()
        NqJsonN("risk_pct", InpRiskPct, 2) + "," + NqJsonN("risk_money", g_riskMoney, 2) + "," + NqJsonS("last_trade", g_lastTrade) + "},";
 
    // MH15 PLUS: the day forecast, the ladder and the pattern studies as the table shows them
-   j = j + NqStudiesJson() + ",";
+   j = j + NqGapJson() + "," + NqStudiesJson() + ",";
 
    // the RECORD rows: what the loaded history says happened to each engine
    int done = 0;
@@ -9407,6 +9563,8 @@ int NqStudyVote(int d, string &why)
    why = "";
    if(!g_studies || !g_st.ok || d == 0)
       return 0;
+   if(NqStudyGapped())
+      return 0;                 // a hole inside the M15 window: a broken sequence gives no vote
    int v = 0;
    int s = NqEwVote(g_st.ew, d);
    if(s != 0)
@@ -9560,7 +9718,7 @@ string NqFibText()
 int NqStudiesHeight(double sc)
 {
    int rh = (int)MathRound(17 * sc);
-   int rows = 1 + NQ_LADDER_ROWS + 9 + ((g_nMyLv > 0) ? 1 : 0);
+   int rows = 1 + NQ_LADDER_ROWS + 10 + ((g_nMyLv > 0) ? 1 : 0);
    return g_fcCollapsed ? (rh + 6) : (rh + 3 + rows * rh + 4);
 }
 
@@ -9608,7 +9766,7 @@ void NqDrawStudies(int x, int y, int W, double sc, color cMetal)
    cn[4] = "MOVE";
    cn[5] = "ROOM";
    cn[6] = "SCORE";
-   cn[7] = "RANK";
+   cn[7] = "RANK (room left, not direction)";
    for(int c = 0; c < 8; c++)
       NqLabel("fh" + IntegerToString(c), cx[c], yr, cn[c], cKey, fsH, "Arial", ANCHOR_LEFT_UPPER);
    yr += rh;
@@ -9663,11 +9821,13 @@ void NqDrawStudies(int x, int y, int W, double sc, color cMetal)
                (aside ? " - STANDS ASIDE" : " - may open") + (g_ladderGate ? ("  (gate: top " + IntegerToString(InpLadderMaxRank) + ")") : "  (gate off)");
          goC = aside ? cBlock : ((g_ldRank[own] == 1) ? cUp : cVal);
       }
-      goT = goT + "   ranks ROOM LEFT, not direction";
    }
    else
       goT = "no row has data yet - nothing is ranked, nothing is gated";
    NqRow("f0", kx, vx, yr, "GO TRADE", goT, goC, cKey, fs);
+   yr += rh;
+   // candle integrity: which timeframes are valid, the last legitimate close, holes in the study window
+   NqRow("fg", kx, vx, yr, "CANDLES", NqGapRowText(), (g_gapText != "") ? cBlock : ((g_gap15.nData > 0) ? cWait : cVal), cKey, fs);
    yr += rh;
    // this chart's day forecast
    string fcT = "UNKNOWN - " + g_fc.why + " (no gate)";
@@ -9747,7 +9907,7 @@ void NqDrawStudies(int x, int y, int W, double sc, color cMetal)
       int vs = NqStudyVote(-1, whyS);
       svT = "vote BUY ";
       svT = svT + NqSigned(vb) + " / SELL " + NqSigned(vs) + (g_studyGate ? ("  (blocks at -" + IntegerToString(InpStudyBlockLevel) + " with a live setup against)") : "  (gate off)") +
-            ((whyB == "") ? "   no study has a view" : ("   " + whyB));
+            (NqStudyGapped() ? "   NO VOTE: a hole in the M15 candles (see CANDLES)" : ((whyB == "") ? "   no study has a view" : ("   " + whyB)));
       svC = (vb >= InpStudyBlockLevel) ? cUp : ((vs >= InpStudyBlockLevel) ? cDn : cVal);
    }
    NqRow("f7", kx, vx, yr, "STUDY VOTE", svT, svC, cKey, fs);
@@ -9796,4 +9956,98 @@ string NqStudiesJson()
        NqJsonN("poc", g_st.vp.poc, g_digits) + "," + NqJsonN("vah", g_st.vp.vah, g_digits) + "," + NqJsonN("val", g_st.vp.val, g_digits) + "," +
        NqJsonI("vote_buy", vb) + "," + NqJsonI("vote_sell", vs) + "," + NqJsonS("last_block", g_studyNote) + "}";
    return j;
+}
+
+//+------------------------------------------------------------------+
+//| CANDLE INTEGRITY, terminal side. Every closed M1 candle the M1,   |
+//| M5 and M15 series are scanned for holes. A WEEKEND or DAILY CLOSE |
+//| hole is legitimate and only named. A DATA GAP or a LONG CLOSE     |
+//| closes the gate for NEW entries on its timeframe until            |
+//| InpGapRecoverMin minutes of candles have closed since; while one  |
+//| sits inside the M15 study window the pattern studies do not vote. |
+//| Closing a position is never blocked.                              |
+//+------------------------------------------------------------------+
+int NqGapNeed(int sec)
+{
+   int n = (sec > 0) ? ((InpGapRecoverMin * 60) / sec) : 0;
+   return (n < 3) ? 3 : n;
+}
+
+void NqGapsInit()
+{
+   g_gapGuard = InpGapGuard;
+   g_gapText = "";
+   NqGapReset(g_gap1, 3);
+   NqGapReset(g_gap5, 3);
+   NqGapReset(g_gap15, 3);
+}
+
+void NqReadGaps()
+{
+   int minHole = InpGapMinutes * 60;
+   int maxClose = InpGapCloseMaxMin * 60;
+   NqGapScan(g_s1, 1440, g_clk.roll, minHole, maxClose, NQ_GAP_TOL_SEC, NqGapNeed(g_s1.sec), g_gap1);
+   NqGapScan(g_s5, 600, g_clk.roll, minHole, maxClose, NQ_GAP_TOL_SEC, NqGapNeed(g_s5.sec), g_gap5);
+   NqGapScan(g_s15, InpStudyBars, g_clk.roll, minHole, maxClose, NQ_GAP_TOL_SEC, NqGapNeed(g_s15.sec), g_gap15);
+}
+
+string NqGapOne(const NqGapInfo &g, string tf)
+{
+   if(!g.active)
+      return "";
+   return tf + " " + NqGapKindText(g.kind) + ": no candles " + TimeToString(g.from, TIME_DATE | TIME_MINUTES) + " - " + TimeToString(g.to, TIME_MINUTES) +
+          ", valid after " + IntegerToString(g.needBars - g.barsSince) + " more " + tf + " candles";
+}
+
+// the gate bit and its words: NEW entries wait until the candles are back
+int NqGapGateBits()
+{
+   g_gapText = "";
+   if(!g_gapGuard)
+      return 0;
+   string a = NqGapOne(g_gap1, "M1");
+   string b = NqGapOne(g_gap5, "M5");
+   string c = NqGapOne(g_gap15, "M15");
+   g_gapText = a;
+   if(b != "")
+      g_gapText = g_gapText + ((g_gapText == "") ? "" : "; ") + b;
+   if(c != "")
+      g_gapText = g_gapText + ((g_gapText == "") ? "" : "; ") + c;
+   return (g_gapText != "") ? NQ_K_DATA_GAP : 0;
+}
+
+// a hole inside the M15 study window: the pattern studies read a broken sequence and do not vote
+bool NqStudyGapped()
+{
+   return (g_gapGuard && g_gap15.nData > 0);
+}
+
+string NqGapTfText(const NqGapInfo &g, string tf)
+{
+   if(g.active)
+      return tf + " " + NqGapKindText(g.kind);
+   return tf + " OK";
+}
+
+// the CANDLES row of the table
+string NqGapRowText()
+{
+   string t = NqGapTfText(g_gap1, "M1") + " / " + NqGapTfText(g_gap5, "M5") + " / " + NqGapTfText(g_gap15, "M15");
+   if(g_gapText != "")
+      t = t + "   " + g_gapText + " - no new entry";
+   if(g_gap5.lastLegit != NQ_GAP_NONE)
+      t = t + "   last market close: " + NqGapKindText(g_gap5.lastLegit) + ", candles back " + TimeToString(g_gap5.lastLegitTo, TIME_DATE | TIME_MINUTES) + " (legitimate)";
+   if(g_gap15.nData > 0)
+      t = t + "   " + IntegerToString(g_gap15.nData) + " hole(s) in the M15 study window: the studies do not vote";
+   if(!g_gapGuard)
+      t = t + "   (guard off)";
+   return t;
+}
+
+string NqGapJson()
+{
+   return "\"candles\":{" + NqJsonB("guard", g_gapGuard) + "," + NqJsonB("blocking", g_gapText != "") + "," +
+          NqJsonS("m1", g_gap1.active ? NqGapKindText(g_gap1.kind) : "OK") + "," + NqJsonS("m5", g_gap5.active ? NqGapKindText(g_gap5.kind) : "OK") + "," +
+          NqJsonS("m15", g_gap15.active ? NqGapKindText(g_gap15.kind) : "OK") + "," + NqJsonI("holes_m15_window", g_gap15.nData) + "," +
+          NqJsonS("last_close", NqGapKindText(g_gap5.lastLegit)) + "," + NqJsonS("text", g_gapText) + "}";
 }

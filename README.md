@@ -70,6 +70,32 @@ cut; it has no `InpProfitLock` or session masks (those take their defaults). F7 
 first (metal and crypto), a demo chart second, the real terminal last - tests passing is not a
 reason to flip the Algo button.
 
+## v1.12.0 (metal) / v1.2.0 (forex) / v1.6.0 (crypto): candle integrity (2026-11-12)
+
+ATR, NRTR, swing detection and the pattern studies read candle **sequences**. Before this release a
+hole in the sequence (a broker outage, a history that did not load) was silently bridged. Now every
+closed M1 candle the M1, M5 and M15 series are scanned and every hole of `InpGapMinutes` (15) or more
+without a candle is classified:
+
+| Hole | How it is recognised | What the EA does |
+|---|---|---|
+| **WEEKEND** | a Saturday noon (server clock) lies inside it | legitimate: only named on the `CANDLES` row |
+| **DAILY CLOSE** | the rollover (17:00 New York) lies inside it or within 2 hours of it, and it is no longer than `InpGapCloseMaxMin` (240 min) | legitimate: only named |
+| **LONG CLOSE** | around the rollover but longer (a holiday, an early close) | NEW entries wait until `InpGapRecoverMin` (60) minutes of candles have closed on that timeframe |
+| **DATA GAP** | any other hole: candles are missing | the same wait; the gate reads `DATA GAP - M5 DATA GAP: no candles 10:00 - 10:50, valid after 7 more M5 candles` |
+
+While a DATA GAP / LONG CLOSE sits inside the M15 study window the pattern studies **do not vote**
+(a broken sequence gives no Elliott or Wolfe reading). Closing a position is never blocked; a resting
+order is left to its plan. `InpGapGuard = false` shows the holes and gates nothing. The state goes
+out in telemetry as `candles`. Incomplete history at the start of the window was already handled
+(EMA / structure read NOT READY / UNKNOWN until enough candles exist) and is unchanged.
+
+Also in this release: **telemetry is sent from a REAL account too** (`InpTelemetryDemoOnly` now
+defaults to false; the snapshot says `account_mode: real`), and the crypto twin's MH15 PLUS studies
+are **on by default** - with the secret set, nothing else needs switching.
+
+---
+
 ## v1.11.0 (metal) / v1.5.0 (crypto, by derivation, OFF there) / v1.1.0 (forex, no ladder): the MH15 PLUS release (2026-11-12)
 
 One new table and three gates. The table is the port of the SignalMesh terminal's display studies

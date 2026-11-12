@@ -576,7 +576,7 @@ int main()
       }
       std::printf("    %d rows\n", rows);
       CHECK(rows == 14, "14 engine rows (PAIR PROFILE, H4 / H1, STRENGTH, MACRO VOTE, NEWS, SESSION, VOL REGIME + the 7 engine rows)");
-      CHECK(studyRows == 8, "the MH15 PLUS table: 8 rows (DAY FORECAST, ADR ROOM, ELLIOTT, WOLFE, FIB, VWAP / PROFILE, STUDY VOTE, LAST BLOCK), no ladder on forex");
+      CHECK(studyRows == 9, "the MH15 PLUS table: 9 rows (CANDLES, DAY FORECAST, ADR ROOM, ELLIOTT, WOLFE, FIB, VWAP / PROFILE, STUDY VOTE, LAST BLOCK), no ladder on forex");
       CHECK(dup == 0, "no key twice");
       CHECK(empty == 0, "every row has a value");
       CHECK(lbl("h1").find("ENGINE") != std::string::npos && lbl("h2").find("NY TRAP  +  PENDING ORDER BOARD") != std::string::npos, "engine table + board");
@@ -863,7 +863,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_ForexScalper\"", "\"ea_version\":\"1.1.0\"", "\"strength\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"htf\":{", "\"smart_exit\":{", "\"portfolio\":{",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_ForexScalper\"", "\"ea_version\":\"1.2.0\"", "\"strength\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"htf\":{", "\"smart_exit\":{", "\"portfolio\":{",
                            "\"symbol\":\"EURUSD\"", "\"asset_class\":\"forex\"", "\"pair_class\":\"MAJOR\"", "\"base\":\"EUR\"", "\"quote\":\"USD\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"clock\":\"AUTO\"", "\"clock_offset_min\":180", "\"ny_dst\":true", "\"ny_open_min\":990", "\"london_open_min\":600", "\"asia_open_min\":60", "\"rollover_min\":0", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
@@ -1960,6 +1960,109 @@ int main()
       OnDeinit(0);
    }
    end("F13");
+
+   // remove every M1 candle with a <= t < b and rebuild M5 / M15 from what is left: a hole on all three timeframes
+   auto punch = [&](Market m, long long a, long long b) {
+      std::vector<SBar> keep;
+      for(const SBar &x : m.m1) if(x.t < a || x.t >= b) keep.push_back(x);
+      m.m1 = keep;
+      m.m5 = agg(m.m1, 300);
+      m.m15 = agg(m.m1, 900);
+      return m;
+   };
+   auto ixOf = [&](long long t) { size_t i = 0; while(i + 1 < SIM.m1.size() && SIM.m1[i].time < t) i++; return i; };
+   auto gateSays = [&](const char *what) { for(int k = 0; k < 24; k++) { std::string s = NqGateAtX(g_gate, k); if(s.empty()) break; if(s.find(what) != std::string::npos) return true; } return false; };
+
+   begin("FG1 candle integrity (pure): a hole is WEEKEND, DAILY CLOSE, LONG CLOSE or DATA GAP; the scan and the recovery");
+   {
+      const long long D = 86400, H = 3600, M = 60;   // T0 = Tuesday 00:00
+      CHECK(NqGapClassify(T0 + D + 10 * H, T0 + D + 10 * H + 14 * M, 0, 900, 14400, 7200) == NQ_GAP_NONE, "14 minutes without a candle is not a hole (15 is)");
+      CHECK(NqGapClassify(T0 + D + 10 * H, T0 + D + 10 * H + 50 * M, 0, 900, 14400, 7200) == NQ_GAP_DATA, "Wednesday 10:00-10:50, nowhere near the rollover: DATA GAP");
+      CHECK(NqGapClassify(T0 + D + 15 * H, T0 + D + 16 * H, 0, 900, 14400, 7200) == NQ_GAP_DATA, "an hour missing mid-session: DATA GAP");
+      CHECK(NqGapClassify(T0 + 3 * D + 23 * H + 55 * M, T0 + 6 * D + 5 * M, 0, 900, 14400, 7200) == NQ_GAP_WEEKEND, "Friday 23:55 to Monday 00:05: WEEKEND");
+      CHECK(NqGapClassify(T0 + 3 * D + 21 * H, T0 + 5 * D + 22 * H, 21 * 60, 900, 14400, 7200) == NQ_GAP_WEEKEND, "a GMT broker: Friday 21:00 to Sunday 22:00: WEEKEND");
+      CHECK(NqGapClassify(T0 + D + 23 * H + 58 * M, T0 + 2 * D + 1 * H + 2 * M, 0, 900, 14400, 7200) == NQ_GAP_CLOSE, "23:58-01:02 across the 00:00 rollover: DAILY CLOSE");
+      CHECK(NqGapClassify(T0 + D + 20 * H + 59 * M, T0 + D + 22 * H, 21 * 60, 900, 14400, 7200) == NQ_GAP_CLOSE, "a GMT broker's 21:00 rollover: DAILY CLOSE");
+      CHECK(NqGapClassify(T0 + D + 21 * H + 59 * M, T0 + D + 23 * H, 0, 900, 14400, 7200) == NQ_GAP_CLOSE, "a break that ends an hour before the rollover is this broker's daily close (2 h tolerance)");
+      CHECK(NqGapClassify(T0 + D + 20 * H, T0 + 2 * D + 6 * H, 0, 900, 14400, 7200) == NQ_GAP_LONG, "ten hours around the rollover: LONG CLOSE (holiday / early close), not a daily break");
+      CHECK(NqGapClassify(T0 + D + 10 * H, T0 + D + 12 * H, 0, 0, 14400, 7200) == NQ_GAP_NONE, "a hole size of 0 = the check is off");
+      // an M5 series: Friday 20:00 .. Monday 11:30 with the weekend out, and a 40-minute hole on Monday 10:00
+      NqSeries s;
+      NqSeriesResize(s, 0);
+      s.sec = 300;
+      std::vector<long long> ts;
+      for(long long t = T0 + 3 * D + 20 * H; t < T0 + 3 * D + 24 * H; t += 300) ts.push_back(t);
+      for(long long t = T0 + 6 * D; t < T0 + 6 * D + 11 * H + 30 * M; t += 300) if(t < T0 + 6 * D + 10 * H || t >= T0 + 6 * D + 10 * H + 40 * M) ts.push_back(t);
+      NqSeriesResize(s, (int)ts.size());
+      for(size_t i = 0; i < ts.size(); i++) { s.t[i] = ts[i]; s.o[i] = 1; s.h[i] = 1; s.l[i] = 1; s.c[i] = 1; s.v[i] = 1; }
+      NqGapInfo g;
+      NqGapScan(s, 600, 0, 900, 14400, 7200, 12, g);
+      CHECK(g.kind == NQ_GAP_DATA && g.from == T0 + 6 * D + 10 * H && g.to == T0 + 6 * D + 10 * H + 40 * M && g.barsSince == 10 && g.active && g.nData == 1,
+            "the scan finds the Monday hole: from, to, 10 candles since, still active (12 needed)");
+      CHECK(g.nLegit == 1 && g.lastLegit == NQ_GAP_WEEKEND && g.lastLegitTo == T0 + 6 * D, "the weekend is counted apart, as legitimate, with the time the candles came back");
+      NqGapScan(s, 600, 0, 900, 14400, 7200, 10, g);
+      CHECK(g.kind == NQ_GAP_DATA && !g.active && g.nData == 1, "10 candles after it (10 needed): the timeframe is valid again, the hole stays counted in the window");
+      NqGapScan(s, 5, 0, 900, 14400, 7200, 12, g);
+      CHECK(g.kind == NQ_GAP_NONE && !g.active && g.nData == 0, "a window that ends after the hole sees nothing");
+   }
+   end("FG1");
+
+   begin("FG2 candle integrity end to end: a 50-minute hole closes the gate for NEW entries for an hour of candles, the studies do not vote; a daily close is only named");
+   {
+      const long long D4 = T0 + 3 * 86400;      // Friday
+      Market holed = punch(eur, D4 + 10 * 3600, D4 + 10 * 3600 + 50 * 60);
+      load(holed, "EURUSD", "EUR", 5, 0.00001, 1.0);
+      size_t s0 = ixOf(D4 + 8 * 3600);
+      startAt(s0);
+      relax();
+      run(s0 + 1, ixOf(D4 + 9 * 3600 + 58 * 60));
+      CHECK(g_gapGuard && (g_gate & NQ_K_DATA_GAP) == 0 && g_gapText == "" && !g_gap1.active && !g_gap5.active && !g_gap15.active && lbl("v_fg").find("M1 OK / M5 OK / M15 OK") == 0,
+            "before the hole: every timeframe valid, the CANDLES row says so");
+      size_t sentAt = SIM.sent.size();
+      stepTo(ixOf(D4 + 10 * 3600 + 50 * 60));
+      CHECK((g_gate & NQ_K_DATA_GAP) != 0 && g_gap1.active && g_gap1.kind == NQ_GAP_DATA && g_gap1.from == D4 + 10 * 3600 && g_gap1.to == D4 + 10 * 3600 + 50 * 60,
+            "the first candle after the hole: DATA GAP on M1 with the hole's exact times, the gate is closed");
+      stepTo(ixOf(D4 + 11 * 3600 + 2 * 60));
+      CHECK(g_gap5.active && g_gap5.kind == NQ_GAP_DATA && g_gap15.active && g_gap15.kind == NQ_GAP_DATA && gateSays("DATA GAP - M1 DATA GAP: no candles"),
+            "M5 and M15 name the same hole; the gate's reason names the timeframe and the hole");
+      std::string voters;
+      CHECK(NqStudyGapped() && NqStudyVote(1, voters) == 0 && NqStudyVote(-1, voters) == 0 && lbl("v_fg").find("M1 DATA GAP / M5 DATA GAP / M15 DATA GAP") == 0 &&
+            lbl("v_f7").find("NO VOTE: a hole in the M15 candles") != std::string::npos, "a hole inside the M15 window: the studies do not vote, the table says why");
+      CHECK(NqTelemetryJson().find("\"candles\":{\"guard\":true,\"blocking\":true,\"m1\":\"DATA GAP\"") != std::string::npos, "telemetry carries it");
+      int opened = 0, blockedMin = 0;
+      for(size_t i = ixOf(D4 + 11 * 3600 + 3 * 60); i <= ixOf(D4 + 11 * 3600 + 40 * 60); i++)
+      {
+         size_t b4 = SIM.sent.size();
+         stepTo(i);
+         if((g_gate & NQ_K_DATA_GAP) != 0) blockedMin++;
+         for(size_t k = b4; k < SIM.sent.size(); k++)
+            if(SIM.sent[k].action == TRADE_ACTION_PENDING || (SIM.sent[k].action == TRADE_ACTION_DEAL && SIM.sent[k].position == 0)) opened++;
+      }
+      for(size_t k = sentAt; k < SIM.sent.size(); k++)
+         if(SIM.sent[k].action == TRADE_ACTION_PENDING || (SIM.sent[k].action == TRADE_ACTION_DEAL && SIM.sent[k].position == 0)) opened++;
+      CHECK(blockedMin == 38 && opened == 0, "50 minutes after the candles came back the gate is still closed and nothing was opened");
+      run(ixOf(D4 + 11 * 3600 + 41 * 60), ixOf(D4 + 12 * 3600 + 5 * 60));
+      CHECK((g_gate & NQ_K_DATA_GAP) == 0 && g_gapText == "" && !g_gap1.active && !g_gap5.active && !g_gap15.active, "an hour of candles on every timeframe: valid again, the gate bit is gone");
+      CHECK(g_gap15.nData == 1 && NqStudyGapped() && lbl("v_fg").find("1 hole(s) in the M15 study window: the studies do not vote") != std::string::npos,
+            "the hole is still inside the M15 study window: the studies stay silent until it has left");
+      g_gapGuard = false;
+      CHECK(NqGapGateBits() == 0 && !NqStudyGapped(), "guard off: holes are shown only");
+      OnDeinit(0);
+
+      // a legitimate daily close: an hour without candles across the 00:00 rollover (17:00 New York on this clock)
+      Market closed = punch(eur, D4 - 20 * 60, D4 + 40 * 60);
+      load(closed, "EURUSD", "EUR", 5, 0.00001, 1.0);
+      size_t c0 = ixOf(D4 - 2 * 3600);
+      startAt(c0);
+      relax();
+      int gapMin = 0;
+      for(size_t i = c0 + 1; i <= ixOf(D4 + 90 * 60); i++) { stepTo(i); if((g_gate & NQ_K_DATA_GAP) != 0) gapMin++; }
+      CHECK(gapMin == 0 && g_gap5.kind == NQ_GAP_NONE && g_gap5.lastLegit == NQ_GAP_CLOSE && g_gap5.lastLegitTo == D4 + 40 * 60 && g_gap15.nData == 0 && !NqStudyGapped(),
+            "the daily close is named and never blocks: no DATA GAP, the studies keep voting");
+      CHECK(lbl("v_fg").find("last market close: DAILY CLOSE") != std::string::npos && lbl("v_fg").find("(legitimate)") != std::string::npos, "the CANDLES row keeps the legitimate close apart");
+      OnDeinit(0);
+   }
+   end("FG2");
 
    std::printf("\nFOREX EA TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
