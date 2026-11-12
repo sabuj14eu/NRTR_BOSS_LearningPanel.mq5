@@ -1,30 +1,53 @@
 #!/usr/bin/env bash
-# Full local test suite for the EA. See TESTING.md for what this does
-# and does NOT prove.
+# Full local test suite for the FOUR EAs (metal, the crypto twin, the forex EA, the Pine twin).
+# See TESTING.md for what this does and does NOT prove.
 set -euo pipefail
 cd "$(dirname "$0")"
-EA=NRTR_QML_MetalScalper.mq5
 FLAGS="-std=c++17 -O1 -Wall -Wextra -Wno-unused-parameter -Werror"
 mkdir -p build
 rc=0
 
-echo "=================== EA: $EA ==================="
-echo "== 1. EA safety scan (no network/file/DLL; one OrderSend; demo guard) =="
-python3 tests/check_safety_ea.py "$EA" || rc=1
+echo "== 0. crypto twin is the derivation of the metal EA (engine identical apart from the asset detector) =="
+python3 tools/derive_crypto_ea.py --check || rc=1
+echo "== 0b. the forex EA's engine block is identical to the metal EA's (its asset layer is its own) =="
+python3 tools/check_forex_engine.py || rc=1
 
-echo "== 2. translate the real EA source (syntax only) =="
-python3 tests/mql2cpp.py "$EA" build/ea_engine.inc engine
-python3 tests/mql2cpp.py "$EA" build/ea_full.inc full
+for EA in NRTR_QML_MetalScalper.mq5 NRTR_QML_CryptoScalper.mq5 NRTR_QML_ForexScalper.mq5 BrotherSniperULTIMATE_v18_MT5.mq5; do
+  case "$EA" in
+    NRTR_QML_MetalScalper.mq5)  TAG=ea;        TEST=tests/test_ea.cpp ;;
+    NRTR_QML_CryptoScalper.mq5) TAG=ea_crypto; TEST=tests/test_ea_crypto.cpp ;;
+    NRTR_QML_ForexScalper.mq5)  TAG=ea_forex;  TEST=tests/test_ea_forex.cpp ;;
+    BrotherSniperULTIMATE_v18_MT5.mq5) TAG=ea_bs18; TEST=tests/test_ea_bs18.cpp ;;
+  esac
+  echo
+  echo "=================== EA: $EA ==================="
+  echo "== 1. EA safety scan (no network/file/DLL beyond the two POSTs; one OrderSend; demo guard) =="
+  python3 tests/check_safety_ea.py "$EA" || rc=1
 
-echo "== 3. surrogate compile of the WHOLE EA (g++ $FLAGS) =="
-printf '#include "../tests/mt5_sim_ea.h"\n#include "ea_full.inc"\nint main(){return 0;}\n' > build/ea_compile.cpp
-g++ $FLAGS -fsyntax-only build/ea_compile.cpp && echo "EA FULL FILE: 0 errors, 0 warnings" || rc=1
+  echo "== 2. translate the real EA source (syntax only) =="
+  [ "$TAG" != ea_bs18 ] && python3 tests/mql2cpp.py "$EA" "build/${TAG}_engine.inc" engine
+  python3 tests/mql2cpp.py "$EA" "build/${TAG}_full.inc" full
+  [ "$TAG" = ea ] && cp "build/${TAG}_engine.inc" build/ea_engine.inc && cp "build/${TAG}_full.inc" build/ea_full.inc
+  [ "$TAG" = ea_crypto ] && cp "build/${TAG}_full.inc" build/ea_full_crypto.inc
+  [ "$TAG" = ea_forex ] && cp "build/${TAG}_full.inc" build/ea_full_forex.inc
+  [ "$TAG" = ea_bs18 ] && cp "build/${TAG}_full.inc" build/ea_full_bs18.inc
 
-echo "== 4. EA engine tests (regime, trigger, QML/pullback plans, forecast, risk, lot) =="
-g++ $FLAGS -Ibuild tests/test_ea_engine.cpp -o build/test_ea_engine && ./build/test_ea_engine || rc=1
+  echo "== 3. surrogate compile of the WHOLE EA (g++ $FLAGS) =="
+  printf '#include "../tests/mt5_sim_ea.h"\n#include "%s_full.inc"\nint main(){return 0;}\n' "$TAG" > "build/${TAG}_compile.cpp"
+  g++ $FLAGS -fsyntax-only "build/${TAG}_compile.cpp" && echo "EA FULL FILE: 0 errors, 0 warnings" || rc=1
 
-echo "== 5. whole-EA tests on a simulated MT5 terminal WITH a trade API =="
-g++ $FLAGS -Ibuild tests/test_ea.cpp -o build/test_ea && ./build/test_ea || rc=1
+  if [ "$TAG" = ea ]; then
+    echo "== 4. EA engine tests (regime, trigger, QML/pullback plans, forecast, risk, lot, clock) =="
+    g++ $FLAGS -Ibuild tests/test_ea_engine.cpp -o build/test_ea_engine && ./build/test_ea_engine || rc=1
+  elif [ "$TAG" = ea_bs18 ]; then
+    echo "== 4. (the Pine twin has no NRTR engine block: its logic is the Pine's, tested whole in step 5) =="
+  else
+    echo "== 4. EA engine tests: this engine block is byte-identical to the tested metal engine (step 0) =="
+  fi
+
+  echo "== 5. whole-EA tests on a simulated MT5 terminal WITH a trade API =="
+  g++ $FLAGS -Ibuild "$TEST" -o "build/test_${TAG}" && "./build/test_${TAG}" || rc=1
+done
 
 echo
 [ $rc -eq 0 ] && echo "ALL SUITES PASSED" || echo "SOME SUITES FAILED"
