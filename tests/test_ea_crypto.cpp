@@ -106,6 +106,9 @@ static void relax()
    g_smartExit = false;
    g_profitLock = false;
    g_flipCutLoss = false;
+   g_adrGate = false;      // the v1.11 MH15 PLUS gates off too (the S sections test them)
+   g_ladderGate = false;
+   g_studyGate = false;
    NqUpdate();
 }
 static int countSent(int action, bool openingOnly)
@@ -554,11 +557,12 @@ int main()
       CHECK(lbl("title").find("NRTR QML") != std::string::npos && lbl("title").find(std::string("v") + NQ_EA_VERSION) != std::string::npos,
             "the title names the build (v" NQ_EA_VERSION ") so the file on the chart is recognisable");
       std::set<std::string> keys;
-      int dup = 0, rows = 0, empty = 0;
+      int dup = 0, rows = 0, empty = 0, studyRows = 0;
       for(auto &kv : SIM.objs)
       {
          if(kv.first.compare(0, 9, "NQEA_P_k_") != 0) continue;
-         rows++;
+         if(kv.first.compare(0, 10, "NQEA_P_k_f") == 0) studyRows++;   // the MH15 PLUS table's rows (v1.11.0) are counted apart
+         else rows++;
          std::string k = kv.second.s[OBJPROP_TEXT];
          if(keys.count(k)) dup++;
          keys.insert(k);
@@ -567,6 +571,7 @@ int main()
       }
       std::printf("    %d rows\n", rows);
       CHECK(rows == 13, "13 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, COIN PROFILE, VOL REGIME + the 7 engine rows)");
+      CHECK(studyRows == (g_studies ? 9 : 0), "the MH15 PLUS table: 9 rows under its ladder when the studies are on, none when they are off");
       CHECK(dup == 0, "no key twice");
       CHECK(empty == 0, "every row has a value");
       CHECK(lbl("h1").find("ENGINE") != std::string::npos && lbl("h2").find("NY TRAP  +  PENDING ORDER BOARD") != std::string::npos, "engine table + board");
@@ -860,7 +865,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_CryptoScalper\"", "\"ea_version\":\"1.4.0\"", "\"prof_risk\":1.00", "\"prof_spread_atr\":0.15", "\"lead_symbol\":\"\"", "\"trade_swing\":\"ALL\"", "\"profit_lock\":false", "\"hand_managed\":0", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_CryptoScalper\"", "\"ea_version\":\"1.5.0\"", "\"prof_risk\":1.00", "\"prof_spread_atr\":0.15", "\"lead_symbol\":\"\"", "\"trade_swing\":\"ALL\"", "\"profit_lock\":false", "\"hand_managed\":0", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
                            "\"symbol\":\"BTCUSD\"", "\"coin\":\"BTC\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"clock\":\"AUTO\"", "\"clock_offset_min\":180", "\"ny_dst\":true", "\"ny_open_min\":990", "\"london_open_min\":600", "\"asia_open_min\":60", "\"rollover_min\":0", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
@@ -1883,6 +1888,7 @@ int main()
    end("M9");
 
 
+
    begin("C1 coin detector: BTC / ETH / LTC / ALT by name or base, dollar quote only, InpCoinClass forces");
    {
       CHECK(NqCoinOf("BTCUSD", "BTC", "USD", 0) == NQ_COIN_BTC && NqCoinOf("#BTCUSD.m", "", "USD", 0) == NQ_COIN_BTC &&
@@ -2088,6 +2094,33 @@ int main()
       OnDeinit(0);
    }
    end("C7");
+
+   begin("C8 MH15 PLUS (v1.5.0): carried over and OFF by default; switched on, the ladder is BTC / ETH / LTC and an altcoin is never on it");
+   {
+      load(btc, "BTCUSD", "BTC", 2, 0.01, 0.01);
+      startAt(START);
+      run(START + 1, START + 20);
+      std::string why;
+      CHECK(!g_studies && SIM.objs.count("NQEA_P_tF") == 0 && !g_fc.ok && !g_st.ok && !NqStudiesBlock(1, SIM.bid, SIM.bid + 1.0, why),
+            "default: nothing computed, no table, nothing gated");
+      CHECK(NqTelemetryJson().find("\"mh15\":{\"on\":false") != std::string::npos, "telemetry says the studies are off");
+      g_studies = true;
+      NqResolvePeers();
+      stepTo(START + 21);
+      CHECK(NqPeerName(0) == "BTC" && NqPeerName(1) == "ETH" && NqPeerName(2) == "LTC" && NqPeerRow() == 0 && g_ldSym[0] == "BTCUSD",
+            "switched on: the rows are BTC / ETH / LTC and this chart is row 1");
+      CHECK(lbl("tF") != "<missing>" && lbl("fl0_0") == "BTC" && lbl("v_f1").find("UNKNOWN - no daily bars (no gate)") == 0 && g_st.ok,
+            "the table appears; this simulated broker serves no daily bars = UNKNOWN, no gate; the pattern studies run");
+      CHECK(NqPeerInSession(100) && NqPeerInSession(1100), "crypto trades round the clock: the session factor is always 1");
+      OnDeinit(0);
+      Market sol = makeMarket(13, 148.0, 0.001, 0.07, (int)DAYS);
+      load(sol, "SOLUSD", "SOL", 3, 0.001, 0.001);
+      startAt(START);
+      CHECK(g_coinName == "ALT" && NqPeerRow() == -1, "an altcoin is not on the ladder: the ladder can never gate it");
+      OnDeinit(0);
+      load(btc, "BTCUSD", "BTC", 2, 0.01, 0.01);
+   }
+   end("C8");
    std::printf("\nCRYPTO EA TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
 }

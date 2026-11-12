@@ -19,7 +19,7 @@ def engine_core(text: str, which: str) -> str:
     core = text[a:b]
     if which == "metal":
         core = re.sub(r"// supported metals\n(#define NQ_METAL_\w+\s+\d\n)+", "", core)
-        i, j = core.index("//--- Gold / Silver only."), core.index("//--- text helpers")
+        i, j = core.index("//--- Gold / Silver / Copper only."), core.index("//--- text helpers")
     else:
         core = re.sub(r"// supported pair classes[^\n]*\n(#define NQ_PAIR_\w+\s+\d\n)+", "", core)
         i, j = core.index("//--- FOREX only:"), core.index("//--- text helpers")

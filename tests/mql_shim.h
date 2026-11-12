@@ -36,6 +36,7 @@ inline double MathFloor(double v) { return std::floor(v); }
 inline double MathCeil(double v) { return std::ceil(v); }
 inline double MathRound(double v) { return std::round(v); }
 inline double MathPow(double a, double b) { return std::pow(a, b); }
+inline double MathSqrt(double v) { return std::sqrt(v); }
 inline double NormalizeDouble(double v, int d)
 {
    double p = std::pow(10.0, d);
@@ -83,6 +84,7 @@ inline int StringReplace(string &s, const string &from, const string &to)
    return n;
 }
 inline long long StringToInteger(const string &s) { try { return std::stoll(s); } catch(...) { return 0; } }
+inline double StringToDouble(const string &s) { try { return std::stod(s); } catch(...) { return 0.0; } }
 // MQL strings are UTF-16; here a code point becomes UTF-8
 inline string ShortToString(ushort cp)
 {

@@ -104,6 +104,9 @@ static void relax()
    g_smartExit = false;
    g_profitLock = false;
    g_flipCutLoss = false;
+   g_adrGate = false;      // the v1.11 MH15 PLUS gates off too (the S sections test them)
+   g_ladderGate = false;
+   g_studyGate = false;
    NqUpdate();
 }
 static int countSent(int action, bool openingOnly)
@@ -495,7 +498,7 @@ int main()
       startAt(START);
       relax();
       run(START + 1, START + 300);
-      CHECK(SIM.sent.empty() && lbl("state").find("GOLD / SILVER ONLY") != std::string::npos, "EURUSD: no trading, panel says so");
+      CHECK(SIM.sent.empty() && lbl("state").find("GOLD / SILVER / COPPER ONLY") != std::string::npos, "EURUSD: no trading, panel says so");
    }
    end("A7");
 
@@ -552,11 +555,12 @@ int main()
       CHECK(lbl("title").find("NRTR QML") != std::string::npos && lbl("title").find(std::string("v") + NQ_EA_VERSION) != std::string::npos,
             "the title names the build (v" NQ_EA_VERSION ") so the file on the chart is recognisable");
       std::set<std::string> keys;
-      int dup = 0, rows = 0, empty = 0;
+      int dup = 0, rows = 0, empty = 0, studyRows = 0;
       for(auto &kv : SIM.objs)
       {
          if(kv.first.compare(0, 9, "NQEA_P_k_") != 0) continue;
-         rows++;
+         if(kv.first.compare(0, 10, "NQEA_P_k_f") == 0) studyRows++;   // the MH15 PLUS table's rows (v1.11.0) are counted apart
+         else rows++;
          std::string k = kv.second.s[OBJPROP_TEXT];
          if(keys.count(k)) dup++;
          keys.insert(k);
@@ -565,6 +569,7 @@ int main()
       }
       std::printf("    %d rows\n", rows);
       CHECK(rows == 12, "12 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, VOL REGIME + the 7 engine rows)");
+      CHECK(studyRows == (g_studies ? 9 : 0), "the MH15 PLUS table: 9 rows under its ladder when the studies are on, none when they are off");
       CHECK(dup == 0, "no key twice");
       CHECK(empty == 0, "every row has a value");
       CHECK(lbl("h1").find("ENGINE") != std::string::npos && lbl("h2").find("NY TRAP  +  PENDING ORDER BOARD") != std::string::npos, "engine table + board");
@@ -858,7 +863,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.10.0\"", "\"trade_swing\":\"ALL\"", "\"profit_lock\":false", "\"hand_managed\":0", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_MetalScalper\"", "\"ea_version\":\"1.11.0\"", "\"trade_swing\":\"ALL\"", "\"profit_lock\":false", "\"hand_managed\":0", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
                            "\"symbol\":\"XAUUSD\"", "\"metal\":\"GOLD\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"clock\":\"AUTO\"", "\"clock_offset_min\":180", "\"ny_dst\":true", "\"ny_open_min\":990", "\"london_open_min\":600", "\"asia_open_min\":60", "\"rollover_min\":0", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
@@ -1879,6 +1884,622 @@ int main()
       g_scalpSess = NQ_SESS_ALL;
    }
    end("M9");
+
+   // METAL-ONLY BEGIN (v1.11.0: the MH15 PLUS studies; the pure block is the same text in the crypto twin, proved by the derivation)
+   begin("S1 day forecast: ADR = mean range of the last 14 COMPLETED days, top / bottom, the snap, the states, nothing invented");
+   {
+      NqSeries d;
+      NqSeriesResize(d, 16);
+      d.sec = 86400;
+      for(int i = 0; i < 16; i++)
+      {
+         d.t[i] = T0 + (long long)i * 86400;
+         d.o[i] = 100.0;
+         d.h[i] = 100.0 + ((i == 0) ? 50.0 : (1.0 + 0.1 * i));   // day 0 is huge: it must NOT be in the 14-day ADR
+         d.l[i] = 100.0 - (1.0 + 0.1 * i);
+         d.c[i] = 100.5;
+         d.v[i] = 1;
+      }
+      // completed days 1..14 (day 15 is forming): ranges 2 + 0.2 i -> mean = 2 + 0.2 * 7.5 = 3.5
+      long long day = T0 + 15LL * 86400;
+      NqSeries s;
+      NqSeriesResize(s, 6);
+      s.sec = 300;
+      double hh[6] = {100.6, 100.9, 101.2, 101.0, 100.8, 101.1};
+      double ll[6] = {100.2, 100.5, 100.7, 100.4, 100.3, 100.6};
+      for(int i = 0; i < 6; i++)
+      {
+         s.t[i] = day - 600 + (long long)i * 300;   // the first two bars belong to YESTERDAY
+         s.o[i] = ll[i]; s.h[i] = hh[i]; s.l[i] = ll[i]; s.c[i] = hh[i] - 0.1; s.v[i] = 1;
+      }
+      long long now = day + 4 * 300;
+      NqDayFc f;
+      NqDayForecast(d, s, now, 14, 0.0, 0.0, 0.0, false, f);
+      CHECK(f.ok && near(f.adr, 3.5) && f.adrDays == 14 && f.dayStart == day, "ADR 3.5 from days 1..14: the forming day and the huge day 0 are not in it");
+      CHECK(f.barsToday == 4 && near(f.hi, 101.2) && near(f.lo, 100.3) && near(f.last, 101.0), "today = the closed bars since the broker day started (yesterday's two are not read)");
+      CHECK(near(f.pdh, d.h[14]) && near(f.pdl, d.l[14]) && near(f.pdc, 100.5), "the previous day = the last COMPLETED daily bar");
+      CHECK(near(f.topRaw, 100.3 + 3.5) && near(f.botRaw, 101.2 - 3.5) && near(f.top, 103.8) && near(f.bottom, 97.7) && f.topSnap == 0 && f.botSnap == 0,
+            "top = today's low + ADR, bottom = today's high - ADR (no snap without a tolerance)");
+      CHECK(near(f.usedPct, 100.0 * 0.9 / 3.5, 1e-9) && near(f.movePct, 100.0 * 0.5 / 3.5, 1e-9) && f.state == NQ_FD_FRESH && f.fullT == 0 && f.fadeDir == 0,
+            "used 25.7% = FRESH, move +14.3% of the ADR from yesterday's close, no ADR FULL yet");
+      // the snap: within 0.5 of the 4h swing high 104.1 -> moved onto it; the previous day's low 97.6 is nearer than the 4h swing low 97.4
+      NqDayForecast(d, s, now, 14, 104.1, 97.4, 0.5, false, f);
+      CHECK(near(f.top, 104.1) && f.topSnap == 1 && near(f.bottom, d.l[14]) && f.botSnap == 2, "snap: top onto the 4h swing high, bottom onto the previous day's low (the nearest wins)");
+      NqDayForecast(d, s, now, 14, 104.5, 96.0, 0.5, false, f);
+      CHECK(near(f.top, 103.8) && f.topSnap == 0 && near(f.bottom, 97.6) && f.botSnap == 2, "a swing further than the tolerance does not move the level");
+      // a day that fills its ADR on a new high: DONE, top in, the hypothetical fade
+      NqSeries s2;
+      NqSeriesResize(s2, 5);
+      s2.sec = 300;
+      double h2[5] = {100.6, 101.5, 102.9, 104.2, 103.9};
+      double l2[5] = {100.2, 100.5, 101.4, 102.8, 103.2};
+      for(int i = 0; i < 5; i++)
+      {
+         s2.t[i] = day + (long long)i * 300;
+         s2.o[i] = l2[i]; s2.h[i] = h2[i]; s2.l[i] = l2[i]; s2.c[i] = h2[i] - 0.2; s2.v[i] = 1;
+      }
+      NqDayForecast(d, s2, day + 5 * 300, 14, 0.0, 0.0, 0.0, false, f);
+      CHECK(f.ok && f.state == NQ_FD_DONE && f.usedPct >= 100.0 && near(f.top, 104.2) && near(f.bottom, 100.2), "range 4.0 >= ADR 3.5: DONE, top = today's high, bottom = today's low");
+      CHECK(f.fullT == day + 4 * 300 && f.fullSide == 1, "ADR FULL on the fourth bar's close, completed by a new high (top in)");
+      CHECK(f.fadeDir == -1 && near(f.fadeEntry, 104.0) && near(f.fadeSl, 104.2 + 0.875) && near(f.fadeTp1, 104.0 - 0.875) && near(f.fadeTp2, 104.0 - 1.75),
+            "the fade scenario: SELL from that close, stop 0.25 ADR beyond the day's high, targets 0.25 / 0.5 ADR back");
+      NqDayForecast(d, s2, day + 5 * 300, 14, 0.0, 0.0, 0.0, true, f);
+      CHECK(f.state == NQ_FD_EXPAND, "event mode: a full day on an event day reads EXPANSION");
+      // states by used %
+      NqSeries s3;
+      NqSeriesResize(s3, 1);
+      s3.sec = 300;
+      s3.t[0] = day; s3.o[0] = 100.0; s3.l[0] = 100.0; s3.v[0] = 1;
+      s3.h[0] = 101.5; s3.c[0] = 101.4;
+      NqDayForecast(d, s3, day + 300, 14, 0.0, 0.0, 0.0, false, f);
+      CHECK(f.state == NQ_FD_UP, "42.9% used, above yesterday's close: MOVING UP");
+      s3.h[0] = 100.4; s3.l[0] = 98.9; s3.c[0] = 99.0;
+      NqDayForecast(d, s3, day + 300, 14, 0.0, 0.0, 0.0, false, f);
+      CHECK(f.state == NQ_FD_DOWN, "42.9% used, below yesterday's close: MOVING DOWN");
+      s3.h[0] = 103.0; s3.l[0] = 100.0; s3.c[0] = 102.9;
+      NqDayForecast(d, s3, day + 300, 14, 0.0, 0.0, 0.0, false, f);
+      CHECK(f.state == NQ_FD_NEAR && f.fullT == 0, "85.7% used: NEAR FULL");
+      // nothing invented
+      NqSeries d13;
+      NqSeriesResize(d13, 14);
+      d13.sec = 86400;
+      for(int i = 0; i < 14; i++) { d13.t[i] = d.t[i + 2]; d13.o[i] = 100; d13.h[i] = 101; d13.l[i] = 99; d13.c[i] = 100; d13.v[i] = 1; }
+      NqDayForecast(d13, s, now, 14, 0.0, 0.0, 0.0, false, f);
+      CHECK(!f.ok && f.why.find("ADR needs 14 completed days (13 loaded)") == 0 && f.state == NQ_FD_UNKNOWN, "13 completed days: UNKNOWN, with the reason");
+      NqDayForecast(d, s, day + 2 * 86400, 14, 0.0, 0.0, 0.0, false, f);
+      CHECK(!f.ok && f.why == "no daily bar of today yet", "the newest daily bar is over: no bar of today, UNKNOWN");
+      NqSeries dm = d;
+      for(int i = 0; i < 16; i++) dm.t[i] = T0 + (long long)i * 900;
+      NqDayForecast(dm, s, T0 + 16 * 900, 14, 0.0, 0.0, 0.0, false, f);
+      CHECK(!f.ok && f.why == "the daily series is not daily", "a series that is not daily (a broker answering with another timeframe) is refused");
+      NqSeries none;
+      NqSeriesResize(none, 0);
+      NqDayForecast(d, none, now, 14, 0.0, 0.0, 0.0, false, f);
+      CHECK(!f.ok && f.why == "no closed bar of today yet" && near(f.adr, 3.5), "no closed intraday bar today: UNKNOWN (the ADR is still shown)");
+   }
+   end("S1");
+
+   begin("S2 rotation ladder: score = (room x 0.5 + min(|move|, 60)) x (1 in session, else 0.5); rank 1 = GO TRADE; the MH15 sessions");
+   {
+      CHECK(near(NqLadderScore(40.0, 30.0, true), 60.0) && near(NqLadderScore(40.0, -30.0, false), 30.0), "used 40, move 30: 60 in session, 30 outside (the sign of the move does not matter)");
+      CHECK(near(NqLadderScore(20.0, 95.0, true), 100.0) && near(NqLadderScore(130.0, 10.0, true), 10.0) && near(NqLadderRoom(130.0), 0.0),
+            "the move is capped at 60; a day past its ADR has no room");
+      std::vector<double> sc = {41.0, 55.5, 55.5};
+      std::vector<int> have = {1, 1, 1}, rank;
+      NqLadderRank(sc, have, 3, rank);
+      CHECK(rank[0] == 3 && rank[1] == 1 && rank[2] == 2, "rank 1 = the highest score; a tie keeps the row order");
+      have = {1, 0, 1};
+      NqLadderRank(sc, have, 3, rank);
+      CHECK(rank[0] == 2 && rank[1] == 0 && rank[2] == 1, "a row without data is not ranked");
+      // EET summer broker: 17:00 New York = 00:00 server
+      CHECK(NqNyMinute(0, 0) == 1020 && NqNyMinute(10 * 60, 0) == 180 && NqNyMinute(15 * 60, 0) == 480 && NqNyMinute(23 * 60 + 59, 0) == 1019, "server minute -> New York minute");
+      CHECK(NqNyMinute(21 * 60, 21 * 60) == 1020 && NqNyMinute(7 * 60, 21 * 60) == 180, "a GMT broker (17:00 New York = 21:00 server)");
+      CHECK(!NqMetalInSession(179) && NqMetalInSession(180) && NqMetalInSession(1019) && !NqMetalInSession(1020) && !NqMetalInSession(1200),
+            "a metal's sessions: London + New York = 03:00-17:00 New York");
+      CHECK(NqMh15Session(200) == "LONDON" && NqMh15Session(480) == "NEW YORK" && NqMh15Session(1150) == "ASIA" && NqMh15Session(60) == "ASIA" && NqMh15Session(1050) == "OFF",
+            "Asia 19:00-03:00, London 03:00-08:00, New York 08:00-17:00");
+   }
+   end("S2");
+
+   // a piecewise-linear path through turning points (bar index, price): small bars, so the ATR is small and the pivots are exact
+   auto zig = [&](const std::vector<std::pair<int, double>> &pts) {
+      NqSeries s;
+      int n = pts.back().first + 1;
+      NqSeriesResize(s, n);
+      s.sec = 900;
+      std::vector<double> c((size_t)n, pts[0].second);
+      for(size_t k = 0; k + 1 < pts.size(); k++)
+         for(int i = pts[k].first; i <= pts[k + 1].first; i++)
+            c[(size_t)i] = pts[k].second + (pts[k + 1].second - pts[k].second) * (i - pts[k].first) / (double)(pts[k + 1].first - pts[k].first);
+      for(int i = 0; i < n; i++)
+      {
+         double o = (i > 0) ? c[(size_t)i - 1] : c[0];
+         s.t[i] = T0 + (long long)i * 900;
+         s.o[i] = o;
+         s.c[i] = c[(size_t)i];
+         s.h[i] = std::max(o, c[(size_t)i]) + 0.01;
+         s.l[i] = std::min(o, c[(size_t)i]) - 0.01;
+         s.v[i] = 100;
+      }
+      return s;
+   };
+   auto mirror = [&](NqSeries s, double k) {
+      for(int i = 0; i < s.n; i++)
+      {
+         double o = k - s.o[i], c = k - s.c[i], h = k - s.l[i], l = k - s.h[i];
+         s.o[i] = o; s.c[i] = c; s.h[i] = h; s.l[i] = l;
+      }
+      return s;
+   };
+   auto ewAt = [&](const NqSeries &s, int at) {
+      std::vector<double> atr;
+      NqCalcATR(s.h, s.l, s.c, s.n, 14, atr);
+      std::vector<NqPivot> p8;
+      int n8 = NqFindPivots(s.h, s.l, s.n, 8, p8);
+      NqElliott e;
+      NqElliottCount(s, atr, p8, n8, at, e);
+      return e;
+   };
+   auto cut = [&](const NqSeries &s, int at) {
+      NqSeries c;
+      NqSeriesResize(c, at + 1);
+      c.sec = s.sec;
+      for(int i = 0; i <= at; i++) { c.t[i] = s.t[i]; c.o[i] = s.o[i]; c.h[i] = s.h[i]; c.l[i] = s.l[i]; c.c[i] = s.c[i]; c.v[i] = s.v[i]; }
+      return c;
+   };
+
+   begin("S3 Elliott count: PARTIAL until five waves pass every rule; the wave-3 setup triggers on the close beyond wave 1; five done = a setup against; no lookahead");
+   {
+      // P0 130 @100, P1 150 @110, P2 165 @105 (50% back), P3 195 @122, P4 210 @115 (above wave 1), P5 230 @127, then A / B / C
+      NqSeries s = zig({{0, 105}, {100, 105}, {130, 100}, {150, 110}, {165, 105}, {195, 122}, {210, 115}, {230, 127}, {250, 119}, {262, 123}, {285, 112}});
+      NqElliott e = ewAt(s, 170);
+      CHECK(e.stage == NQ_EW_UNKNOWN && e.setupDir == 0, "the wave-2 pivot is not confirmed yet (8 bars): UNKNOWN - a forming swing is never counted");
+      e = ewAt(s, 173);
+      CHECK(e.stage == NQ_EW_12 && e.dir == 1 && !e.complete && e.nP == 3 && e.setupDir == 0 && near(e.retr2, 5.02 / 10.02, 1e-6), "waves 1-2 printed, PARTIAL, not triggered: no setup");
+      CHECK(NqEwVote(e, 1) == 0 && NqEwVote(e, -1) == 0, "an untriggered 1-2 count votes nothing");
+      e = ewAt(s, 174);
+      CHECK(e.stage == NQ_EW_W3 && e.setupDir == 1 && e.setupIdx == 174 && e.setupLife == NQ_SU_ALIVE && near(e.entry, s.c[174]) && near(e.sl, 104.99) &&
+            near(e.t1, 104.99 + 10.02) && near(e.t2, 104.99 + 1.618 * 10.02) && e.horizon == 2 * (174 - 130),
+            "the first close beyond the wave-1 end TRIGGERS the wave-3 setup: SL = wave 2, targets 1 and 1.618 x wave 1, horizon = twice the count's bars");
+      CHECK(NqEwVote(e, 1) == 1 && NqEwVote(e, -1) == -1, "a live wave-3 setup votes with the impulse and against the other side");
+      e = ewAt(s, 196);
+      CHECK(e.stage == NQ_EW_W3 && e.setupIdx == 174 && e.setupLife == NQ_SU_TARGET && NqEwVote(e, 1) == 0, "target 2 reached: the setup is over and votes nothing");
+      e = ewAt(s, 203);
+      CHECK(e.stage == NQ_EW_W4 && e.setupDir == 0 && !e.complete && near(e.w3x, 17.02 / 10.02, 1e-6) && NqEwVote(e, 1) == 0, "wave 3 printed: the wave-4 pullback is not a setup");
+      e = ewAt(s, 218);
+      CHECK(e.stage == NQ_EW_W5 && !e.late && NqEwVote(e, 1) == 0, "wave 5 underway, still inside wave 3: no vote");
+      e = ewAt(s, 223);
+      CHECK(e.stage == NQ_EW_W5 && e.late && NqEwVote(e, 1) == -1 && NqEwVote(e, -1) == 0, "beyond the wave-3 end: DO NOT ADD LATE - against a buy, nothing for a sell");
+      e = ewAt(s, 238);
+      CHECK(e.stage == NQ_EW_DONE && e.complete && e.nP == 6 && e.setupDir == -1 && e.setupIdx == 238 && e.setupLife == NQ_SU_ALIVE && near(e.sl, 127.01) &&
+            near(e.t1, 127.01 - 0.382 * 27.02) && near(e.t2, 127.01 - 0.618 * 27.02),
+            "five waves COMPLETE: the setup is AGAINST the impulse, SL = the wave-5 end, targets 38.2% / 61.8% of the move");
+      CHECK(NqEwVote(e, -1) == 1 && NqEwVote(e, 1) == -1, "a finished five votes for the reversal");
+      e = ewAt(s, 258);
+      CHECK(e.stage == NQ_EW_ABC && e.abc == 1 && e.dir == 1 && e.setupDir == 0 && NqEwVote(e, 1) == 0 && NqEwVote(e, -1) == 0, "the next pivot after a finished five is labelled A (labels only)");
+      // no lookahead: the count at bar t from the first t+1 bars equals the count at t from the whole series
+      int diff = 0;
+      for(int at = 140; at < s.n; at++)
+      {
+         NqElliott a = ewAt(s, at), b = ewAt(cut(s, at), at);
+         if(a.stage != b.stage || a.dir != b.dir || a.setupDir != b.setupDir || a.setupLife != b.setupLife || a.setupIdx != b.setupIdx || !near(a.entry, b.entry)) diff++;
+      }
+      CHECK(diff == 0, "walked forward: the count at every bar is the same with and without the bars after it");
+      // the rules
+      NqElliott r = ewAt(zig({{0, 105}, {100, 105}, {130, 100}, {150, 110}, {165, 109}, {200, 122}}), 180);
+      CHECK(r.stage == NQ_EW_UNKNOWN, "wave 2 retraces 10% (< 23.6%): no count");
+      r = ewAt(zig({{0, 105}, {100, 105}, {130, 100}, {150, 110}, {165, 105}, {195, 122}, {210, 109}, {230, 127}}), 220);
+      CHECK(r.stage != NQ_EW_W5, "wave 4 enters wave 1: not wave 5 of that impulse");
+      r = ewAt(zig({{0, 105}, {100, 105}, {130, 100}, {150, 110}, {165, 105}, {180, 99.5}, {200, 104}}), 176);
+      CHECK(r.stage == NQ_EW_UNKNOWN, "a bar passes the start of wave 1: the 1-2 count is dead");
+      // the mirror: a down impulse
+      NqSeries m = mirror(s, 230.0);
+      e = ewAt(m, 174);
+      CHECK(e.stage == NQ_EW_W3 && e.dir == -1 && e.setupDir == -1 && near(e.sl, 230.0 - 104.99) && NqEwVote(e, -1) == 1, "the bearish mirror counts the same way");
+      // nothing made in the first 120 bars is a setup
+      NqSeries early = zig({{0, 105}, {10, 105}, {40, 100}, {60, 110}, {75, 105}, {105, 122}, {120, 115}});
+      e = ewAt(early, 84);
+      CHECK(e.stage == NQ_EW_W3 && e.setupDir == 0 && NqEwVote(e, 1) == 0, "a trigger inside the first 120 loaded bars is shown but is not a setup (the walk has not settled)");
+   }
+   end("S3");
+
+   begin("S4 Wolfe wave: five points confirmed (entry, SL, TP1, TP2, expiry), DEVELOPING is never a setup, stop / target / mirror");
+   {
+      auto wwAt = [&](const NqSeries &s, int at) {
+         std::vector<double> atr;
+         NqCalcATR(s.h, s.l, s.c, s.n, 14, atr);
+         std::vector<NqPivot> p10;
+         int n10 = NqFindPivots(s.h, s.l, s.n, 10, p10);
+         NqWolfe w;
+         NqWolfeWave(s, atr, p10, n10, at, w);
+         return w;
+      };
+      // 1 low 100 @140, 2 high 110 @160, 3 low 96 @180, 4 high 101 @200, 5 low 92 @220 (on line 1-3), then up
+      NqSeries s = zig({{0, 105}, {110, 105}, {140, 100}, {160, 110}, {180, 96}, {200, 101}, {220, 92}, {300, 108}});
+      NqWolfe w = wwAt(s, 215);
+      CHECK(w.state == NQ_WW_DEVELOPING && w.dir == 1 && NqWolfeVote(w, 1) == 0 && NqWolfeVote(w, -1) == 0, "points 1-4 fit, point 5 not printed: DEVELOPING, never a vote");
+      CHECK(near(w.zoneLo, 92.49 - 0.15 * 14.02, 1e-6) && near(w.zoneHi, 92.49 + 0.15 * 14.02, 1e-6), "its zone: line 1-3 at the newest bar +/- 15% of the pattern height");
+      w = wwAt(s, 229);
+      CHECK(w.state == NQ_WW_DEVELOPING, "point 5 printed but not confirmed (10 bars): still developing");
+      w = wwAt(s, 230);
+      double apex = (10.02 - 0.1 * 140 + 0.225 * 160) / 0.125;
+      double epa = 99.99 + 1.02 / 60.0 * (apex - 140);
+      std::vector<double> atr;
+      NqCalcATR(s.h, s.l, s.c, s.n, 14, atr);
+      CHECK(w.state == NQ_WW_CONFIRMED && w.dir == 1 && w.detIdx == 230 && w.life == NQ_SU_ALIVE && near(w.entry, s.c[230]) && near(w.apex, apex, 1e-6),
+            "bullish Wolfe CONFIRMED on the bar that confirms point 5; entry = that bar's close; the apex is where 1-3 and 2-4 meet");
+      CHECK(near(w.sl, 91.99 - 0.5 * atr[230]) && near(w.tp1, 101.01) && near(w.tp2, epa, 1e-6) && w.expiryIdx == (int)std::ceil(apex) + 80,
+            "SL = point 5 - 0.5 ATR, TP1 = the nearer of point 4 and the EPA, TP2 = the further, expiry one pattern length after the apex");
+      CHECK(NqWolfeVote(w, 1) == 1 && NqWolfeVote(w, -1) == -1, "a live confirmed Wolfe votes its direction");
+      w = wwAt(s, 275);
+      CHECK(w.state == NQ_WW_CONFIRMED && w.life == NQ_SU_TARGET && NqWolfeVote(w, 1) == 0, "TP2 reached: over, no vote");
+      NqSeries st = zig({{0, 105}, {110, 105}, {140, 100}, {160, 110}, {180, 96}, {200, 101}, {220, 92}, {232, 94.4}, {245, 90}});
+      w = wwAt(st, 240);
+      CHECK(w.state == NQ_WW_CONFIRMED && w.life == NQ_SU_STOPPED && NqWolfeVote(w, 1) == 0, "price through point 5 - 0.5 ATR: stopped, no vote");
+      NqSeries m = mirror(s, 200.0);
+      w = wwAt(m, 230);
+      CHECK(w.state == NQ_WW_CONFIRMED && w.dir == -1 && near(w.tp1, 200.0 - 101.01) && w.sl > 200.0 - 91.99 && NqWolfeVote(w, -1) == 1, "the bearish mirror (a rising wedge)");
+      // point 5 far from line 1-3: not a Wolfe
+      NqSeries far = zig({{0, 105}, {110, 105}, {140, 100}, {160, 110}, {180, 96}, {200, 101}, {220, 86}, {300, 108}});
+      w = wwAt(far, 232);
+      CHECK(w.state != NQ_WW_CONFIRMED, "point 5 more than 15% of the height away from line 1-3: not confirmed");
+      // lines that do not converge within one pattern length: not a Wolfe
+      NqSeries wide = zig({{0, 105}, {110, 105}, {140, 100}, {160, 110}, {180, 96}, {200, 104}, {220, 92}, {300, 108}});
+      w = wwAt(wide, 232);
+      CHECK(w.state != NQ_WW_CONFIRMED, "the apex further than one pattern length after point 5: not confirmed");
+   }
+   end("S4");
+
+   begin("S5 Fibonacci extension, anchored VWAP, volume profile (tick volume)");
+   {
+      // A low 100 @130, B high 110 @150, C low 105 @162 (holds inside A-B), up to 113, then down through C
+      NqSeries s = zig({{0, 105}, {100, 105}, {130, 100}, {150, 110}, {162, 105}, {190, 113}, {215, 103}});
+      std::vector<NqPivot> p5;
+      int n5 = NqFindPivots(s.h, s.l, s.n, 5, p5);
+      NqFibExt f;
+      NqFibExtension(s, p5, n5, 190, f);
+      CHECK(f.ok && f.dir == 1 && near(f.a, 99.99) && near(f.b, 110.01) && near(f.c, 104.99) && near(f.lv[0], 104.99 + 0.618 * 10.02) && near(f.lv[1], 115.01) &&
+            near(f.lv[5], 104.99 + 2.618 * 10.02), "A, B, C = the last three alternating pivots; level = C + ratio x (B - A)");
+      CHECK(f.reached == 1 && !f.invalid, "0.618 was traded by a later closed bar, 1.0 was not; the set is valid");
+      NqFibExtension(s, p5, n5, 215, f);
+      CHECK(f.ok && near(f.c, 104.99) && f.invalid && f.reached == 1, "the newest pivot went beyond: the three before it stay A-B-C; a close beyond C INVALIDATES the set");
+      NqFibExtension(s, p5, n5, 140, f);
+      CHECK(!f.ok, "fewer than three pivots: no set");
+      // anchored VWAP: two bars, typical 10 (volume 1) and 20 (volume 3)
+      NqSeries v;
+      NqSeriesResize(v, 2);
+      v.h[0] = 10; v.l[0] = 10; v.c[0] = 10; v.v[0] = 1;
+      v.h[1] = 20; v.l[1] = 20; v.c[1] = 20; v.v[1] = 3;
+      double vw = 0, band = 0;
+      CHECK(NqAnchoredVwap(v, 0, 1, vw, band) && near(vw, 17.5) && near(band, std::sqrt(18.75), 1e-9), "VWAP 17.5, band = the volume-weighted standard deviation");
+      CHECK(NqAnchoredVwap(v, 1, 1, vw, band) && near(vw, 20.0) && near(band, 0.0) && !NqAnchoredVwap(v, 2, 1, vw, band), "from the anchor bar onward; an anchor after the end = none");
+      // volume profile: ten bars 100-101 and one bar 100-110, 100 ticks each, 40 rows of 0.25
+      NqSeries q;
+      NqSeriesResize(q, 11);
+      for(int i = 0; i < 11; i++) { q.l[i] = 100; q.h[i] = (i == 5) ? 110 : 101; q.c[i] = 100.5; q.v[i] = 100; }
+      NqProfile p;
+      NqVolumeProfile(q, 0, 10, 40, p);
+      CHECK(p.ok && near(p.step, 0.25) && near(p.poc, 100.125) && near(p.vah, 101.0) && near(p.val, 100.0), "POC = the busiest row; the value area grows outward to 70% of the activity");
+      NqSeries flat;
+      NqSeriesResize(flat, 3);
+      for(int i = 0; i < 3; i++) { flat.l[i] = 100; flat.h[i] = 100; flat.c[i] = 100; flat.v[i] = 1; }
+      NqVolumeProfile(flat, 0, 2, 40, p);
+      CHECK(!p.ok, "a series with no range has no profile");
+      // the set on one series, and its two context votes
+      NqSeries e = zig({{0, 105}, {100, 105}, {130, 100}, {150, 110}, {165, 105}, {195, 122}, {210, 115}, {230, 127}, {250, 119}});
+      NqStudySet S;
+      NqRunStudies(cut(e, 238), e.t[200], S);
+      CHECK(S.ok && S.nBars == 239 && S.ew.stage == NQ_EW_DONE && S.haveAvHi && S.haveAvLo && S.haveAvDay && S.vp.ok && S.vp.val < S.vp.poc && S.vp.poc < S.vp.vah,
+            "one run: Elliott, the three anchored VWAPs and the profile");
+      CHECK(S.close > S.avLo && S.close < S.avHi && NqAvwapVote(S, 1) == 0, "price between the two swing-anchored VWAPs: no vote");
+      S.avHi = S.close - 1.0;
+      CHECK(NqAvwapVote(S, 1) == 1 && NqAvwapVote(S, -1) == -1, "above both anchored VWAPs: for a buy, against a sell");
+      S.vp.val = S.close + 1.0;
+      S.vp.vah = S.close + 2.0;
+      CHECK(NqValueVote(S, 1) == -1 && NqValueVote(S, -1) == 1, "below the value area: against a buy, for a sell");
+      NqSeries tiny = cut(e, 20);
+      NqRunStudies(tiny, 0, S);
+      CHECK(!S.ok && NqAvwapVote(S, 1) == 0 && NqValueVote(S, 1) == 0, "fewer than 30 bars: no studies, no votes");
+   }
+   end("S5");
+
+   // daily bars for the simulated broker: `before` synthetic days of range R before T0, then the market's own days
+   auto makeDays = [&](const Market &m, int before, double R) {
+      std::vector<MqlRates> d;
+      double p0 = m.m1[0].o;
+      for(int k = before; k >= 1; k--) d.push_back({T0 - (long long)k * 86400, p0, p0 + R / 2, p0 - R / 2, p0, 100, 0, 0});
+      for(const SBar &b : agg(m.m1, 86400)) d.push_back({b.t, b.o, b.h, b.l, b.c, 100, 0, 0});
+      return d;
+   };
+   auto todayHiLo = [&](double &hi, double &lo) {
+      hi = -1e18; lo = 1e18;
+      for(const MqlRates &b : SIM.m5)
+         if(b.time >= g_fc.dayStart && b.time + 300 <= SIM.now) { hi = std::max(hi, b.high); lo = std::min(lo, b.low); }
+   };
+
+   begin("S6 the table on a simulated broker: ADR from the broker's daily bars, today from closed M5 bars, no daily bars = UNKNOWN and no gate, fold");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      relax();
+      CHECK(g_studies && !g_fc.ok && g_fc.why == "no daily bars" && lbl("v_f1").find("UNKNOWN - no daily bars (no gate)") == 0, "the broker serves no daily bars: the forecast is UNKNOWN and says why");
+      g_adrGate = true;
+      std::string why;
+      CHECK(!NqAdrRoomBlocks(1, SIM.bid, SIM.bid + 1000.0, why) && !NqStudiesBlock(1, SIM.bid, SIM.bid + 1000.0, why), "UNKNOWN gates nothing");
+      OnDeinit(0);
+
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      SIM.d1 = makeDays(gold, 20, 20.0);
+      startAt(START);
+      relax();
+      run(START + 1, START + 200);
+      double sum = 0.0;
+      int nc = 0;
+      for(int i = (int)SIM.d1.size() - 1; i >= 0 && nc < 14; i--)
+         if(SIM.d1[(size_t)i].time + 86400 <= SIM.now) { sum += SIM.d1[(size_t)i].high - SIM.d1[(size_t)i].low; nc++; }
+      double hi = 0, lo = 0;
+      todayHiLo(hi, lo);
+      CHECK(g_fc.ok && nc == 14 && near(g_fc.adr, sum / 14.0, 1e-9) && g_fc.dayStart == T0 + 4 * 86400, "ADR = the mean range of the last 14 completed broker days; the day starts where the daily bar starts");
+      CHECK(near(g_fc.hi, hi) && near(g_fc.lo, lo) && near(g_fc.usedPct, 100.0 * (hi - lo) / g_fc.adr, 1e-9), "today's high / low = the closed M5 bars since the day started (never the forming bar)");
+      CHECK(near(g_fc.top, std::max(lo + g_fc.adr, hi)) && near(g_fc.bottom, std::min(hi - g_fc.adr, lo)), "top / bottom (no 4h bars at this broker: no snap)");
+      std::printf("    ADR %.2f, used %.0f%% %s, top %.2f bottom %.2f\n", g_fc.adr, g_fc.usedPct, NqFdStateText(g_fc.state).c_str(), g_fc.top, g_fc.bottom);
+      CHECK(lbl("tF") != "<missing>" && lbl("hF").find("MH15 PLUS") == 0 && lbl("v_f1").find("ADR ") == 0 && lbl("v_f1").find(" used ") != std::string::npos,
+            "the MH15 PLUS table is on the chart with the DAY FORECAST row");
+      CHECK(lbl("fl0_0") == "GOLD" && lbl("fl1_0") == "SILVER" && lbl("fl2_0") == "COPPER" && lbl("fl0_1") == "XAUUSD" && lbl("fl0_7").find("(this chart)") != std::string::npos &&
+            lbl("fl1_2").find("UNKNOWN - not on this broker") == 0, "three ladder rows; a metal the broker does not serve is UNKNOWN");
+      CHECK(g_ldBest == 0 && g_ldRank[0] == 1 && NqLadderKnown() == 1, "one row with data: it is #1, and with fewer than two rows the ladder gates nothing");
+      g_ladderGate = true;
+      g_ldRank[0] = 3;
+      CHECK(!NqStudiesBlock(1, SIM.bid, SIM.bid + 0.01, why), "... even if it were ranked last");
+      g_ladderGate = false;
+      CHECK(SIM.objs.count("NQEA_C_FC_T") == 1 && SIM.objs.count("NQEA_C_FC_B") == 1, "the forecast top / bottom are drawn on the chart");
+      // the gate, on the live forecast: a buy whose target is beyond the top is removed, one that fits is not
+      g_adrGate = true;
+      double e1 = g_fc.top - 1.0;
+      CHECK(NqAdrRoomBlocks(1, e1, e1 + 1.5, why) && why.find("ADR ROOM: BUY") == 0 && !NqAdrRoomBlocks(1, e1, e1 + 0.9, why), "BUY 1.0 under the top: a 1.5 target is blocked, a 0.9 target fits");
+      double e2 = g_fc.bottom + 1.0;
+      CHECK(NqAdrRoomBlocks(-1, e2, e2 - 1.5, why) && why.find("ADR ROOM: SELL") == 0 && !NqAdrRoomBlocks(-1, e2, e2 - 0.9, why), "SELL 1.0 above the bottom: the mirror");
+      CHECK(NqAdrRoomBlocks(1, g_fc.top + 0.5, g_fc.top + 0.6, why) && why.find("has nothing left") != std::string::npos, "a breakout entry above the top has no room at all");
+      int keep = g_fc.state;
+      g_fc.state = NQ_FD_EXPAND;
+      CHECK(!NqAdrRoomBlocks(1, e1, e1 + 1.5, why), "EXPANSION (event mode): the gate stands down");
+      g_fc.state = keep;
+      g_adrGate = false;
+      CHECK(!NqAdrRoomBlocks(1, e1, e1 + 1.5, why), "gate off: nothing is removed");
+      // fold / unfold
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "NQEA_P_hF");
+      CHECK(g_fcCollapsed && lbl("v_f1") == "<missing>" && lbl("hF").find("(click: unfold)") != std::string::npos, "a click on the table's header folds it");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "NQEA_P_hF");
+      CHECK(!g_fcCollapsed && lbl("v_f1").find("ADR ") == 0, "... and unfolds it");
+      std::string tj = NqTelemetryJson();
+      CHECK(tj.find("\"mh15\":{\"on\":true") != std::string::npos && tj.find("\"ladder\":[{\"name\":\"GOLD\",\"symbol\":\"XAUUSD\",\"ok\":true") != std::string::npos &&
+            tj.find("\"go_trade\":\"GOLD\"") != std::string::npos, "telemetry carries the table (ANALYSIS ONLY)");
+      OnDeinit(0);
+   }
+   end("S6");
+
+   begin("S7 ADR ROOM end to end: with the gate ON no order is opened or left resting whose first target is outside the day's forecast range");
+   {
+      // returns the number of opening requests whose first target did not fit when they were sent
+      auto runDay = [&](bool gate, int &opened, int &blocks, int &restingBad) {
+         load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+         SIM.d1 = makeDays(gold, 20, 4.0);     // quiet days before: a small ADR, so the day fills it
+         startAt(START);
+         relax();
+         g_adrGate = gate;
+         opened = 0; blocks = 0; restingBad = 0;
+         int bad = 0;
+         std::string lastNote;
+         for(size_t i = START + 1; i <= END; i++)
+         {
+            size_t before = SIM.sent.size();
+            stepTo(i);
+            if(!g_fc.ok) continue;
+            for(size_t k = before; k < SIM.sent.size(); k++)
+            {
+               const MqlTradeRequest &r = SIM.sent[k];
+               bool pend = (r.action == TRADE_ACTION_PENDING);
+               bool mkt = (r.action == TRADE_ACTION_DEAL && r.position == 0);
+               if(!pend && !mkt) continue;
+               opened++;
+               int dir = (r.type == ORDER_TYPE_BUY || r.type == ORDER_TYPE_BUY_LIMIT || r.type == ORDER_TYPE_BUY_STOP) ? 1 : -1;
+               double target = r.tp;
+               NqPlan p;
+               if(pend && NqPlanByComment(r.comment, p)) target = p.tp1;
+               double room = (dir > 0) ? (g_fc.top - r.price) : (r.price - g_fc.bottom);
+               if(room < std::fabs(target - r.price) - 1e-9) bad++;
+            }
+            for(const SimOrder &o : SIM.ord)
+            {
+               NqPlan p;
+               if(!NqPlanByComment(o.comment, p)) continue;
+               double room = (p.dir > 0) ? (g_fc.top - p.entry) : (p.entry - g_fc.bottom);
+               if(room < std::fabs(p.tp1 - p.entry) - 1e-9) restingBad++;
+            }
+            if(g_studyNote != lastNote) { lastNote = g_studyNote; if(lastNote.find("ADR ROOM") == 0) blocks++; }
+         }
+         OnDeinit(0);
+         return bad;
+      };
+      int openedOff = 0, blocksOff = 0, restOff = 0, openedOn = 0, blocksOn = 0, restOn = 0;
+      int badOff = runDay(false, openedOff, blocksOff, restOff);
+      int badOn = runDay(true, openedOn, blocksOn, restOn);
+      std::printf("    gate OFF: %d opening requests, %d with a target outside the range, %d resting-order minutes outside; gate ON: %d requests, %d outside, %d resting outside, %d blocks\n",
+                  openedOff, badOff, restOff, openedOn, badOn, restOn, blocksOn);
+      CHECK(openedOff > 0 && badOff + restOff > 0 && blocksOff == 0, "without the gate the run does send or rest orders whose target is outside the range (else this check would prove nothing)");
+      CHECK(openedOn > 0 && badOn == 0 && restOn == 0, "with the gate: every order sent fits, and a resting order whose room is gone is pulled the same minute");
+      CHECK(blocksOn > 0 && openedOn <= openedOff, "the gate only removes entries (never more than the run without it), and says so on the table");
+   }
+   end("S7");
+
+   begin("S8 the ladder across gold / silver / copper: peers found by the chart's spelling, ranked by score, the last row stands aside");
+   {
+      Market silverL = makeMarket(5, 60.9, 0.001, 0.006, (int)DAYS);
+      Market copperL = makeMarket(9, 4.52, 0.0001, 0.0006, (int)DAYS);
+      auto serve = [&](const char *name, const Market &m, double R) {
+         SIM.extraTf[name][(int)PERIOD_D1] = makeDays(m, 20, R);
+         SIM.extraTf[name][(int)PERIOD_M5] = toRates(m.m5);
+      };
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      SIM.d1 = makeDays(gold, 20, 20.0);
+      serve("XAGUSD", silverL, 0.9);
+      serve("XCUUSD", copperL, 0.08);
+      startAt(START);
+      relax();
+      run(START + 1, START + 400);
+      CHECK(g_ldSym[0] == "XAUUSD" && g_ldSym[1] == "XAGUSD" && g_ldSym[2] == "XCUUSD", "AUTO: the broker's silver and copper symbols are found");
+      CHECK(g_ldFc[0].ok && g_ldFc[1].ok && g_ldFc[2].ok && NqLadderKnown() == 3, "all three rows have a forecast");
+      // a peer's forecast is its own: its ADR from its daily bars, its day from its closed M5 bars
+      double hi = -1e18, lo = 1e18;
+      for(const SBar &b : silverL.m5)
+         if(b.t >= g_ldFc[1].dayStart && b.t + 300 <= SIM.now) { hi = std::max(hi, b.h); lo = std::min(lo, b.l); }
+      CHECK(near(g_ldFc[1].hi, hi) && near(g_ldFc[1].lo, lo) && g_ldFc[1].adr > 0.0 && near(g_ldFc[1].usedPct, 100.0 * (hi - lo) / g_ldFc[1].adr, 1e-9), "silver's row is silver's own day");
+      int bad = 0, best = -1;
+      for(int k = 0; k < 3; k++)
+      {
+         if(!near(g_ldScore[k], NqLadderScore(g_ldFc[k].usedPct, g_ldFc[k].movePct, g_ldInSess), 1e-9)) bad++;
+         if(best < 0 || g_ldScore[k] > g_ldScore[best]) best = k;
+      }
+      std::printf("    scores: gold %.1f (#%d)  silver %.1f (#%d)  copper %.1f (#%d)  session x%s\n", g_ldScore[0], g_ldRank[0], g_ldScore[1], g_ldRank[1],
+                  g_ldScore[2], g_ldRank[2], g_ldInSess ? "1.0" : "0.5");
+      CHECK(bad == 0 && g_ldBest == best && g_ldRank[best] == 1 && g_ldRank[0] + g_ldRank[1] + g_ldRank[2] == 6, "score per row, ranks 1-2-3, GO TRADE = the highest score");
+      std::string rk = "fl" + std::to_string(best) + "_7";
+      CHECK(lbl(rk.c_str()).find("#1  GO TRADE") == 0 && lbl("v_f0").find(std::string("GO TRADE = ") + NqPeerName(best)) == 0, "the table names the GO TRADE row");
+      // the gate: the last of three stands aside, the top two may open
+      std::string why;
+      g_ladderGate = true;
+      int own = g_ldRank[0];
+      double ownScore = g_ldScore[0];
+      g_ldRank[0] = 3;
+      g_ldScore[0] = g_ldScore[g_ldBest] - 10.0;
+      CHECK(NqLadderAside(0) && NqStudiesBlock(1, SIM.bid, SIM.bid + 0.01, why) && why.find("LADDER: GOLD is #3 of 3") == 0 && g_studyNote == why,
+            "gold #3 of 3 and 10 points under the GO TRADE row: stands aside (and LAST BLOCK says so)");
+      g_ldScore[0] = g_ldScore[g_ldBest] - 9.9;
+      CHECK(!NqLadderAside(0) && !NqStudiesBlock(1, SIM.bid, SIM.bid + 0.01, why), "#3 but within 10 points of the best: a near tie is no difference, no block");
+      g_ldScore[0] = g_ldScore[g_ldBest] - 30.0;
+      g_ldRank[0] = 2;
+      CHECK(!NqLadderAside(0) && !NqStudiesBlock(1, SIM.bid, SIM.bid + 0.01, why), "#2 of 3 may open (top 2) however far behind");
+      g_ldRank[0] = own;
+      g_ldScore[0] = ownScore;
+      g_ladderGate = false;
+      CHECK(!NqStudiesBlock(1, SIM.bid, SIM.bid + 0.01, why), "gate off: the ladder is shown, nothing is removed");
+      OnDeinit(0);
+
+      // end to end: with the ladder gate ON, an order opens only while gold is in the top two
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      SIM.d1 = makeDays(gold, 20, 4.0);       // a small ADR: gold fills its day and drops down the ladder
+      serve("XAGUSD", silverL, 0.9);
+      serve("XCUUSD", copperL, 0.08);
+      startAt(START);
+      relax();
+      g_ladderGate = true;
+      int opened = 0, openedLast = 0, minutesLast = 0;
+      for(size_t i = START + 1; i <= END; i++)
+      {
+         size_t before = SIM.sent.size();
+         stepTo(i);
+         if(NqLadderAside(0)) minutesLast++;
+         for(size_t k = before; k < SIM.sent.size(); k++)
+         {
+            const MqlTradeRequest &r = SIM.sent[k];
+            if(r.action != TRADE_ACTION_PENDING && !(r.action == TRADE_ACTION_DEAL && r.position == 0)) continue;
+            opened++;
+            if(NqLadderAside(0)) openedLast++;
+         }
+      }
+      std::printf("    gold stood aside (#3, 10+ under the best) for %d of %d minutes; %d orders opened, %d of them while aside\n", minutesLast, (int)(END - START), opened, openedLast);
+      CHECK(minutesLast > 0 && opened > 0 && openedLast == 0, "no order is opened while gold stands aside");
+      OnDeinit(0);
+
+      // the chart's spelling is kept: XAUUSD.m looks for XAGUSD.m first
+      load(gold, "XAUUSD.m", "XAU", 2, 0.01, 1.0);
+      SIM.d1 = makeDays(gold, 20, 20.0);
+      serve("XAGUSD.m", silverL, 0.9);
+      serve("XAGUSD", silverL, 0.9);
+      startAt(START);
+      CHECK(g_ldSym[0] == "XAUUSD.m" && g_ldSym[1] == "XAGUSD.m" && g_ldSym[2] == "", "prefix / suffix of the chart symbol first; a metal the broker lacks stays out");
+      relax();
+      run(START + 1, START + 10);
+      CHECK(NqLadderKnown() == 2 && g_ldRank[2] == 0 && lbl("fl2_2").find("UNKNOWN - not on this broker") == 0, "two rows ranked, copper UNKNOWN");
+      g_ladderGate = true;
+      g_ldRank[0] = 2;
+      std::string why2;
+      CHECK(!NqStudiesBlock(1, SIM.bid, SIM.bid + 0.01, why2), "#2 of 2 is inside the top two: no block");
+      OnDeinit(0);
+
+      // a broker that answers a daily request with another timeframe: refused, never ranked
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      SIM.d1 = makeDays(gold, 20, 20.0);
+      SIM.macro15 = toRates(silverL.m15);     // any second symbol answers with these M15 bars, whatever timeframe is asked
+      startAt(START);
+      relax();
+      run(START + 1, START + 10);
+      CHECK(g_ldSym[1] != "" && !g_ldFc[1].ok && g_ldFc[1].why == "the daily series is not daily" && g_ldRank[1] == 0, "bars that are not daily are not an ADR: the row is UNKNOWN");
+      OnDeinit(0);
+      SIM.macro15.clear();
+   }
+   end("S8");
+
+   begin("S9 the study vote: two studies against an entry block it, one does not; the table shows the vote");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      relax();
+      run(START + 1, START + 60);
+      CHECK(g_st.ok && g_st.nBars > 100 && lbl("v_f3") != "<missing>" && lbl("v_f6").find("AVWAP from the high") == 0, "the pattern studies run on the closed M15 bars and are on the table");
+      g_studyGate = true;
+      g_st.ew.stage = NQ_EW_UNKNOWN;
+      g_st.ww.state = NQ_WW_NONE;
+      g_st.close = 100.0;
+      g_st.haveAvHi = true; g_st.haveAvLo = true; g_st.avHi = 101.0; g_st.avLo = 102.0;
+      g_st.vp.ok = true; g_st.vp.val = 100.5; g_st.vp.vah = 103.0;
+      std::string why, voters;
+      CHECK(NqStudyVote(1, voters) == -2 && NqStudyVote(-1, voters) == 2, "below both anchored VWAPs and below the value area: BUY -2, SELL +2");
+      CHECK(!NqStudiesBlock(1, SIM.bid, SIM.bid + 0.01, why) && !NqStudiesBlock(-1, SIM.bid, SIM.bid - 0.01, why),
+            "context alone (-2 from the VWAPs and the value area) never blocks: no setup is among the objectors");
+      g_st.vp.ok = false;
+      g_st.ew.stage = NQ_EW_W3; g_st.ew.dir = -1; g_st.ew.setupDir = -1; g_st.ew.setupLife = NQ_SU_ALIVE;
+      CHECK(NqStudyVote(1, voters) == -2 && voters.find("elliott wave-3 setup down -1") == 0, "a live Elliott wave-3 setup down + below both VWAPs: BUY -2");
+      CHECK(NqStudiesBlock(1, SIM.bid, SIM.bid + 0.01, why) && why.find("STUDIES AGAINST BUY (vote -2: elliott wave-3 setup down -1, avwap below both -1)") == 0,
+            "a setup against, confirmed by the context: the buy is blocked and the voters are named");
+      CHECK(!NqStudiesBlock(-1, SIM.bid, SIM.bid - 0.01, why), "the sell is not touched");
+      NqDrawPanel();
+      CHECK(lbl("v_f7").find("vote BUY -2 / SELL +2  (blocks at -2 with a live setup against)") == 0 && lbl("v_f8").find("STUDIES AGAINST BUY") == 0, "STUDY VOTE and LAST BLOCK rows");
+      g_st.haveAvHi = false;
+      CHECK(NqStudyVote(1, voters) == -1 && !NqStudiesBlock(1, SIM.bid, SIM.bid + 0.01, why), "the setup alone (-1) does not block");
+      g_st.haveAvHi = true;
+      g_st.ww.state = NQ_WW_CONFIRMED; g_st.ww.dir = 1; g_st.ww.life = NQ_SU_ALIVE;
+      CHECK(NqStudyVote(1, voters) == -1 && !NqStudiesBlock(1, SIM.bid, SIM.bid + 0.01, why), "a live bullish Wolfe votes for the buy: -1 net, not blocked");
+      g_studyGate = false;
+      g_st.ww.state = NQ_WW_NONE;
+      CHECK(NqStudyVote(1, voters) == -2 && !NqStudiesBlock(1, SIM.bid, SIM.bid + 0.01, why), "gate off: the vote is shown, nothing is removed");
+      g_studies = false;
+      CHECK(NqStudyVote(1, voters) == 0 && !NqStudiesBlock(1, SIM.bid, SIM.bid + 0.01, why), "master switch off: no vote, no gate");
+      OnDeinit(0);
+   }
+   end("S9");
+
+   begin("S10 copper is the third metal: the detector, the panel, its row on the ladder");
+   {
+      CHECK(NqMetalOf("XCUUSD", "XCU", "USD") == NQ_METAL_COPPER && NqMetalOf("COPPER", "", "USD") == NQ_METAL_COPPER && NqMetalOf("#Copper.m", "", "USD") == NQ_METAL_COPPER &&
+            NqMetalOf("COPPER-C", "", "") == NQ_METAL_COPPER && NqMetalOf("HGCOPPER", "", "USD") == NQ_METAL_COPPER, "copper spellings");
+      CHECK(NqMetalOf("HG", "", "USD") == NQ_METAL_COPPER && NqMetalOf("HG.c", "", "USD") == NQ_METAL_COPPER && NqMetalOf("HG_Z6", "", "USD") == NQ_METAL_COPPER &&
+            NqMetalOf("HGKD", "", "USD") == NQ_METAL_NONE && NqMetalOf("HKDUSD", "HKD", "USD") == NQ_METAL_NONE, "HG is copper only alone or with a contract code, never a longer name");
+      CHECK(NqMetalOf("XCUEUR", "XCU", "EUR") == NQ_METAL_NONE && NqMetalOf("XAUUSD", "XAU", "USD") == NQ_METAL_GOLD && NqMetalOf("SILVER", "", "USD") == NQ_METAL_SILVER &&
+            NqMetalOf("EURUSD", "EUR", "USD") == NQ_METAL_NONE, "a non-dollar quote is refused; gold and silver are detected as before");
+      Market copper = makeMarket(9, 4.52, 0.0001, 0.0006, (int)DAYS);
+      load(copper, "XCUUSD", "XCU", 4, 0.0001, 2.5);
+      SIM.d1 = makeDays(copper, 20, 0.08);
+      CHECK(startAt(START) == INIT_SUCCEEDED && g_metal == NQ_METAL_COPPER && NqPeerRow() == 2, "the EA starts on copper; it is row 3 of the ladder");
+      relax();
+      run(START + 1, START + 30);
+      CHECK(lbl("title").find("COPPER  -  NRTR QML SCALPER") == 0 && lbl("fl2_1") == "XCUUSD" && lbl("fl2_7").find("(this chart)") != std::string::npos && g_fc.ok,
+            "the title says COPPER and the table's copper row is this chart");
+      CHECK(NqTelemetryJson().find("\"metal\":\"COPPER\"") != std::string::npos, "telemetry names the metal");
+      OnDeinit(0);
+   }
+   end("S10");
+   // METAL-ONLY END
 
    std::printf("\nEA TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;

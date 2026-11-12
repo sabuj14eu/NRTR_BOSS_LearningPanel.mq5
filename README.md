@@ -1,7 +1,7 @@
-# NRTR QML Metal Scalper (MT5, Gold & Silver) + the Crypto twin (BTC, ETH, LTC, altcoins) + the Forex EA (any pair) + the Pine twin (BrotherSniperULTIMATE v18.12 on MT5)
+# NRTR QML Metal Scalper (MT5, Gold, Silver & Copper) + the Crypto twin (BTC, ETH, LTC, altcoins) + the Forex EA (any pair) + the Pine twin (BrotherSniperULTIMATE v18.12 on MT5)
 
-One standalone Expert Advisor, `NRTR_QML_MetalScalper.mq5`, for **XAUUSD / Gold** and
-**XAGUSD / Silver** only. Nothing else. No Telegram, no DLLs. The only network use is two
+One standalone Expert Advisor, `NRTR_QML_MetalScalper.mq5`, for **XAUUSD / Gold**,
+**XAGUSD / Silver** and (since 1.11.0) **XCUUSD / Copper** only. Nothing else. No Telegram, no DLLs. The only network use is two
 outbound POSTs to SignalMesh, the append-only event journal and the ANALYSIS ONLY telemetry
 heartbeat (see the two SignalMesh sections). Since 1.9.4 / 1.3.4 / 1.0.5 their addresses are
 **preset** (`app.signalmesh.dev`, the right door per EA) and **armed only by the secret**: with
@@ -69,6 +69,54 @@ carries the old R yardstick - the next release ports these items there).
 cut; it has no `InpProfitLock` or session masks (those take their defaults). F7 in MetaEditor
 first (metal and crypto), a demo chart second, the real terminal last - tests passing is not a
 reason to flip the Algo button.
+
+## v1.11.0 (metal) / v1.5.0 (crypto, by derivation, OFF there): the MH15 PLUS release (2026-11-12)
+
+One new table and three gates. The table is the port of the SignalMesh terminal's display studies
+(`daily-forecast-v1`, `rotation-v1`, `pattern-studies-v1`, themselves ports of the *Metal Hunter V15*
+and *SMC MH15 PLUS* TradingView scripts) into the EA, computed from the **broker's own closed bars**.
+The gates are how the EA *combines* them with its trading: **each gate only ever REMOVES an entry** -
+none adds, resizes or moves an order, and closing a position is never blocked. **NO DATA = no vote
+and no gate** (no daily bars, a metal the broker does not serve, a count that is UNKNOWN: nothing is
+invented and nothing is blocked). The forex EA is not in this release (its engine block is untouched
+and still byte-identical).
+
+| Part | What it is | How the EA uses it |
+|---|---|---|
+| **DAY FORECAST** | ADR = mean high-low of the last 14 **completed** daily bars (`InpAdrDays`). `top = max(today's low + ADR, today's high)`, `bottom = min(today's high - ADR, today's low)`; a raw level within 0.5 x ATR(14, H4) of the newest confirmed H4 swing (strength 5) or of the previous day's high / low is snapped onto it (the nearest wins). `used % = today's range / ADR`. Today's high / low come from **closed M5 bars** since the broker's day started (the same values as the terminal's 15m bars at every 15m close, fresher in between); the forming bar is never read. States: FRESH < 35, MOVING UP / DOWN, NEAR FULL >= 85, DONE >= 100 | **ADR ROOM gate** (`InpAdrGate`, on): a new entry's **first target** (TP1 of a plan, the scalp's TP) must fit between the entry and the forecast top (buy) / bottom (sell): `room >= InpAdrRoomX x |target - entry|`. So a breakout above a finished day's high, or a buy whose target sits above the forecast top, is not sent - *ADR full: fade, no chase* - while a sell from the top back into the range, or a pullback whose target is inside the range, passes. A **resting** order whose room disappears as the day extends is pulled the same minute. The top / bottom are drawn on the chart (`ADR TOP` / `ADR BOTTOM`) |
+| **ROTATION LADDER** | three rows: **GOLD, SILVER, COPPER**. Per row: state, used %, move % = (last close - previous day's close) / ADR, room % = 100 - used, `score = (room x 0.5 + min(|move|, 60)) x (1 inside London / New York, else 0.5)`. **GO TRADE = the highest score.** It ranks ROOM LEFT; it does not predict direction. The peers are found by this chart's spelling (`XAUUSD.m` looks for `XAGUSD.m`, then `XAGUSD`, `SILVER`, ...; copper: `XCUUSD`, `COPPER`, `Copper`, `HGCOPPER`, `COPPERUSD`, `HG`) or typed in `InpLadderSym1..3` (`-` = leave the row out) | **LADDER gate** (`InpLadderGate`, on; `InpLadderMaxRank = 2`, `InpLadderMinGap = 10`): this chart's metal must rank in the top 2 of the rows that have data to open a new trade - the metal with the least room **stands aside**, but only when its score is 10 or more under the GO TRADE row (near-equal scores are no real difference). 1 = only the GO TRADE metal opens; 3 = show only. Fewer than two rows with data = no gate. It gates placement only; an order already resting is left to its plan |
+| **PATTERN STUDIES (M15)** | on the last `InpStudyBars` (500) closed M15 bars, walked forward, pivots confirmed L bars after they print: **Elliott** impulse count (strength 8: wave 1 >= 3 ATR, wave 2 retraces >= 23.6% and never passes the start, wave 3 beyond wave 1, wave 4 never enters wave 1, wave 3 never the shortest; PARTIAL until five waves pass, then COMPLETE; an ALTERNATIVE count when the rules allow one; A / B / C after a finished five), **Wolfe wave** (strength 10: five points, point 5 within 15% of the height of line 1-3, apex within one pattern length; DEVELOPING when 1-4 fit), **Fibonacci extension** (strength 5: C + ratio x (B - A)), **anchored VWAP** (from the highest / lowest confirmed swing and the day start, tick volume) and the **volume profile** (40 rows, POC, 70% value area, tick volume) | **STUDY VOTE gate** (`InpStudyGate`, on; `InpStudyBlockLevel = 2`): four voters, each +1 / -1 / nothing for a direction - a live Elliott **setup** (wave-3 setup triggered = with the impulse; five waves done = against it; wave 5 beyond the wave-3 end = *do not add late*), a live confirmed **Wolfe**, price above / below **both** swing-anchored VWAPs, price above the VAH / below the VAL. An entry is blocked when the vote against it is -2 or worse **and a live Elliott / Wolfe setup is among the objectors**: the VWAPs and the value area are context - they confirm a setup's objection, they never block alone (a fade at the day's top is above value by definition). The Fibonacci levels, a developing Wolfe, an untriggered or alternative count are shown only |
+| **COPPER** | the third metal: `XCUUSD`, `COPPER`, `HGCOPPER`, `HG` (alone or with a contract code), any prefix / suffix, dollar quote. A broker name AUTO does not know: type it in `InpLadderSym3` and the EA accepts that chart as copper | the same engine, plans and risk gate. **Check `InpMaxSpreadPoints` on the copper chart**: copper is quoted with 4 or 5 digits (per pound) or per tonne, so 50 points can be too tight or meaningless - the panel says `SPREAD TOO WIDE` until you set it. Copper's spread is a large share of an M1 scalp's target: consider `InpScalpAuto = false` there |
+| **MY LEVELS** | `InpMyLevels = "4150.5, 4188"`: your own prices, drawn as dotted lines and listed on the table (next above / below) | shown only, never traded |
+| **EVENT MODE** | `InpAdrEventMode` (**off**): on a day with a TOP-TIER USD event on the MT5 calendar a full day reads EXPANSION instead of DONE and the ADR ROOM gate stands down (the news guard, the spike guard and the volatility regime still apply) | the Pine script's hand-set event clock, driven by the calendar; off = a full day is DONE whatever the news |
+
+**The table** (`MH15 PLUS`, above the information desk in SPLIT, beside the board in ONE; click its
+header to fold it): the three ladder rows, `GO TRADE`, `DAY FORECAST`, `ADR ROOM` (the room up / down
+right now, and - once the day's range reaches the ADR - the terminal's hypothetical **fade scenario**:
+from that bar's close, stop 0.25 x ADR beyond the day's extreme, targets 0.25 and 0.5 x ADR back;
+**shown, not traded**), `ELLIOTT M15`, `WOLFE M15`, `FIB EXTENSION`, `VWAP / PROFILE`, `STUDY VOTE`
+and `LAST BLOCK` (the last entry one of the three gates removed, in words). The same state goes out
+in the telemetry heartbeat as `mh15` (ANALYSIS ONLY).
+
+**What this release does NOT claim.** The gates are filters built from your own method ("ADR full:
+fade, no chase", trade the metal with room). They remove entries the method calls late; they cannot
+make a losing setup win, and **no MT5 backtest was run here** (there is no MetaTrader in the build
+environment). On the simulated market of the test suite the ADR gate removed 10 of 38 orders on one
+day and the ladder kept gold out while it was the last of three - that proves the gates do what they
+say, not that they earn money. Judge them on the journal: run a demo chart, compare the result per
+plan kind with the gates on and off (`InpAdrGate`, `InpLadderGate`, `InpStudyGate` are separate
+switches; `InpStudies = false` is exactly 1.10.0), n >= 100 before a conclusion.
+
+**Differences from the terminal's text, on purpose:** the day is the broker's (as in the terminal);
+today's bars are M5 (fresher than 15m for a gate); the fade scenario therefore prints on the first
+closed **M5** bar that fills the ADR; weekly / monthly outlooks, HVN / LVN rows and the Forecast
+Journal's scoring are the terminal's and are not in the EA. Only the first lines of the Pine script
+were available: the EA is ported from the method text, not from the Pine source.
+
+**Before you deploy 1.11.0:** F7 in MetaEditor first, a demo chart second. Put the EA on a gold, a
+silver and a copper chart (same magic): each chart shows the same ladder and marks its own row.
+
+---
 
 ## The CRYPTO twin: `NRTR_QML_CryptoScalper.mq5` (BTC / ETH / LTC / altcoins)
 
@@ -669,6 +717,12 @@ Every order is printed to the **Experts** log, e.g.
 | Structural cut on an M5 flip (`InpSmartFlipCutLoss`) | **off** | 1.10.0: an explicit decision; on = a plan position under water is closed before its SL when the regime flips |
 | Trade sessions: swing / M5 plans / scalps | ALL / ALL / ALL | 1.10.0: named-session masks from the AUTO clock; a mask gates NEW orders only |
 | Max open across charts | 2 | this EA on several charts, same magic |
+| MH15 PLUS: studies / table | on / on | 1.11.0: `InpStudies = false` is exactly 1.10.0 (nothing computed, nothing gated); the crypto twin ships with it **off** |
+| ADR days / ADR ROOM gate / room x / event mode | 14 / on / 1.0 / off | the first target must fit inside the day's forecast top / bottom; NO DATA = no gate |
+| Ladder gate / max rank / min gap | on / 2 / 10 | the row ranked below the top 2 **and** 10+ points under the GO TRADE row stands aside; 3 = show only |
+| Ladder symbols 1 / 2 / 3 | AUTO / AUTO / AUTO | gold / silver / copper (crypto: BTC / ETH / LTC); `"-"` = leave the row out; row 3's name is also accepted as the copper chart |
+| Study vote gate / block level / M15 bars | on / 2 / 500 | a live Elliott / Wolfe setup against, confirmed by the VWAP / value-area context; context alone never blocks |
+| My levels | empty | comma-separated prices, drawn and listed, never traded |
 | Vol gate / average bars / DEAD / EXPANSION / EXTREME | on / 288 / 0.5 / 1.5 / 2.5 | ATR(M5) against its own average, see above |
 | Expansion radar score / scalp needs M15 | 8 / on | stronger confirmation during EXPANSION |
 | Spike guard / bars / x normal / retrace | on / 12 / 2.5 / 0.5 | the EXIT WARNING threshold |
@@ -861,6 +915,12 @@ hours); the journal's `session` field on every event is the evidence the decisio
   is managed as before.
 * The forecast is a momentum vote. Its hit rate is measured and shown; nothing else is
   claimed for it.
+* MH15 PLUS (1.11.0): the ADR and the ladder need the broker's **daily bars** (14 completed days)
+  and, per peer, that the metal is in Market Watch; until they arrive the row reads UNKNOWN and
+  gates nothing. The broker's day is the server day, so the numbers can differ from TradingView's
+  17:00 New York day. Volume is MT5 **tick** volume. The Elliott and Wolfe readings are mechanical
+  rule checks on confirmed pivots, not an analyst's count. The gates were tested for what they do
+  (see TESTING.md), not for profit: no MT5 backtest was run.
 * MetaEditor was not available in the build environment: the file is compiled and run under
   g++ against a simulated terminal (see TESTING.md). **Press F7 and run it on a demo chart
   before trusting it.**

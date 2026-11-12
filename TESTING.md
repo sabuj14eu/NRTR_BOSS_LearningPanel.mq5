@@ -3,7 +3,7 @@
 Run everything with:
 
 ```
-./run_tests.sh        # needs python3 and g++ (C++17); about 5 min (the forex sections are the long part)
+./run_tests.sh        # needs python3 and g++ (C++17); about 7 min (the forex sections are the long part)
 ```
 
 ## What was run, and what it proves
@@ -32,22 +32,25 @@ the build environment. The EA was therefore verified like this:
 it behaves on a real broker feed. **Press F7 in MetaEditor and do the manual checks below
 before relying on it.** If F7 reports anything, send the exact message.
 
-## Results (2026-10-17, metal 1.10.0 / crypto 1.4.0)
+## Results (2026-11-12, metal 1.11.0 / crypto 1.5.0)
 
 ```
-CRYPTO TWIN:      derived files match; engine block identical apart from the asset detector
+CRYPTO TWIN:      derived files match; engine block identical apart from the asset detector; studies block identical
 FOREX EA:         engine block identical to the metal EA apart from the asset detector
--- NRTR_QML_MetalScalper.mq5 (v1.10.0) --
+-- NRTR_QML_MetalScalper.mq5 (v1.11.0) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-EA ENGINE TESTS:  122 checks passed, 0 failed   (E13 = the clock, E14 = the risk floor; the engine block is unchanged)
-EA TESTS:         297 checks passed, 0 failed   (A1-A15 + A10 with the v1.9 / 1.10 switches relaxed, plus M1-M9;
-                  M2 rewritten, M7-M9 new: the R yardstick, HAND-MANAGED, trade sessions + journal session)
--- NRTR_QML_CryptoScalper.mq5 (v1.4.0) --
+EA ENGINE TESTS:  122 checks passed, 0 failed   (the engine block is unchanged apart from the detector: copper)
+EA TESTS:         418 checks passed, 0 failed   (A1-A15 + A10 and M1-M9 as before, with the three MH15 PLUS gates
+                  relaxed in the A sections; S1-S10 new: the day forecast, the ladder, Elliott, Wolfe, Fibonacci /
+                  VWAP / profile, the table, ADR ROOM end to end, the ladder end to end, the study vote, copper)
+                  The same binary built with -fsanitize=address,undefined -D_GLIBCXX_ASSERTIONS (every array
+                  index bounds-checked, as MT5 does at run time): 418 passed, no report
+-- NRTR_QML_CryptoScalper.mq5 (v1.5.0) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-CRYPTO EA TESTS:  334 checks passed, 0 failed   (the metal sections re-run on a BTC-sized market + an LTC 3-digit
-                  spec, plus the 7 crypto sections; C7 = the weekend is OPEN)
+CRYPTO EA TESTS:  341 checks passed, 0 failed   (the metal sections re-run on a BTC-sized market + an LTC 3-digit
+                  spec, plus the 8 crypto sections; C8 = MH15 PLUS is OFF by default, BTC / ETH / LTC when on)
 -- NRTR_QML_ForexScalper.mq5 (v1.0.5, unchanged in this release) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
@@ -59,7 +62,32 @@ BS18 EA TESTS:    86 checks passed, 0 failed
 MetaEditor F7:    NOT RUN (not available in the build environment) - for ALL FOUR files
 ```
 
-Previous run (2026-10-07, metal 1.9.4 / crypto 1.3.4): engine 122, EA 247, crypto 284, forex 316, BS18 86, all 0 failed.
+Previous runs: 2026-10-17 (metal 1.10.0 / crypto 1.4.0): engine 122, EA 297, crypto 334, forex 316, BS18 86;
+2026-10-07 (metal 1.9.4 / crypto 1.3.4): engine 122, EA 247, crypto 284, forex 316, BS18 86; all 0 failed.
+
+### MH15 PLUS (metal 1.11.0; `tests/test_ea.cpp`, sections S1-S10)
+
+The studies are a second pure block (`NB_STUDIES_BEGIN` .. `NB_STUDIES_END`), written like the engine
+(closed bars, causal, the MQL5 subset that is valid C++) and required to be the same text in the crypto
+twin. The existing A sections run with `relax()`, which now also switches the three new gates off; the
+simulated broker serves no daily bars unless a section loads them, so the forecast is UNKNOWN there and
+gates nothing - which is itself the tested behaviour for a broker without the data.
+
+| # | Case | Result |
+|---|---|---|
+| S1 | Day forecast: ADR = the mean range of the last 14 **completed** days (the forming day and an older huge day are not in it); today = the closed bars since the broker day started; top / bottom; the snap onto the 4h swing or the previous day's extreme (nearest wins, outside the tolerance nothing moves); FRESH / MOVING UP / MOVING DOWN / NEAR FULL / DONE / EXPANSION; ADR FULL with its side and the hypothetical fade levels; 13 days, no bar of today, a series that is not daily, no intraday bar = UNKNOWN with the reason | PASS |
+| S2 | Ladder: the score by hand (in / out of session, the move capped at 60, no room past the ADR), ranks with a tie and with a row that has no data, server minute -> New York minute on an EET and a GMT broker, the MH15 sessions | PASS |
+| S3 | Elliott on a hand-built impulse: UNKNOWN until the wave-2 pivot is confirmed; waves 1-2 = PARTIAL, no setup; the first close beyond wave 1 TRIGGERS the wave-3 setup (SL, T1, T2, horizon); target 2 reached = no vote; wave 4 = not a setup; wave 5 beyond the wave-3 end = do not add late (against a buy only); five waves = COMPLETE and a setup against the impulse; A after a finished five; **the count at every bar is the same with and without the bars after it (no lookahead)**; a 10% wave 2, wave 4 inside wave 1 and a bar through the start are refused; the bearish mirror; a trigger in the first 120 bars is not a setup | PASS |
+| S4 | Wolfe on a hand-built wedge: DEVELOPING with its zone before point 5 is confirmed (never a vote); CONFIRMED on the confirming bar with entry, SL = point 5 - 0.5 ATR, TP1 / TP2 = point 4 and the EPA, the apex and the expiry by hand; TP2 reached and stopped = no vote; the bearish mirror; point 5 off the line and an apex too far = not confirmed | PASS |
+| S5 | Fibonacci extension (levels, reached, INVALIDATED on a close beyond C, the three pivots before a newest one that went beyond A); anchored VWAP and its band by hand; the volume profile's POC / VAH / VAL by hand; one run of all studies; the two context votes | PASS |
+| S6 | The table on a simulated broker: no daily bars = UNKNOWN and no gate; with daily bars the ADR, today's high / low, top / bottom match a recomputation from the broker's bars; three ladder rows, a metal the broker lacks = UNKNOWN; one row = no ladder gate; the top / bottom lines on the chart; the ADR ROOM gate on the live forecast (a target beyond the top blocked, one that fits not, the mirror, EXPANSION and gate off stand down); fold / unfold; telemetry `mh15` | PASS |
+| S7 | **ADR ROOM end to end** (one simulated day, a small ADR so the day fills it): without the gate 18 of 38 opening requests had a first target outside the forecast range and orders rested outside it for 398 order-minutes; with the gate **0 of 28** and **0** resting, 71 blocks named on the table - the gate only removed entries | PASS |
+| S8 | **The ladder end to end**: silver and copper found by the chart's spelling (`XAUUSD.m` -> `XAGUSD.m`), each row its own ADR and day; score per row, ranks 1-2-3, GO TRADE named on the table; #3 and 10+ points under the best = stands aside, a near tie or #2 does not; over a simulated day gold stood aside for 620 of 2861 minutes and **no order was opened in them**; #2 of 2 = no block; a broker that answers a daily request with M15 bars = refused, UNKNOWN | PASS |
+| S9 | The study vote: context alone (-2 from the VWAPs and the value area) never blocks; a live Elliott setup against + the VWAPs = blocked, voters named, the other side untouched; the setup alone (-1) does not block; a live Wolfe for the entry offsets it; gate off and master switch off = nothing | PASS |
+| S10 | Copper: the spellings (XCUUSD, COPPER, #Copper.m, COPPER-C, HGCOPPER, HG, HG.c, HG_Z6), HGKD / HKDUSD / a non-dollar quote refused, gold and silver as before; the EA starts on a 4-digit copper chart, the title, its ladder row, telemetry `metal: COPPER` | PASS |
+
+What these do **not** show: that the gates improve the account. The numbers above are from a synthetic
+random market; they prove the gates remove exactly the entries they describe and nothing else.
 
 ### Forex EA (`tests/test_ea_forex.cpp`)
 
@@ -177,7 +205,19 @@ the crypto EA only by running the script, never by hand.
    reopen MT5 the same day; they must be identical and no order must be duplicated.
 4. **Arrows:** watch one M1 candle close: the big white `NEXT` arrow must turn into a small
    green or red one and a new white `NEXT` arrow must appear on the new candle.
-5. Optional: attach to EURUSD. It must show **GOLD / SILVER ONLY**.
+5. Optional: attach to EURUSD. It must show **GOLD / SILVER / COPPER ONLY**.
+9. **v1.11.0 (MH15 PLUS):** on a gold chart the `MH15 PLUS` table must appear above the information
+   desk with three ladder rows. `DAY FORECAST` must read `ADR n (14 d)  used n% ...  top ... / bottom ...`;
+   check the ADR against the terminal's own figure (it is the broker's server day, so it can differ
+   a little from TradingView's 17:00 New York day) and that the pink `ADR TOP` / `ADR BOTTOM` lines
+   sit at today's low + ADR / high - ADR. The SILVER and COPPER rows must show your broker's symbols
+   with a state and a score; `UNKNOWN - not on this broker` means AUTO did not find the name: type it
+   in `InpLadderSym2` / `InpLadderSym3`. `UNKNOWN - ADR needs 14 completed days` means the daily
+   history is still loading: open a D1 chart of that metal once. Attach the EA to the copper chart:
+   the title must read `COPPER  -  NRTR QML SCALPER`; if the banner says `SPREAD TOO WIDE`, set
+   `InpMaxSpreadPoints` for that chart. When a gate removes an entry the `LAST BLOCK` row and the
+   REASON line must say which one and why (`ADR ROOM: ...`, `LADDER: ...`, `STUDIES AGAINST ...`).
+   Click the table's header: it must fold to one line.
 6. **v1.9:** the `H4 / H1`, `MACRO VOTE`, `NEWS (USD)` and `WEEK / SMART` rows must be filled: `NEWS (USD)` must read `clear - next ...` or `GUARD - ...` with a time that matches the terminal's calendar window (View > Toolbox > Calendar); `UNKNOWN` = no calendar at this broker (set `InpNewsUnknownBlocks = false` to trade without it); `MACRO VOTE` names the dollar-index and bond symbols it found (`NO DATA` = the broker lacks the symbol, type it into the input if you know its name).
 8. **v1.10.0:** on a DEMO chart with a position of the EA's own: drag its SL by hand; within one
    closed M1 candle the broker row must read `HAND-MANAGED  #ticket`, the banner `HAND-MANAGED BUY

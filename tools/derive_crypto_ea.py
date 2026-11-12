@@ -68,6 +68,10 @@ HEADER = '''//+-----------------------------------------------------------------
 //|     PROFIT LOCK its own switch, SMART EXIT above the threshold |
 //|     only, HAND-MANAGED positions, TP2 default, journal session,|
 //|     named-session masks (default ALL: nothing changes).        |
+//|   * v1.5.0 (with metal 1.11.0): the MH15 PLUS studies (day     |
+//|     forecast, a BTC / ETH / LTC rotation ladder, the pattern   |
+//|     studies) are carried over and are OFF by default here      |
+//|     (InpStudies): nothing changes until you switch them on.    |
 //|                                                                  |
 //|  M15 = CONTEXT ONLY        (EMA200 + NRTR: shades, never gates)  |
 //|   M5 = REGIME + STRUCTURE  (NRTR + confirmed HH/HL or LH/LL)     |
@@ -83,7 +87,7 @@ HEADER = '''//+-----------------------------------------------------------------
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.40"
+#property version     "1.50"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -291,21 +295,62 @@ int NqMaxSpreadPts()
 '''
 
 
+PEERS = '''//--- LADDER PEERS BEGIN (asset layer: the three rows of the rotation ladder)
+#define NQ_LADDER_ROWS 3
+string NqPeerName(int k)
+{
+   if(k == 0)
+      return "BTC";
+   if(k == 1)
+      return "ETH";
+   return "LTC";
+}
+
+// AUTO candidates of a row (tried with this chart's prefix / suffix first, then bare)
+string NqPeerCsv(int k)
+{
+   if(k == 0)
+      return "BTCUSDT,BTCUSD,XBTUSD,BITCOIN,Bitcoin";
+   if(k == 1)
+      return "ETHUSDT,ETHUSD,ETHEREUM,Ethereum";
+   return "LTCUSDT,LTCUSD,LITECOIN,Litecoin";
+}
+
+// this chart's row on the ladder (-1 = not on it: an altcoin is not ranked, so the ladder never gates it)
+int NqPeerRow()
+{
+   return (g_coin >= NQ_COIN_BTC && g_coin <= NQ_COIN_LTC) ? (g_coin - 1) : -1;
+}
+
+// crypto trades round the clock: the session factor is always 1
+bool NqPeerInSession(int nyMin)
+{
+   return true;
+}
+
+// the coin class is forced with InpCoinClass: nothing to adopt here
+void NqPeerAdopt()
+{
+}
+//--- LADDER PEERS END
+'''
+
+
 def derive_ea(m: str) -> str:
     t = m
     # 1. header
     i = t.index("#property strict\n") + len("#property strict\n")
     t = HEADER + t[i:]
     # 2. asset defines
-    t = rep_re(t, r"// supported metals\n#define NQ_METAL_NONE\s+0\n#define NQ_METAL_GOLD\s+1\n#define NQ_METAL_SILVER\s+2\n",
+    t = rep_re(t, r"// supported metals\n#define NQ_METAL_NONE\s+0\n#define NQ_METAL_GOLD\s+1\n#define NQ_METAL_SILVER\s+2\n#define NQ_METAL_COPPER\s+3\n",
                "// supported coin classes (the specialist profile follows the class)\n"
                "#define NQ_COIN_NONE 0\n#define NQ_COIN_BTC  1\n#define NQ_COIN_ETH  2\n#define NQ_COIN_LTC  3\n#define NQ_COIN_ALT  4\n")
     # 3. detector (inside the engine block: pure, tested)
-    a = t.index("//--- Gold / Silver only. Broker prefixes/suffixes are fine")
+    a = t.index("//--- Gold / Silver / Copper only. Broker prefixes/suffixes are fine")
     b = t.index("//--- text helpers")
     t = t[:a] + DETECTOR + t[b:]
     # 4. reason text
-    t = rep(t, 'case NQ_R_UNSUPPORTED:     return "GOLD / SILVER ONLY";',
+    t = rep(t, 'case NQ_R_UNSUPPORTED:     return "GOLD / SILVER / COPPER ONLY";',
             'case NQ_R_UNSUPPORTED:     return "CRYPTO ONLY - BTC / ETH / LTC / ALTCOIN (set InpCoinClass)";')
     # 5. enum for the input
     t = rep(t, "enum ENUM_NQ_CORNER\n{\n   NQ_TOP_LEFT = 0,     // Top left\n   NQ_BOTTOM_LEFT = 2   // Bottom left\n};\n",
@@ -381,7 +426,7 @@ def derive_ea(m: str) -> str:
             '              NqJsonS("ea_version", NQ_EA_VERSION) + "," + NqJsonS("symbol", g_sym) + "," +\n'
             '              NqJsonS("engine", "NQ-CRYPTO") + "," + NqJsonS("coin", g_coinName) + "," +\n'
             '              NqJsonS("h4_ctx",')
-    t = rep(t, '   string metal = (g_metal == NQ_METAL_GOLD) ? "GOLD" : ((g_metal == NQ_METAL_SILVER) ? "SILVER" : "NONE");\n', "")
+    t = rep(t, '   string metal = (g_metal == NQ_METAL_GOLD) ? "GOLD" : ((g_metal == NQ_METAL_SILVER) ? "SILVER" : ((g_metal == NQ_METAL_COPPER) ? "COPPER" : "NONE"));\n', "")
     t = rep(t, 'NqJsonS("source", "NRTR_QML_MetalScalper")', 'NqJsonS("source", "NRTR_QML_CryptoScalper")')
     t = rep(t, 'NqJsonS("symbol", g_sym) + "," + NqJsonS("metal", metal) + "," +',
             'NqJsonS("symbol", g_sym) + "," + NqJsonS("asset_class", "crypto") + "," + NqJsonS("coin", g_coinName) + "," +\n'
@@ -390,15 +435,16 @@ def derive_ea(m: str) -> str:
             '              NqJsonB("prof_radar", g_profRadar) + "," + NqJsonS("lead_symbol", g_macroSym) + "," +\n'
             '              NqJsonS("lead_dir", (g_macroDir == 0) ? "" : NqDirText(g_macroDir)) + "," +')
     # 13. verdict / panel texts
-    t = rep(t, 'NqSymDot() + "  GOLD / SILVER ONLY"', 'NqSymDot() + "  CRYPTO ONLY  (BTC / ETH / LTC / ALT - set InpCoinClass)"', count=2)
-    t = rep(t, "   color cMetal = (g_metal == NQ_METAL_SILVER) ? NQ_RGB(200, 206, 214) : NQ_RGB(212, 175, 55);\n",
+    t = rep(t, 'NqSymDot() + "  GOLD / SILVER / COPPER ONLY"', 'NqSymDot() + "  CRYPTO ONLY  (BTC / ETH / LTC / ALT - set InpCoinClass)"', count=2)
+    t = rep(t, "   color cMetal = (g_metal == NQ_METAL_SILVER) ? NQ_RGB(200, 206, 214) : ((g_metal == NQ_METAL_COPPER) ? NQ_RGB(205, 127, 50) : NQ_RGB(212, 175, 55));\n",
             "   color cMetal = NQ_RGB(247, 147, 26);          // BTC orange\n"
             "   if(g_coin == NQ_COIN_ETH)\n      cMetal = NQ_RGB(140, 160, 255);\n"
             "   if(g_coin == NQ_COIN_LTC)\n      cMetal = NQ_RGB(190, 198, 210);\n"
             "   if(g_coin == NQ_COIN_ALT)\n      cMetal = NQ_RGB(60, 210, 190);\n")
     t = rep(t, '   string title = "NRTR QML METAL SCALPER";\n'
                '   if(g_metal == NQ_METAL_GOLD)\n      title = "GOLD  -  NRTR QML SCALPER";\n'
-               '   if(g_metal == NQ_METAL_SILVER)\n      title = "SILVER  -  NRTR QML SCALPER";\n',
+               '   if(g_metal == NQ_METAL_SILVER)\n      title = "SILVER  -  NRTR QML SCALPER";\n'
+               '   if(g_metal == NQ_METAL_COPPER)\n      title = "COPPER  -  NRTR QML SCALPER";\n',
             '   string title = "NRTR QML CRYPTO SCALPER";\n'
             '   if(g_coin == NQ_COIN_BTC)\n      title = "BTC  -  NRTR QML CRYPTO SCALPER";\n'
             '   if(g_coin == NQ_COIN_ETH)\n      title = "ETH  -  NRTR QML CRYPTO SCALPER";\n'
@@ -416,7 +462,7 @@ def derive_ea(m: str) -> str:
             '   yr += rh;\n'
             '   string volT = "---";\n')
     # 14. version + helper functions (after NqReadAccount's spread read block: append before NqEvaluate's doc comment)
-    t = rep(t, '#define NQ_EA_VERSION "1.10.0"', '#define NQ_EA_VERSION "1.4.0"')
+    t = rep(t, '#define NQ_EA_VERSION "1.11.0"', '#define NQ_EA_VERSION "1.5.0"')
     # 14b. v1.3.4 - the weekend is OPEN: crypto never closes, so the metal's WEEKEND block must not
     #      apply; the Friday stop and the week-open guard are off unless the operator sets them
     #      (a broker that closes crypto at the weekend). Nothing else of the week logic changes.
@@ -433,11 +479,19 @@ def derive_ea(m: str) -> str:
             '      else\n         g_weekText = "WEEKEND - OPEN (crypto trades 24/7)";\n   }\n   else if(InpFridayStopMin > 0 && untilClose <= InpFridayStopMin)\n')
     t = rep(t, "// account view (this EA's magic, this symbol)\n", "// account view (this EA's magic, this symbol)\n")
     t = rep(t, "\nvoid NqReadAccount()\n{\n", PROFILE_FUNCS + "\nvoid NqReadAccount()\n{\n")
+    # 14c. v1.5.0 - the MH15 PLUS studies are carried over (the same text), OFF by default: the ladder's
+    #      three rows are BTC / ETH / LTC, an altcoin is not ranked, the session factor is always 1
+    a = t.index("//--- LADDER PEERS BEGIN")
+    b = t.index("//--- LADDER PEERS END\n") + len("//--- LADDER PEERS END\n")
+    t = t[:a] + PEERS + t[b:]
+    t = rep(t, 'input bool           InpStudies          = true;        // Master switch: compute and show the MH15 PLUS table (false = exactly 1.10.0: nothing computed, nothing gated)\n',
+            'input bool           InpStudies          = false;       // Master switch: compute and show the MH15 PLUS table (BTC / ETH / LTC ladder). OFF by default on crypto: nothing computed, nothing gated\n')
+    t = rep(t, "//| MH15 PLUS (v1.11.0): the DAY FORECAST, the ROTATION LADDER and    |", "//| MH15 PLUS (v1.5.0):  the DAY FORECAST, the ROTATION LADDER and    |")
     # 15. renames
     t = t.replace("g_metal", "g_coin").replace("NQ_METAL_NONE", "NQ_COIN_NONE")
     # 16. comment wording
     t = rep(t, "the metal's intended break", "the coin's intended break", count=t.count("the metal's intended break"))
-    for bad in ("NQ_METAL", "NqMetalOf", "GOLD / SILVER", 'InpMacroSymbol == ""', "XAUUSD", "XAGUSD"):
+    for bad in ("NQ_METAL", "NqMetalOf", "GOLD / SILVER", 'InpMacroSymbol == ""', "XAUUSD", "XAGUSD", "XCUUSD", "COPPER"):
         if bad in t:
             raise SystemExit(f"leftover metal token in the crypto EA: {bad}")
     return t
@@ -452,10 +506,14 @@ def derive_test(s: str) -> str:
     t = t.replace("XAUUSD", "BTCUSD").replace('"XAU"', '"BTC"').replace("NQ_METAL_GOLD", "NQ_COIN_BTC").replace("g_metal", "g_coin")
     # a BTC-sized synthetic market: ~0.05% per M1 bar like the real coin, so spreads and offsets are in proportion
     t = rep(t, "Market gold = makeMarket(7, 4150.0, 0.01, 0.35, (int)DAYS);", "Market gold = makeMarket(7, 61500.0, 0.01, 30.0, (int)DAYS);")
-    t = rep(t, 'find("GOLD / SILVER ONLY")', 'find("CRYPTO ONLY")')
+    # the metal-only sections (copper, the gold / silver / copper ladder on a simulated broker) are not derived
+    t, cut = re.subn(r"\n   // METAL-ONLY BEGIN.*?// METAL-ONLY END\n", "\n", t, flags=re.S)
+    if cut < 1:
+        raise SystemExit("no METAL-ONLY section found in the metal test")
+    t = rep(t, 'find("GOLD / SILVER / COPPER ONLY")', 'find("CRYPTO ONLY")')
     t = rep(t, '"\\"metal\\":\\"GOLD\\""', '"\\"coin\\":\\"BTC\\""')
     t = rep(t, '"\\"source\\":\\"NRTR_QML_MetalScalper\\""', '"\\"source\\":\\"NRTR_QML_CryptoScalper\\""')
-    t = rep(t, '"\\"ea_version\\":\\"1.10.0\\""', '"\\"ea_version\\":\\"1.4.0\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
+    t = rep(t, '"\\"ea_version\\":\\"1.11.0\\""', '"\\"ea_version\\":\\"1.5.0\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
     t = rep(t, 'CHECK(rows == 12, "12 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, VOL REGIME + the 7 engine rows)");', 'CHECK(rows == 13, "13 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, COIN PROFILE, VOL REGIME + the 7 engine rows)");')
     t = rep(t, "   SIM.tickValue = tickValue;\n", "   SIM.tickValue = tickValue;\n   SIM.contract = 1.0;   // crypto CFD: one coin per lot\n")
     # price offsets of the hand-made broker items, scaled from a $4,150 metal to a $61,500 coin
@@ -488,7 +546,7 @@ def derive_test(s: str) -> str:
     # crypto-only checks before the summary
     t = rep(t, '   std::printf("\\nEA TESTS: %d checks passed, %d failed\\n", g_pass, g_fail);\n', CRYPTO_CHECKS +
             '   std::printf("\\nCRYPTO EA TESTS: %d checks passed, %d failed\\n", g_pass, g_fail);\n')
-    for bad in ('load(btc, "XAU', "GOLD / SILVER", "NQ_METAL", "ea_full.inc"):
+    for bad in ('load(btc, "XAU', "GOLD / SILVER", "NQ_METAL", "ea_full.inc", "XCUUSD", "COPPER"):
         if bad in t:
             raise SystemExit(f"leftover metal token in the crypto test: {bad}")
     return t
@@ -700,6 +758,33 @@ CRYPTO_CHECKS = r'''
       OnDeinit(0);
    }
    end("C7");
+
+   begin("C8 MH15 PLUS (v1.5.0): carried over and OFF by default; switched on, the ladder is BTC / ETH / LTC and an altcoin is never on it");
+   {
+      load(btc, "BTCUSD", "BTC", 2, 0.01, 0.01);
+      startAt(START);
+      run(START + 1, START + 20);
+      std::string why;
+      CHECK(!g_studies && SIM.objs.count("NQEA_P_tF") == 0 && !g_fc.ok && !g_st.ok && !NqStudiesBlock(1, SIM.bid, SIM.bid + 1.0, why),
+            "default: nothing computed, no table, nothing gated");
+      CHECK(NqTelemetryJson().find("\"mh15\":{\"on\":false") != std::string::npos, "telemetry says the studies are off");
+      g_studies = true;
+      NqResolvePeers();
+      stepTo(START + 21);
+      CHECK(NqPeerName(0) == "BTC" && NqPeerName(1) == "ETH" && NqPeerName(2) == "LTC" && NqPeerRow() == 0 && g_ldSym[0] == "BTCUSD",
+            "switched on: the rows are BTC / ETH / LTC and this chart is row 1");
+      CHECK(lbl("tF") != "<missing>" && lbl("fl0_0") == "BTC" && lbl("v_f1").find("UNKNOWN - no daily bars (no gate)") == 0 && g_st.ok,
+            "the table appears; this simulated broker serves no daily bars = UNKNOWN, no gate; the pattern studies run");
+      CHECK(NqPeerInSession(100) && NqPeerInSession(1100), "crypto trades round the clock: the session factor is always 1");
+      OnDeinit(0);
+      Market sol = makeMarket(13, 148.0, 0.001, 0.07, (int)DAYS);
+      load(sol, "SOLUSD", "SOL", 3, 0.001, 0.001);
+      startAt(START);
+      CHECK(g_coinName == "ALT" && NqPeerRow() == -1, "an altcoin is not on the ladder: the ladder can never gate it");
+      OnDeinit(0);
+      load(btc, "BTCUSD", "BTC", 2, 0.01, 0.01);
+   }
+   end("C8");
 '''
 
 
@@ -708,13 +793,18 @@ def engine_core(text: str, metal: bool) -> str:
     core = text[a:b]
     if metal:
         core = re.sub(r"// supported metals\n(#define NQ_METAL_\w+\s+\d\n)+", "", core)
-        i, j = core.index("//--- Gold / Silver only."), core.index("//--- text helpers")
+        i, j = core.index("//--- Gold / Silver / Copper only."), core.index("//--- text helpers")
     else:
         core = re.sub(r"// supported coin classes[^\n]*\n(#define NQ_COIN_\w+\s+\d\n)+", "", core)
         i, j = core.index("//--- BTC / ETH / LTC / altcoins only."), core.index("//--- text helpers")
     core = core[:i] + core[j:]
     # the one engine string that names the asset class
     return re.sub(r'case NQ_R_UNSUPPORTED:\s+return "[^"]*";', 'case NQ_R_UNSUPPORTED: return "<asset>";', core)
+
+
+def studies_core(text: str) -> str:
+    a, b = text.index("//=== NB_STUDIES_BEGIN ==="), text.index("//=== NB_STUDIES_END ===")
+    return text[a:b]
 
 
 def main() -> int:
@@ -726,6 +816,8 @@ def main() -> int:
     tst.encode("ascii")
     if engine_core(metal, True) != engine_core(ea, False):
         raise SystemExit("ENGINE DRIFT: the crypto engine block differs beyond the asset detector")
+    if studies_core(metal) != studies_core(ea):
+        raise SystemExit("STUDIES DRIFT: the crypto studies block differs from the metal one")
     if "--check" in sys.argv:
         ok = True
         for path, want in ((CRYPTO, ea), (TEST_CRYPTO, tst)):
