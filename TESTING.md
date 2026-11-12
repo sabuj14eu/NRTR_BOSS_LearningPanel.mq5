@@ -32,11 +32,11 @@ the build environment. The EA was therefore verified like this:
 it behaves on a real broker feed. **Press F7 in MetaEditor and do the manual checks below
 before relying on it.** If F7 reports anything, send the exact message.
 
-## Results (2026-11-12, metal 1.11.0 / crypto 1.5.0)
+## Results (2026-11-12, metal 1.11.0 / crypto 1.5.0 / forex 1.1.0)
 
 ```
 CRYPTO TWIN:      derived files match; engine block identical apart from the asset detector; studies block identical
-FOREX EA:         engine block identical to the metal EA apart from the asset detector
+FOREX EA:         engine block identical to the metal EA apart from the asset detector; studies block identical
 -- NRTR_QML_MetalScalper.mq5 (v1.11.0) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
@@ -51,10 +51,12 @@ EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 CRYPTO EA TESTS:  341 checks passed, 0 failed   (the metal sections re-run on a BTC-sized market + an LTC 3-digit
                   spec, plus the 8 crypto sections; C8 = MH15 PLUS is OFF by default, BTC / ETH / LTC when on)
--- NRTR_QML_ForexScalper.mq5 (v1.0.5, unchanged in this release) --
+-- NRTR_QML_ForexScalper.mq5 (v1.1.0) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-FOREX EA TESTS:   316 checks passed, 0 failed
+FOREX EA TESTS:   343 checks passed, 0 failed   (A / F sections as before with the two MH15 PLUS gates relaxed;
+                  F11-F13 new: the table without a ladder, ADR ROOM end to end, the study vote)
+                  The same binary built with -fsanitize=address,undefined -D_GLIBCXX_ASSERTIONS: 343 passed, no report
 -- BrotherSniperULTIMATE_v18_MT5.mq5 (18.12-mt5.2, the Pine twin, unchanged) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
@@ -85,6 +87,15 @@ gates nothing - which is itself the tested behaviour for a broker without the da
 | S8 | **The ladder end to end**: silver and copper found by the chart's spelling (`XAUUSD.m` -> `XAGUSD.m`), each row its own ADR and day; score per row, ranks 1-2-3, GO TRADE named on the table; #3 and 10+ points under the best = stands aside, a near tie or #2 does not; over a simulated day gold stood aside for 620 of 2861 minutes and **no order was opened in them**; #2 of 2 = no block; a broker that answers a daily request with M15 bars = refused, UNKNOWN | PASS |
 | S9 | The study vote: context alone (-2 from the VWAPs and the value area) never blocks; a live Elliott setup against + the VWAPs = blocked, voters named, the other side untouched; the setup alone (-1) does not block; a live Wolfe for the entry offsets it; gate off and master switch off = nothing | PASS |
 | S10 | Copper: the spellings (XCUUSD, COPPER, #Copper.m, COPPER-C, HGCOPPER, HG, HG.c, HG_Z6), HGKD / HKDUSD / a non-dollar quote refused, gold and silver as before; the EA starts on a 4-digit copper chart, the title, its ladder row, telemetry `metal: COPPER` | PASS |
+
+**Forex 1.1.0 (`tests/test_ea_forex.cpp`, F11-F13).** The forex EA has the day forecast, the pattern
+studies and two gates (ADR ROOM, STUDY VOTE); it has **no ladder**. F11: no daily bars = UNKNOWN and no
+gate; with daily bars the ADR, today's high / low and top / bottom match a recomputation; the table has
+8 rows and no ladder / GO TRADE row; the gate on the live forecast; fold; telemetry `mh15` without a
+ladder. F12 (ADR ROOM end to end on EURUSD): without the gate 20 of 40 opening requests had a first
+target outside the forecast range and orders rested outside it for 430 order-minutes; with the gate
+**0 of 26** and **0** resting, 71 blocks. F13: context alone never blocks; a live Elliott setup against
++ the VWAPs blocks and names the voters; gate off / master switch off = nothing.
 
 What these do **not** show: that the gates improve the account. The numbers above are from a synthetic
 random market; they prove the gates remove exactly the entries they describe and nothing else.
@@ -235,6 +246,11 @@ the crypto EA only by running the script, never by hand.
    `EXIT WARNING ... SPIKE REVERSAL`. **Both files must be recompiled (F7).**
 
 ### The forex EA (same 10 minutes)
+
+0. **v1.1.0:** the `MH15 PLUS` table must appear above the information desk with `DAY FORECAST`,
+   `ADR ROOM`, `ELLIOTT M15`, `WOLFE M15`, `FIB EXTENSION`, `VWAP / PROFILE`, `STUDY VOTE` and
+   `LAST BLOCK` - and **no ladder rows**. `UNKNOWN - ADR needs 14 completed days` = the daily history
+   is still loading (open a D1 chart of the pair once).
 
 1. **Compile** `NRTR_QML_ForexScalper.mq5` with **F7**. Expect `0 errors, 0 warnings`. The file
    uses the MQL5 calendar API (`CalendarValueHistory`, `CalendarEventById`,

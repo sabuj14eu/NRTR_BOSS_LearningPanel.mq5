@@ -70,7 +70,7 @@ cut; it has no `InpProfitLock` or session masks (those take their defaults). F7 
 first (metal and crypto), a demo chart second, the real terminal last - tests passing is not a
 reason to flip the Algo button.
 
-## v1.11.0 (metal) / v1.5.0 (crypto, by derivation, OFF there): the MH15 PLUS release (2026-11-12)
+## v1.11.0 (metal) / v1.5.0 (crypto, by derivation, OFF there) / v1.1.0 (forex, no ladder): the MH15 PLUS release (2026-11-12)
 
 One new table and three gates. The table is the port of the SignalMesh terminal's display studies
 (`daily-forecast-v1`, `rotation-v1`, `pattern-studies-v1`, themselves ports of the *Metal Hunter V15*
@@ -78,8 +78,19 @@ and *SMC MH15 PLUS* TradingView scripts) into the EA, computed from the **broker
 The gates are how the EA *combines* them with its trading: **each gate only ever REMOVES an entry** -
 none adds, resizes or moves an order, and closing a position is never blocked. **NO DATA = no vote
 and no gate** (no daily bars, a metal the broker does not serve, a count that is UNKNOWN: nothing is
-invented and nothing is blocked). The forex EA is not in this release (its engine block is untouched
-and still byte-identical).
+invented and nothing is blocked).
+
+**Which EA has what:**
+
+| EA | Day forecast + ADR ROOM gate | Rotation ladder + LADDER gate | Pattern studies + STUDY VOTE gate | Default |
+|---|---|---|---|---|
+| Metal 1.11.0 | yes | yes: GOLD / SILVER / COPPER | yes | **on** |
+| Forex 1.1.0 | yes | **no** (an explicit decision: a pair is not ranked against other pairs - the currency strength and the portfolio rule already do that job) | yes | **on** |
+| Crypto 1.5.0 | yes | yes: BTC / ETH / LTC (an altcoin chart is never on the ladder, so the ladder never gates it) | yes | **off** - set `InpStudies = true` on the chart |
+
+The forex EA's engine block is untouched and still byte-identical; its studies block is the metal EA's
+text (`tools/check_forex_engine.py` proves both). Its event mode reads the top-tier events of the
+pair's two currencies. `InpStudies = false` on forex is exactly 1.0.5.
 
 | Part | What it is | How the EA uses it |
 |---|---|---|
@@ -915,7 +926,7 @@ hours); the journal's `session` field on every event is the evidence the decisio
   is managed as before.
 * The forecast is a momentum vote. Its hit rate is measured and shown; nothing else is
   claimed for it.
-* MH15 PLUS (1.11.0): the ADR and the ladder need the broker's **daily bars** (14 completed days)
+* MH15 PLUS (metal 1.11.0 / forex 1.1.0 / crypto 1.5.0): the ADR and the ladder need the broker's **daily bars** (14 completed days)
   and, per peer, that the metal is in Market Watch; until they arrive the row reads UNKNOWN and
   gates nothing. The broker's day is the server day, so the numbers can differ from TradingView's
   17:00 New York day. Volume is MT5 **tick** volume. The Elliott and Wolfe readings are mechanical

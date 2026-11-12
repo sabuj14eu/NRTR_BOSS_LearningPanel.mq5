@@ -27,6 +27,11 @@ def engine_core(text: str, which: str) -> str:
     return re.sub(r'case NQ_R_UNSUPPORTED:\s+return "[^"]*";', 'case NQ_R_UNSUPPORTED: return "<asset>";', core)
 
 
+def studies_core(text: str) -> str:
+    a, b = text.index("//=== NB_STUDIES_BEGIN ==="), text.index("//=== NB_STUDIES_END ===")
+    return text[a:b]
+
+
 def main() -> int:
     metal = open(METAL, encoding="ascii").read()
     forex = open(FOREX, encoding="ascii").read()
@@ -42,11 +47,15 @@ def main() -> int:
             print(f"ENGINE DRIFT: lengths differ ({len(ml)} vs {len(fl)} lines)")
         print("forex EA: DRIFT - port the metal engine change by hand and re-run")
         return 1
+    sm, sf = studies_core(metal), studies_core(forex)
+    if sm != sf:
+        print("forex EA: STUDIES DRIFT - its MH15 PLUS studies block is not the metal EA's text; port the change by hand and re-run")
+        return 1
     for bad in ("NQ_METAL", "NqMetalOf", "GOLD / SILVER", "InpMacroSymbol", "g_macroDir", "InpMaxSpreadPoints"):
         if bad in forex:
             print(f"forex EA: leftover metal token {bad}")
             return 1
-    print("forex EA: engine block identical to the metal EA apart from the asset detector")
+    print("forex EA: engine block identical to the metal EA apart from the asset detector; studies block identical")
     return 0
 
 

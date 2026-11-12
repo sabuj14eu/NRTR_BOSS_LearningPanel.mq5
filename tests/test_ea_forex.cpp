@@ -111,6 +111,8 @@ static void relax()
    g_sessionTilt = false;
    g_macroGate = false;
    g_smartExit = false;
+   g_adrGate = false;      // the v1.1.0 MH15 PLUS gates off too (the F11-F13 sections test them)
+   g_studyGate = false;
    NqUpdate();
 }
 static int countSent(int action, bool openingOnly)
@@ -560,11 +562,12 @@ int main()
       CHECK(lbl("title").find("NRTR QML") != std::string::npos && lbl("title").find(std::string("v") + NQ_EA_VERSION) != std::string::npos,
             "the title names the build (v" NQ_EA_VERSION ") so the file on the chart is recognisable");
       std::set<std::string> keys;
-      int dup = 0, rows = 0, empty = 0;
+      int dup = 0, rows = 0, empty = 0, studyRows = 0;
       for(auto &kv : SIM.objs)
       {
          if(kv.first.compare(0, 9, "NQEA_P_k_") != 0) continue;
-         rows++;
+         if(kv.first.compare(0, 10, "NQEA_P_k_f") == 0) studyRows++;   // the MH15 PLUS table's rows (v1.1.0) are counted apart
+         else rows++;
          std::string k = kv.second.s[OBJPROP_TEXT];
          if(keys.count(k)) dup++;
          keys.insert(k);
@@ -573,6 +576,7 @@ int main()
       }
       std::printf("    %d rows\n", rows);
       CHECK(rows == 14, "14 engine rows (PAIR PROFILE, H4 / H1, STRENGTH, MACRO VOTE, NEWS, SESSION, VOL REGIME + the 7 engine rows)");
+      CHECK(studyRows == 8, "the MH15 PLUS table: 8 rows (DAY FORECAST, ADR ROOM, ELLIOTT, WOLFE, FIB, VWAP / PROFILE, STUDY VOTE, LAST BLOCK), no ladder on forex");
       CHECK(dup == 0, "no key twice");
       CHECK(empty == 0, "every row has a value");
       CHECK(lbl("h1").find("ENGINE") != std::string::npos && lbl("h2").find("NY TRAP  +  PENDING ORDER BOARD") != std::string::npos, "engine table + board");
@@ -859,7 +863,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_ForexScalper\"", "\"ea_version\":\"1.0.5\"", "\"strength\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"htf\":{", "\"smart_exit\":{", "\"portfolio\":{",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_ForexScalper\"", "\"ea_version\":\"1.1.0\"", "\"strength\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"htf\":{", "\"smart_exit\":{", "\"portfolio\":{",
                            "\"symbol\":\"EURUSD\"", "\"asset_class\":\"forex\"", "\"pair_class\":\"MAJOR\"", "\"base\":\"EUR\"", "\"quote\":\"USD\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"clock\":\"AUTO\"", "\"clock_offset_min\":180", "\"ny_dst\":true", "\"ny_open_min\":990", "\"london_open_min\":600", "\"asia_open_min\":60", "\"rollover_min\":0", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
@@ -1807,6 +1811,155 @@ int main()
       OnDeinit(0);
    }
    end("F10");
+
+   // ---- v1.1.0: MH15 PLUS on forex (the pure studies block is the metal EA's text, proved by tools/check_forex_engine.py and tested there) ----
+   // daily bars for the simulated broker: `before` synthetic days of range R before T0, then the market's own days
+   auto makeDays = [&](const Market &m, int before, double R) {
+      std::vector<MqlRates> d;
+      double p0 = m.m1[0].o;
+      for(int k = before; k >= 1; k--) d.push_back({T0 - (long long)k * 86400, p0, p0 + R / 2, p0 - R / 2, p0, 100, 0, 0});
+      for(const SBar &b : agg(m.m1, 86400)) d.push_back({b.t, b.o, b.h, b.l, b.c, 100, 0, 0});
+      return d;
+   };
+
+   begin("F11 MH15 PLUS table: ADR from the broker's daily bars, today from closed M5 bars, no daily bars = UNKNOWN and no gate, no ladder, fold");
+   {
+      load(eur, "EURUSD", "EUR", 5, 0.00001, 1.0);
+      startAt(START);
+      relax();
+      std::string why;
+      CHECK(g_studies && !g_fc.ok && g_fc.why == "no daily bars" && lbl("v_f1").find("UNKNOWN - no daily bars (no gate)") == 0, "the broker serves no daily bars: the forecast is UNKNOWN and says why");
+      g_adrGate = true;
+      CHECK(!NqAdrRoomBlocks(1, SIM.bid, SIM.bid + 1.0, why) && !NqStudiesBlock(1, SIM.bid, SIM.bid + 1.0, why), "UNKNOWN gates nothing");
+      OnDeinit(0);
+
+      load(eur, "EURUSD", "EUR", 5, 0.00001, 1.0);
+      SIM.d1 = makeDays(eur, 20, 0.0060);
+      startAt(START);
+      relax();
+      run(START + 1, START + 200);
+      double sum = 0.0;
+      int nc = 0;
+      for(int i = (int)SIM.d1.size() - 1; i >= 0 && nc < 14; i--)
+         if(SIM.d1[(size_t)i].time + 86400 <= SIM.now) { sum += SIM.d1[(size_t)i].high - SIM.d1[(size_t)i].low; nc++; }
+      double hi = -1e18, lo = 1e18;
+      for(const MqlRates &b : SIM.m5)
+         if(b.time >= g_fc.dayStart && b.time + 300 <= SIM.now) { hi = std::max(hi, b.high); lo = std::min(lo, b.low); }
+      CHECK(g_fc.ok && nc == 14 && near(g_fc.adr, sum / 14.0, 1e-12) && g_fc.dayStart == T0 + 4 * 86400, "ADR = the mean range of the last 14 completed broker days");
+      CHECK(near(g_fc.hi, hi) && near(g_fc.lo, lo) && near(g_fc.usedPct, 100.0 * (hi - lo) / g_fc.adr, 1e-9), "today's high / low = the closed M5 bars since the day started");
+      CHECK(near(g_fc.top, std::max(lo + g_fc.adr, hi)) && near(g_fc.bottom, std::min(hi - g_fc.adr, lo)), "top / bottom (no 4h bars at this broker: no snap)");
+      std::printf("    ADR %.5f, used %.0f%% %s, top %.5f bottom %.5f\n", g_fc.adr, g_fc.usedPct, NqFdStateText(g_fc.state).c_str(), g_fc.top, g_fc.bottom);
+      CHECK(lbl("tF") != "<missing>" && lbl("hF").find("MH15 PLUS   DAY FORECAST + PATTERN STUDIES") == 0 && lbl("v_f1").find("ADR ") == 0 && lbl("v_f1").find(" used ") != std::string::npos,
+            "the MH15 PLUS table is on the chart with the DAY FORECAST row");
+      CHECK(lbl("fl0_0") == "<missing>" && lbl("v_f0") == "<missing>" && lbl("hF").find("LADDER") == std::string::npos, "no ladder rows and no GO TRADE row on forex");
+      CHECK(g_st.ok && lbl("v_f3") != "<missing>" && lbl("v_f6").find("AVWAP from the high") == 0 && lbl("v_f8").find("none - ") == 0, "the pattern studies run on the closed M15 bars and are on the table");
+      CHECK(SIM.objs.count("NQEA_C_FC_T") == 1 && SIM.objs.count("NQEA_C_FC_B") == 1, "the forecast top / bottom are drawn on the chart");
+      g_adrGate = true;
+      double e1 = g_fc.top - 0.0010;
+      CHECK(NqAdrRoomBlocks(1, e1, e1 + 0.0015, why) && why.find("ADR ROOM: BUY") == 0 && !NqAdrRoomBlocks(1, e1, e1 + 0.0009, why), "BUY 10 pips under the top: a 15-pip target is blocked, a 9-pip target fits");
+      double e2 = g_fc.bottom + 0.0010;
+      CHECK(NqAdrRoomBlocks(-1, e2, e2 - 0.0015, why) && why.find("ADR ROOM: SELL") == 0 && !NqAdrRoomBlocks(-1, e2, e2 - 0.0009, why), "SELL 10 pips above the bottom: the mirror");
+      int keep = g_fc.state;
+      g_fc.state = NQ_FD_EXPAND;
+      CHECK(!NqAdrRoomBlocks(1, e1, e1 + 0.0015, why), "EXPANSION (event mode): the gate stands down");
+      g_fc.state = keep;
+      g_adrGate = false;
+      CHECK(!NqAdrRoomBlocks(1, e1, e1 + 0.0015, why), "gate off: nothing is removed");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "NQEA_P_hF");
+      CHECK(g_fcCollapsed && lbl("v_f1") == "<missing>" && lbl("hF").find("(click: unfold)") != std::string::npos, "a click on the table's header folds it");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "NQEA_P_hF");
+      CHECK(!g_fcCollapsed && lbl("v_f1").find("ADR ") == 0, "... and unfolds it");
+      std::string tj = NqTelemetryJson();
+      CHECK(tj.find("\"mh15\":{\"on\":true") != std::string::npos && tj.find("\"forecast_ok\":true") != std::string::npos && tj.find("\"ladder\"") == std::string::npos,
+            "telemetry carries the table (ANALYSIS ONLY), without a ladder");
+      OnDeinit(0);
+   }
+   end("F11");
+
+   begin("F12 ADR ROOM end to end: with the gate ON no order is opened or left resting whose first target is outside the day's forecast range");
+   {
+      auto runDay = [&](bool gate, int &opened, int &blocks, int &restingBad) {
+         load(eur, "EURUSD", "EUR", 5, 0.00001, 1.0);
+         SIM.d1 = makeDays(eur, 20, 0.0010);    // quiet days before: a small ADR, so the day fills it
+         startAt(START);
+         relax();
+         g_adrGate = gate;
+         opened = 0; blocks = 0; restingBad = 0;
+         int bad = 0;
+         std::string lastNote;
+         for(size_t i = START + 1; i <= END; i++)
+         {
+            size_t before = SIM.sent.size();
+            stepTo(i);
+            if(!g_fc.ok) continue;
+            for(size_t k = before; k < SIM.sent.size(); k++)
+            {
+               const MqlTradeRequest &r = SIM.sent[k];
+               bool pend = (r.action == TRADE_ACTION_PENDING);
+               bool mkt = (r.action == TRADE_ACTION_DEAL && r.position == 0);
+               if(!pend && !mkt) continue;
+               opened++;
+               int dir = (r.type == ORDER_TYPE_BUY || r.type == ORDER_TYPE_BUY_LIMIT || r.type == ORDER_TYPE_BUY_STOP) ? 1 : -1;
+               double target = r.tp;
+               NqPlan p;
+               if(pend && NqPlanByComment(r.comment, p)) target = p.tp1;
+               double room = (dir > 0) ? (g_fc.top - r.price) : (r.price - g_fc.bottom);
+               if(room < std::fabs(target - r.price) - 1e-9) bad++;
+            }
+            for(const SimOrder &o : SIM.ord)
+            {
+               NqPlan p;
+               if(!NqPlanByComment(o.comment, p)) continue;
+               double room = (p.dir > 0) ? (g_fc.top - p.entry) : (p.entry - g_fc.bottom);
+               if(room < std::fabs(p.tp1 - p.entry) - 1e-9) restingBad++;
+            }
+            if(g_studyNote != lastNote) { lastNote = g_studyNote; if(lastNote.find("ADR ROOM") == 0) blocks++; }
+         }
+         OnDeinit(0);
+         return bad;
+      };
+      int openedOff = 0, blocksOff = 0, restOff = 0, openedOn = 0, blocksOn = 0, restOn = 0;
+      int badOff = runDay(false, openedOff, blocksOff, restOff);
+      int badOn = runDay(true, openedOn, blocksOn, restOn);
+      std::printf("    gate OFF: %d opening requests, %d with a target outside the range, %d resting-order minutes outside; gate ON: %d requests, %d outside, %d resting outside, %d blocks\n",
+                  openedOff, badOff, restOff, openedOn, badOn, restOn, blocksOn);
+      CHECK(openedOff > 0 && badOff + restOff > 0 && blocksOff == 0, "without the gate the run does send or rest orders whose target is outside the range (else this check would prove nothing)");
+      CHECK(openedOn > 0 && badOn == 0 && restOn == 0, "with the gate: every order sent fits, and a resting order whose room is gone is pulled the same minute");
+      CHECK(blocksOn > 0 && openedOn <= openedOff, "the gate only removes entries (never more than the run without it), and says so on the table");
+   }
+   end("F12");
+
+   begin("F13 the study vote on forex: a live setup against, confirmed by the context, blocks; context alone never does");
+   {
+      load(eur, "EURUSD", "EUR", 5, 0.00001, 1.0);
+      startAt(START);
+      relax();
+      run(START + 1, START + 60);
+      g_studyGate = true;
+      g_st.ew.stage = NQ_EW_UNKNOWN;
+      g_st.ww.state = NQ_WW_NONE;
+      g_st.close = 1.0800;
+      g_st.haveAvHi = true; g_st.haveAvLo = true; g_st.avHi = 1.0810; g_st.avLo = 1.0820;
+      g_st.vp.ok = true; g_st.vp.val = 1.0805; g_st.vp.vah = 1.0830;
+      std::string why, voters;
+      CHECK(NqStudyVote(1, voters) == -2 && NqStudyVote(-1, voters) == 2, "below both anchored VWAPs and below the value area: BUY -2, SELL +2");
+      CHECK(!NqStudiesBlock(1, SIM.bid, SIM.bid + 0.0001, why) && !NqStudiesBlock(-1, SIM.bid, SIM.bid - 0.0001, why), "context alone never blocks");
+      g_st.vp.ok = false;
+      g_st.ew.stage = NQ_EW_W3; g_st.ew.dir = -1; g_st.ew.setupDir = -1; g_st.ew.setupLife = NQ_SU_ALIVE;
+      CHECK(NqStudiesBlock(1, SIM.bid, SIM.bid + 0.0001, why) && why.find("STUDIES AGAINST BUY (vote -2: elliott wave-3 setup down -1, avwap below both -1)") == 0 && g_studyNote == why,
+            "a live Elliott setup down + below both VWAPs: the buy is blocked, the voters are named, LAST BLOCK holds it");
+      CHECK(!NqStudiesBlock(-1, SIM.bid, SIM.bid - 0.0001, why), "the sell is not touched");
+      g_st.haveAvHi = false;
+      CHECK(!NqStudiesBlock(1, SIM.bid, SIM.bid + 0.0001, why), "the setup alone (-1) does not block");
+      g_st.haveAvHi = true;
+      g_studyGate = false;
+      CHECK(!NqStudiesBlock(1, SIM.bid, SIM.bid + 0.0001, why), "gate off: nothing is removed");
+      g_studyGate = true;
+      g_studies = false;
+      CHECK(NqStudyVote(1, voters) == 0 && !NqStudiesBlock(1, SIM.bid, SIM.bid + 0.0001, why), "master switch off: no vote, no gate");
+      OnDeinit(0);
+   }
+   end("F13");
 
    std::printf("\nFOREX EA TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;

@@ -64,13 +64,22 @@
 //|         -> BUY / SELL / WAIT                                     |
 //|   RISK ENGINE  -> AUTO LOT  -> MT5                               |
 //|                                                                  |
+//|  v1.1.0 (2026-11-12, from metal 1.11.0): the MH15 PLUS table -   |
+//|  this pair's DAY FORECAST (ADR top / bottom, used %) and the     |
+//|  PATTERN STUDIES on M15 (Elliott, Wolfe, Fibonacci extension,    |
+//|  anchored VWAP, volume profile). Two gates use them and each     |
+//|  only REMOVES an entry: ADR ROOM (the first target must fit      |
+//|  inside the day's forecast range) and the STUDY VOTE (a live     |
+//|  Elliott / Wolfe setup against, confirmed by the context). No    |
+//|  rotation ladder on forex. NO DATA = no vote, no gate.           |
+//|                                                                  |
 //|  Supported symbols: any pair of two ISO currency codes, any      |
 //|  broker prefix or suffix (EURUSD.m, #GBPJPY, AUD/USD, mUSDCAD).  |
 //|  Personal tool. No Telegram, no DLL. Network = the two optional  |
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.05"
+#property version     "1.10"
 #property description "Any forex pair: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Currency strength + oil/gold/bond/DXY witnesses + MT5 calendar news guard, home sessions, session tilt, smart exit."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -2735,6 +2744,1149 @@ string NqEvidenceText(int n)
 }
 //=== NB_ENGINE_END ===
 
+//=== NB_STUDIES_BEGIN ===
+//+------------------------------------------------------------------+
+//| STUDIES (v1.11.0) - the MH15 PLUS table. Pure calculation like the |
+//| engine: CLOSED bars only, time order (index 0 = oldest), causal,   |
+//| no terminal calls, the MQL5 subset that is also valid C++.         |
+//|                                                                    |
+//|  DAY FORECAST (daily-forecast-v1): ADR = mean high-low of the last |
+//|   14 COMPLETED daily bars; top = today's low + ADR, bottom =       |
+//|   today's high - ADR, each snapped onto the newest confirmed 4h    |
+//|   swing or the previous day's extreme when within 0.5 x ATR(14,4h);|
+//|   used % = today's range / ADR; ADR FULL = fade, no chase.         |
+//|  ROTATION LADDER (rotation-v1): FRESH < 35, MOVING, NEAR FULL >=   |
+//|   85, DONE >= 100; score = (room x 0.5 + min(|move|, 60)) x (1 in  |
+//|   the asset's session, else 0.5); GO TRADE = the highest score.    |
+//|   It ranks ROOM LEFT; it does not predict where money goes.        |
+//|  PATTERN STUDIES (pattern-studies-v1) on M15: Elliott impulse      |
+//|   count (pivot strength 8), Wolfe wave (10), Fibonacci extension   |
+//|   and anchored VWAP (5), volume profile (40 rows, TICK volume).    |
+//|                                                                    |
+//| Every level here is an ANALYSIS level. The terminal layer uses the |
+//| studies only to REMOVE an entry (never to add, resize or move one).|
+//+------------------------------------------------------------------+
+// forecast day states
+#define NQ_FD_UNKNOWN 0
+#define NQ_FD_FRESH   1
+#define NQ_FD_UP      2   // MOVING UP
+#define NQ_FD_DOWN    3   // MOVING DOWN
+#define NQ_FD_NEAR    4   // NEAR FULL ADR (85%+)
+#define NQ_FD_DONE    5   // ADR FULL (100%+)
+#define NQ_FD_EXPAND  6   // event mode: a full day on an event day reads EXPANSION
+
+// Elliott stages
+#define NQ_EW_UNKNOWN 0
+#define NQ_EW_12      1   // waves 1-2 printed, the wave-3 setup has not triggered
+#define NQ_EW_W3      2   // wave-3 setup TRIGGERED (a setup, with the impulse)
+#define NQ_EW_W4      3   // wave-4 pullback (not a setup)
+#define NQ_EW_W5      4   // wave 5 underway (late = beyond the wave-3 end: do not add)
+#define NQ_EW_DONE    5   // five waves complete (a setup AGAINST the impulse)
+#define NQ_EW_ABC     6   // correction after a finished five (labels only)
+
+// a setup's life
+#define NQ_SU_NONE    0
+#define NQ_SU_ALIVE   1
+#define NQ_SU_STOPPED 2
+#define NQ_SU_TARGET  3   // the second target was reached
+#define NQ_SU_EXPIRED 4
+
+// Wolfe states
+#define NQ_WW_NONE       0
+#define NQ_WW_DEVELOPING 1   // points 1-4 fit, point 5 has not printed (never a setup)
+#define NQ_WW_CONFIRMED  2   // five points fit; its life is in `life`
+
+#define NQ_STUDY_WARMUP 120   // nothing made in the first 120 loaded bars counts (the walk has not settled there)
+#define NQ_FIB_LEVELS   6
+#define NQ_VP_ROWS      40
+
+struct NqDayFc
+{
+   bool     ok;          // ADR and a closed bar of today exist: every number below is real
+   string   why;         // when not ok: what is missing (nothing is invented)
+   datetime dayStart;    // the BROKER's day (the open time of the forming daily bar)
+   int      adrDays;
+   double   adr;
+   double   pdh;         // the previous completed day
+   double   pdl;
+   double   pdc;
+   double   hi;          // today, from closed intraday bars
+   double   lo;
+   double   last;
+   int      barsToday;
+   double   usedPct;     // today's range / ADR
+   double   movePct;     // (last close - previous day's close) / ADR
+   double   topRaw;
+   double   botRaw;
+   double   top;         // max(snapped top, today's high)
+   double   bottom;      // min(snapped bottom, today's low)
+   int      topSnap;     // 0 = not moved, 1 = onto the 4h swing, 2 = onto the previous day's high
+   int      botSnap;
+   int      state;       // NQ_FD_*
+   datetime fullT;       // close time of the first closed bar where the range reached the ADR (0 = not yet)
+   int      fullSide;    // +1 a new high completed the range (top in), -1 a new low (bottom in)
+   int      fadeDir;     // the hypothetical fade scenario (0 = none): against the extreme that bar made
+   double   fadeEntry;
+   double   fadeSl;
+   double   fadeTp1;
+   double   fadeTp2;
+};
+
+struct NqElliott
+{
+   int      stage;       // NQ_EW_*
+   int      dir;         // direction of the impulse (+1 up)
+   bool     complete;    // five waves printed and every rule passed; else the count is PARTIAL
+   int      nP;          // pivots in the count (3..6): P0 = the start, P1..P5 = the ends of waves 1..5
+   double   p[6];
+   int      pIdx[6];
+   bool     late;        // wave 5: the close is beyond the wave-3 end
+   int      abc;         // after a finished five: 1 = A, 2 = B, 3 = C printed
+   int      setupDir;    // 0 = no setup. Wave-3 setup: with the impulse. Five done: against it
+   int      setupIdx;    // the bar that triggered it
+   int      setupLife;   // NQ_SU_*
+   double   entry;
+   double   sl;
+   double   t1;
+   double   t2;
+   int      horizon;     // bars the setup lives (twice the bars the count has taken)
+   double   retr2;       // wave 2 as a share of wave 1
+   double   w3x;         // wave 3 / wave 1 (0 = not printed)
+   int      altStage;    // an ALTERNATIVE count in the other direction (context only)
+   int      altDir;
+};
+
+struct NqWolfe
+{
+   int      state;       // NQ_WW_*
+   int      dir;         // +1 bullish (falling wedge), -1 bearish
+   double   p[5];
+   int      pIdx[5];
+   int      detIdx;      // the detecting bar (point 5 confirmed)
+   int      life;        // NQ_SU_*
+   double   entry;
+   double   sl;
+   double   tp1;
+   double   tp2;
+   double   apex;        // bar index where lines 1-3 and 2-4 meet
+   int      expiryIdx;   // one pattern length after the apex
+   double   zoneLo;      // developing: where point 5 must print, at the newest bar
+   double   zoneHi;
+};
+
+struct NqFibExt
+{
+   bool     ok;
+   int      dir;         // +1 upward (A is a low)
+   double   a;
+   double   b;
+   double   c;
+   int      cIdx;
+   double   lv[NQ_FIB_LEVELS];
+   int      reached;     // how many levels a later closed bar has traded
+   bool     invalid;     // a bar closed beyond C
+};
+
+struct NqProfile
+{
+   bool     ok;
+   double   lo;
+   double   hi;
+   double   step;
+   double   poc;
+   double   vah;
+   double   val;
+};
+
+struct NqStudySet
+{
+   bool      ok;
+   int       nBars;
+   double    close;      // the newest close of the study series
+   NqElliott ew;
+   NqWolfe   ww;
+   NqFibExt  fib;
+   bool      haveAvHi;   // anchored VWAP from the highest confirmed swing high
+   double    avHi;
+   double    avHiBand;
+   bool      haveAvLo;   // ... from the lowest confirmed swing low
+   double    avLo;
+   double    avLoBand;
+   bool      haveAvDay;  // ... from the start of the broker day
+   double    avDay;
+   double    avDayBand;
+   NqProfile vp;
+};
+
+void NqDayFcReset(NqDayFc &f, string why)
+{
+   f.ok = false;
+   f.why = why;
+   f.dayStart = 0;
+   f.adrDays = 0;
+   f.adr = 0.0;
+   f.pdh = 0.0;
+   f.pdl = 0.0;
+   f.pdc = 0.0;
+   f.hi = 0.0;
+   f.lo = 0.0;
+   f.last = 0.0;
+   f.barsToday = 0;
+   f.usedPct = 0.0;
+   f.movePct = 0.0;
+   f.topRaw = 0.0;
+   f.botRaw = 0.0;
+   f.top = 0.0;
+   f.bottom = 0.0;
+   f.topSnap = 0;
+   f.botSnap = 0;
+   f.state = NQ_FD_UNKNOWN;
+   f.fullT = 0;
+   f.fullSide = 0;
+   f.fadeDir = 0;
+   f.fadeEntry = 0.0;
+   f.fadeSl = 0.0;
+   f.fadeTp1 = 0.0;
+   f.fadeTp2 = 0.0;
+}
+
+// a raw level within `tol` of a candidate is moved onto it (the nearest wins).
+// which: 0 = not moved, 1 = candA (the 4h swing), 2 = candB (the previous day's extreme)
+double NqSnapLevel(double raw, double candA, double candB, double tol, int &which)
+{
+   which = 0;
+   if(tol <= 0.0)
+      return raw;
+   double best = raw;
+   double bestD = tol;
+   if(candA > 0.0 && MathAbs(candA - raw) <= bestD)
+   {
+      best = candA;
+      bestD = MathAbs(candA - raw);
+      which = 1;
+   }
+   if(candB > 0.0 && ((which == 0 && MathAbs(candB - raw) <= bestD) || (which != 0 && MathAbs(candB - raw) < bestD)))
+   {
+      best = candB;
+      which = 2;
+   }
+   return best;
+}
+
+// THE DAY FORECAST. d = daily bars in time order, the FORMING day last (its open time is the
+// broker's day start); s = closed intraday bars. swHi / swLo = the newest confirmed 4h swing
+// high / low (0 = none), snapTol = 0.5 x ATR(14, 4h) (0 = no snap). Nothing is guessed: fewer
+// than adrLen completed days, no bar of today or a series that is not daily = not ok, with why.
+void NqDayForecast(const NqSeries &d, const NqSeries &s, datetime now, int adrLen,
+                   double swHi, double swLo, double snapTol, bool eventDay, NqDayFc &f)
+{
+   NqDayFcReset(f, "no daily bars");
+   int nD = d.n;
+   if(nD < 1 || adrLen < 1)
+      return;
+   for(int i = 1; i < nD; i++)
+   {
+      if((long)d.t[i] - (long)d.t[i - 1] < 72000)
+      {
+         f.why = "the daily series is not daily";
+         return;
+      }
+   }
+   int last = nD - 1;
+   bool forming = ((long)d.t[last] + 86400 > (long)now);
+   int nc = forming ? last : nD;          // completed days
+   if(nc < adrLen)
+   {
+      f.why = "ADR needs " + IntegerToString(adrLen) + " completed days (" + IntegerToString(nc) + " loaded)";
+      return;
+   }
+   double sum = 0.0;
+   for(int i = nc - adrLen; i < nc; i++)
+      sum += d.h[i] - d.l[i];
+   f.adr = sum / adrLen;
+   f.adrDays = adrLen;
+   f.pdh = d.h[nc - 1];
+   f.pdl = d.l[nc - 1];
+   f.pdc = d.c[nc - 1];
+   if(f.adr <= 0.0)
+   {
+      f.why = "the ADR is zero";
+      return;
+   }
+   if(!forming)
+   {
+      f.why = "no daily bar of today yet";
+      return;
+   }
+   f.dayStart = d.t[last];
+   int first = -1;
+   for(int i = s.n - 1; i >= 0; i--)
+   {
+      if(s.t[i] < f.dayStart)
+         break;
+      first = i;
+   }
+   if(first < 0)
+   {
+      f.why = "no closed bar of today yet";
+      return;
+   }
+   double hi = s.h[first];
+   double lo = s.l[first];
+   for(int i = first; i < s.n; i++)
+   {
+      bool newH = (i == first) || (s.h[i] > hi);
+      bool newL = (i == first) || (s.l[i] < lo);
+      if(s.h[i] > hi)
+         hi = s.h[i];
+      if(s.l[i] < lo)
+         lo = s.l[i];
+      if(f.fullT == 0 && hi - lo >= f.adr)
+      {
+         // the first closed bar where the day's range reaches the ADR, and the extreme that bar made
+         f.fullT = s.t[i] + s.sec;
+         int side = (s.c[i] >= (hi + lo) / 2.0) ? 1 : -1;
+         if(newH && !newL)
+            side = 1;
+         if(newL && !newH)
+            side = -1;
+         f.fullSide = side;
+         // the terminal's own fade scenario (hypothetical): from that bar's close, stop 0.25 x ADR
+         // beyond the day's extreme at that bar, targets 0.25 and 0.5 x ADR back, an hour or more left
+         long left = (long)f.dayStart + 86400 - (long)f.fullT;
+         double q = 0.25 * f.adr;
+         double e = s.c[i];
+         double sl = (side > 0) ? (hi + q) : (lo - q);
+         double t1 = (side > 0) ? (e - q) : (e + q);
+         bool between = (side > 0) ? (e < sl && e > t1) : (e > sl && e < t1);
+         if(left >= 3600 && between)
+         {
+            f.fadeDir = -side;
+            f.fadeEntry = e;
+            f.fadeSl = sl;
+            f.fadeTp1 = t1;
+            f.fadeTp2 = (side > 0) ? (e - 2.0 * q) : (e + 2.0 * q);
+         }
+      }
+   }
+   f.hi = hi;
+   f.lo = lo;
+   f.last = s.c[s.n - 1];
+   f.barsToday = s.n - first;
+   f.usedPct = 100.0 * (hi - lo) / f.adr;
+   f.movePct = 100.0 * (f.last - f.pdc) / f.adr;
+   f.topRaw = lo + f.adr;
+   f.botRaw = hi - f.adr;
+   double topS = NqSnapLevel(f.topRaw, swHi, f.pdh, snapTol, f.topSnap);
+   double botS = NqSnapLevel(f.botRaw, swLo, f.pdl, snapTol, f.botSnap);
+   f.top = MathMax(topS, hi);
+   f.bottom = MathMin(botS, lo);
+   if(f.usedPct >= 100.0)
+      f.state = eventDay ? NQ_FD_EXPAND : NQ_FD_DONE;
+   else if(f.usedPct >= 85.0)
+      f.state = NQ_FD_NEAR;
+   else if(f.usedPct < 35.0)
+      f.state = NQ_FD_FRESH;
+   else
+      f.state = (f.movePct >= 0.0) ? NQ_FD_UP : NQ_FD_DOWN;
+   f.ok = true;
+   f.why = "";
+}
+
+string NqFdStateText(int st)
+{
+   switch(st)
+   {
+      case NQ_FD_FRESH:  return "FRESH";
+      case NQ_FD_UP:     return "MOVING UP";
+      case NQ_FD_DOWN:   return "MOVING DOWN";
+      case NQ_FD_NEAR:   return "NEAR FULL";
+      case NQ_FD_DONE:   return "DONE";
+      case NQ_FD_EXPAND: return "EXPANSION";
+   }
+   return "UNKNOWN";
+}
+
+// THE ROTATION LADDER. room = the share of the ADR still unused; the score ranks ROOM LEFT
+// (and how far the day has already travelled from yesterday's close, capped at 60).
+double NqLadderRoom(double usedPct)
+{
+   return MathMax(0.0, 100.0 - usedPct);
+}
+
+double NqLadderScore(double usedPct, double movePct, bool inSession)
+{
+   double mv = MathMin(MathAbs(movePct), 60.0);
+   return (NqLadderRoom(usedPct) * 0.5 + mv) * (inSession ? 1.0 : 0.5);
+}
+
+// rank 1 = the highest score among the rows that have data; 0 = not ranked. A tie keeps the row order.
+void NqLadderRank(const double &score[], const int &have[], int n, int &rank[])
+{
+   ArrayResize(rank, n);
+   for(int i = 0; i < n; i++)
+   {
+      rank[i] = 0;
+      if(have[i] == 0)
+         continue;
+      int r = 1;
+      for(int k = 0; k < n; k++)
+      {
+         if(k == i || have[k] == 0)
+            continue;
+         if(score[k] > score[i] || (score[k] == score[i] && k < i))
+            r++;
+      }
+      rank[i] = r;
+   }
+}
+
+// minute of the NEW YORK day from a server minute and the server minute of 17:00 New York
+int NqNyMinute(int serverMin, int rollMin)
+{
+   int m = (serverMin - rollMin + 1020) % 1440;
+   if(m < 0)
+      m += 1440;
+   return m;
+}
+
+// the MH15 sessions in New York time: Asia 19:00-03:00, London 03:00-08:00, New York 08:00-17:00
+string NqMh15Session(int nyMin)
+{
+   if(nyMin >= 480 && nyMin < 1020)
+      return "NEW YORK";
+   if(nyMin >= 180 && nyMin < 480)
+      return "LONDON";
+   if(nyMin >= 1140 || nyMin < 180)
+      return "ASIA";
+   return "OFF";
+}
+
+// metals, energy and FX trade their range in London or New York
+bool NqMetalInSession(int nyMin)
+{
+   return (nyMin >= 180 && nyMin < 1020);
+}
+
+// the ALTERNATING swing sequence known at the close of bar `at`: confirmed pivots only; of two
+// neighbours of the same kind the more extreme one stays (a zigzag that never repaints the past)
+int NqAltPivots(const NqPivot &piv[], int np, int at, NqPivot &alt[])
+{
+   ArrayResize(alt, 0);
+   int na = 0;
+   for(int i = 0; i < np; i++)
+   {
+      if(piv[i].confirmIdx > at)
+         continue;
+      if(na > 0 && alt[na - 1].kind == piv[i].kind)
+      {
+         bool more = (piv[i].kind > 0) ? (piv[i].price >= alt[na - 1].price) : (piv[i].price <= alt[na - 1].price);
+         if(more)
+            alt[na - 1] = piv[i];
+         continue;
+      }
+      ArrayResize(alt, na + 1, 64);
+      alt[na] = piv[i];
+      na++;
+   }
+   return na;
+}
+
+void NqElliottReset(NqElliott &e)
+{
+   e.stage = NQ_EW_UNKNOWN;
+   e.dir = 0;
+   e.complete = false;
+   e.nP = 0;
+   for(int i = 0; i < 6; i++)
+   {
+      e.p[i] = 0.0;
+      e.pIdx[i] = -1;
+   }
+   e.late = false;
+   e.abc = 0;
+   e.setupDir = 0;
+   e.setupIdx = -1;
+   e.setupLife = NQ_SU_NONE;
+   e.entry = 0.0;
+   e.sl = 0.0;
+   e.t1 = 0.0;
+   e.t2 = 0.0;
+   e.horizon = 0;
+   e.retr2 = 0.0;
+   e.w3x = 0.0;
+   e.altStage = NQ_EW_UNKNOWN;
+   e.altDir = 0;
+}
+
+// the impulse rules on k pivots (3..6) from alt[from]: wave 1 at least 3 ATR, wave 2 retraces
+// at least 23.6% and never passes the start of wave 1, wave 3 ends beyond wave 1, wave 4 never
+// enters wave 1, wave 5 ends beyond wave 3 and wave 3 is never the shortest. dir = +1 up.
+bool NqEwRules(const NqPivot &alt[], int na, int from, int k, const double &atr[], int nBars, int &dir)
+{
+   dir = 0;
+   if(k < 3 || k > 6 || from < 0 || from + k > na)
+      return false;
+   dir = -alt[from].kind;                 // a low starts an up impulse
+   double u[6];
+   for(int i = 0; i < 6; i++)
+      u[i] = (i < k) ? (dir * alt[from + i].price) : 0.0;
+   double w1 = u[1] - u[0];
+   int i1 = alt[from + 1].idx;
+   double a = (i1 >= 0 && i1 < nBars) ? atr[i1] : 0.0;
+   if(w1 <= 0.0 || a <= 0.0 || w1 < 3.0 * a)
+      return false;
+   if(!(u[2] > u[0]) || (u[1] - u[2]) / w1 < 0.236)
+      return false;
+   if(k >= 4 && !(u[3] > u[1]))
+      return false;
+   if(k >= 5 && !(u[4] > u[1]))
+      return false;
+   if(k >= 6)
+   {
+      double w3 = u[3] - u[2];
+      double w5 = u[5] - u[4];
+      if(!(u[5] > u[3]) || (w3 < w1 && w3 < w5))
+         return false;
+   }
+   return true;
+}
+
+// the life of a setup from the bar after it triggered to `at`: the stop first (pessimistic)
+int NqSetupLife(const NqSeries &s, int trig, int at, int dir, double sl, double t2, int horizon)
+{
+   for(int j = trig + 1; j <= at && j < s.n; j++)
+   {
+      if((dir > 0) ? (s.l[j] <= sl) : (s.h[j] >= sl))
+         return NQ_SU_STOPPED;
+      if((dir > 0) ? (s.h[j] >= t2) : (s.l[j] <= t2))
+         return NQ_SU_TARGET;
+      if(horizon > 0 && j - trig >= horizon)
+         return NQ_SU_EXPIRED;
+   }
+   return NQ_SU_ALIVE;
+}
+
+// one count on k pivots ending at the NEWEST pivot, with the live checks on the bars after it.
+// false = the rules or the bars since then do not allow it.
+bool NqEwTry(const NqSeries &s, const double &atr[], const NqPivot &alt[], int na, int k, int at, NqElliott &e)
+{
+   int from = na - k;
+   int dir = 0;
+   if(!NqEwRules(alt, na, from, k, atr, s.n, dir))
+      return false;
+   NqElliottReset(e);
+   e.dir = dir;
+   e.nP = k;
+   for(int i = 0; i < k; i++)
+   {
+      e.p[i] = alt[from + i].price;
+      e.pIdx[i] = alt[from + i].idx;
+   }
+   double w1 = MathAbs(e.p[1] - e.p[0]);
+   e.retr2 = MathAbs(e.p[1] - e.p[2]) / w1;
+   if(k >= 4)
+      e.w3x = MathAbs(e.p[3] - e.p[2]) / w1;
+   int lastIdx = alt[na - 1].idx;
+   int conf = alt[na - 1].confirmIdx;
+   if(k == 3)
+   {
+      // waves 1-2: alive while no bar passes the start of wave 1; the wave-3 setup triggers on the
+      // first close beyond the wave-1 end, at or after the bar that confirmed the wave-2 pivot
+      bool moved = false;                  // a bar went beyond the wave-2 pivot: wave 2 is still extending
+      int trig = -1;
+      for(int j = lastIdx + 1; j <= at && j < s.n; j++)
+      {
+         if((dir > 0) ? (s.l[j] <= e.p[0]) : (s.h[j] >= e.p[0]))
+            return false;
+         if(trig < 0)
+         {
+            if((dir > 0) ? (s.l[j] < e.p[2]) : (s.h[j] > e.p[2]))
+               moved = true;
+            if(!moved && j >= conf && ((dir > 0) ? (s.c[j] > e.p[1]) : (s.c[j] < e.p[1])))
+               trig = j;
+         }
+      }
+      e.stage = NQ_EW_12;
+      if(trig >= 0)
+      {
+         e.stage = NQ_EW_W3;
+         e.setupIdx = trig;
+         e.entry = s.c[trig];
+         e.sl = e.p[2];
+         e.t1 = e.p[2] + dir * w1;
+         e.t2 = e.p[2] + dir * 1.618 * w1;
+         e.horizon = 2 * (trig - e.pIdx[0]);
+         bool between = (dir > 0) ? (e.entry > e.sl && e.entry < e.t1) : (e.entry < e.sl && e.entry > e.t1);
+         if(between && trig >= NQ_STUDY_WARMUP)
+         {
+            e.setupDir = dir;
+            e.setupLife = NqSetupLife(s, trig, at, dir, e.sl, e.t2, e.horizon);
+         }
+      }
+      return true;
+   }
+   if(k == 4 || k == 5)
+   {
+      // wave 4 (pullback) / wave 5 (underway): neither may enter wave 1
+      for(int j = lastIdx + 1; j <= at && j < s.n; j++)
+      {
+         if((dir > 0) ? (s.l[j] <= e.p[1]) : (s.h[j] >= e.p[1]))
+            return false;
+      }
+      e.stage = (k == 4) ? NQ_EW_W4 : NQ_EW_W5;
+      if(k == 5 && at < s.n)
+         e.late = (dir > 0) ? (s.c[at] > e.p[3]) : (s.c[at] < e.p[3]);
+      return true;
+   }
+   // five waves: COMPLETE. The setup is against the impulse from the bar that confirmed the wave-5 pivot
+   e.stage = NQ_EW_DONE;
+   e.complete = true;
+   if(conf <= at && conf < s.n)
+   {
+      double mv = MathAbs(e.p[5] - e.p[0]);
+      e.setupIdx = conf;
+      e.entry = s.c[conf];
+      e.sl = e.p[5];
+      e.t1 = e.p[5] - dir * 0.382 * mv;
+      e.t2 = e.p[5] - dir * 0.618 * mv;
+      e.horizon = 2 * (conf - e.pIdx[0]);
+      bool between = (dir > 0) ? (e.entry < e.sl && e.entry > e.t1) : (e.entry > e.sl && e.entry < e.t1);
+      if(between && conf >= NQ_STUDY_WARMUP)
+      {
+         e.setupDir = -dir;
+         e.setupLife = NqSetupLife(s, conf, at, -dir, e.sl, e.t2, e.horizon);
+      }
+   }
+   return true;
+}
+
+// THE ELLIOTT COUNT known at the close of bar `at`. piv = confirmed pivots (strength 8).
+// Order: a finished five ending at the newest pivot; a correction (A / B / C) after a finished
+// five; wave 5 underway; wave 4; waves 1-2. No valid count = UNKNOWN. A count in the other
+// direction that the same rules allow is kept as the ALTERNATIVE (context only).
+void NqElliottCount(const NqSeries &s, const double &atr[], const NqPivot &piv[], int np, int at, NqElliott &e)
+{
+   NqElliottReset(e);
+   NqPivot alt[];
+   int na = NqAltPivots(piv, np, at, alt);
+   if(na < 3)
+      return;
+   int chosen = 0;
+   NqElliott t;
+   NqElliottReset(t);
+   if(NqEwTry(s, atr, alt, na, 6, at, t))
+   {
+      e = t;
+      chosen = 6;
+   }
+   if(chosen == 0)
+   {
+      for(int x = 1; x <= 3 && chosen == 0; x++)
+      {
+         int dir = 0;
+         int from = na - 6 - x;
+         if(!NqEwRules(alt, na, from, 6, atr, s.n, dir))
+            continue;
+         NqElliottReset(e);
+         e.stage = NQ_EW_ABC;
+         e.dir = dir;
+         e.complete = true;
+         e.nP = 6;
+         e.abc = x;
+         for(int i = 0; i < 6; i++)
+         {
+            e.p[i] = alt[from + i].price;
+            e.pIdx[i] = alt[from + i].idx;
+         }
+         double w1 = MathAbs(e.p[1] - e.p[0]);
+         e.retr2 = MathAbs(e.p[1] - e.p[2]) / w1;
+         e.w3x = MathAbs(e.p[3] - e.p[2]) / w1;
+         chosen = 7;
+      }
+   }
+   for(int k = 5; k >= 3; k--)
+   {
+      if(!NqEwTry(s, atr, alt, na, k, at, t))
+         continue;
+      if(chosen == 0)
+      {
+         e = t;
+         chosen = k;
+      }
+      else if(t.dir != e.dir && e.altStage == NQ_EW_UNKNOWN)
+      {
+         e.altStage = t.stage;
+         e.altDir = t.dir;
+      }
+   }
+}
+
+string NqEwStageText(int stage)
+{
+   switch(stage)
+   {
+      case NQ_EW_12:   return "waves 1-2 (wave-3 setup not triggered)";
+      case NQ_EW_W3:   return "WAVE-3 SETUP TRIGGERED";
+      case NQ_EW_W4:   return "wave-4 pullback (not a setup)";
+      case NQ_EW_W5:   return "wave 5 underway";
+      case NQ_EW_DONE: return "FIVE WAVES COMPLETE";
+      case NQ_EW_ABC:  return "correction after a finished five";
+   }
+   return "UNKNOWN";
+}
+
+string NqSetupLifeText(int life)
+{
+   switch(life)
+   {
+      case NQ_SU_ALIVE:   return "alive";
+      case NQ_SU_STOPPED: return "stopped";
+      case NQ_SU_TARGET:  return "target 2 reached";
+      case NQ_SU_EXPIRED: return "expired";
+   }
+   return "none";
+}
+
+// +1 = the count supports direction d, -1 = it speaks against it, 0 = it says nothing.
+// A live wave-3 setup votes with the impulse; a live finished five votes against it;
+// wave 5 beyond the wave-3 end is "do not add late": against the impulse side only.
+int NqEwVote(const NqElliott &e, int d)
+{
+   if(d == 0)
+      return 0;
+   if((e.stage == NQ_EW_W3 || e.stage == NQ_EW_DONE) && e.setupDir != 0 && e.setupLife == NQ_SU_ALIVE)
+      return (e.setupDir == d) ? 1 : -1;
+   if(e.stage == NQ_EW_W5 && e.late && d == e.dir)
+      return -1;
+   return 0;
+}
+
+void NqWolfeReset(NqWolfe &w)
+{
+   w.state = NQ_WW_NONE;
+   w.dir = 0;
+   for(int i = 0; i < 5; i++)
+   {
+      w.p[i] = 0.0;
+      w.pIdx[i] = -1;
+   }
+   w.detIdx = -1;
+   w.life = NQ_SU_NONE;
+   w.entry = 0.0;
+   w.sl = 0.0;
+   w.tp1 = 0.0;
+   w.tp2 = 0.0;
+   w.apex = 0.0;
+   w.expiryIdx = -1;
+   w.zoneLo = 0.0;
+   w.zoneHi = 0.0;
+}
+
+// points 1-4 of a wedge from alt[from] (u = dir x price, so the bullish rules read for both):
+// 3 below 1, 4 below 2 and above 1, line 2-4 falling faster than line 1-3
+bool NqWolfeShape(const NqPivot &alt[], int na, int from, int &dir, double &m13, double &m24, double &height)
+{
+   dir = 0;
+   if(from < 0 || from + 4 > na)
+      return false;
+   dir = -alt[from].kind;                  // point 1 a low = bullish
+   double u1 = dir * alt[from].price;
+   double u2 = dir * alt[from + 1].price;
+   double u3 = dir * alt[from + 2].price;
+   double u4 = dir * alt[from + 3].price;
+   int i1 = alt[from].idx;
+   int i2 = alt[from + 1].idx;
+   int i3 = alt[from + 2].idx;
+   int i4 = alt[from + 3].idx;
+   if(i3 <= i1 || i4 <= i2)
+      return false;
+   if(!(u3 < u1) || !(u4 < u2) || !(u4 > u1))
+      return false;
+   m13 = (u3 - u1) / (i3 - i1);
+   m24 = (u4 - u2) / (i4 - i2);
+   if(!(m24 < m13))
+      return false;
+   height = u2 - u3;
+   return (height > 0.0);
+}
+
+// THE WOLFE WAVE known at the close of bar `at`. piv = confirmed pivots (strength 10).
+// CONFIRMED: the last five alternating pivots fit, point 5 within 15% of the pattern height of
+// line 1-3, the apex after point 5 and no further than one pattern length. Entry = the close of
+// the detecting bar, SL = point 5 -/+ 0.5 ATR, TP1 = the nearer of point 4 and the EPA (line 1-4
+// at the apex), TP2 = the further; it expires one pattern length after the apex.
+// DEVELOPING: points 1-4 fit and point 5 has not printed - shown with its zone, never a setup.
+void NqWolfeWave(const NqSeries &s, const double &atr[], const NqPivot &piv[], int np, int at, NqWolfe &w)
+{
+   NqWolfeReset(w);
+   NqPivot alt[];
+   int na = NqAltPivots(piv, np, at, alt);
+   int dir = 0;
+   double m13 = 0.0;
+   double m24 = 0.0;
+   double hgt = 0.0;
+   if(na >= 5 && NqWolfeShape(alt, na, na - 5, dir, m13, m24, hgt))
+   {
+      int f = na - 5;
+      double u1 = dir * alt[f].price;
+      double u2 = dir * alt[f + 1].price;
+      double u3 = dir * alt[f + 2].price;
+      double u4 = dir * alt[f + 3].price;
+      double u5 = dir * alt[f + 4].price;
+      int i1 = alt[f].idx;
+      int i2 = alt[f + 1].idx;
+      int i4 = alt[f + 3].idx;
+      int i5 = alt[f + 4].idx;
+      int len = i5 - i1;
+      double y5 = u1 + m13 * (i5 - i1);
+      double apex = (u2 - u1 + m13 * i1 - m24 * i2) / (m13 - m24);
+      int det = alt[f + 4].confirmIdx;
+      double a = (det >= 0 && det < s.n) ? atr[det] : 0.0;
+      if(u5 < u3 && MathAbs(u5 - y5) <= 0.15 * hgt && apex > i5 && apex <= i5 + len && det <= at && det < s.n && a > 0.0 && i4 > i1)
+      {
+         double epaU = u1 + (u4 - u1) / (i4 - i1) * (apex - i1);
+         double entry = s.c[det];
+         double sl = alt[f + 4].price - dir * 0.5 * a;
+         double tA = alt[f + 3].price;
+         double tB = dir * epaU;
+         double tp1 = (MathAbs(tA - entry) <= MathAbs(tB - entry)) ? tA : tB;
+         double tp2 = (tp1 == tA) ? tB : tA;
+         bool between = (dir > 0) ? (entry > sl && entry < tp1 && tp2 >= tp1) : (entry < sl && entry > tp1 && tp2 <= tp1);
+         if(between && det >= NQ_STUDY_WARMUP)
+         {
+            w.state = NQ_WW_CONFIRMED;
+            w.dir = dir;
+            for(int i = 0; i < 5; i++)
+            {
+               w.p[i] = alt[f + i].price;
+               w.pIdx[i] = alt[f + i].idx;
+            }
+            w.detIdx = det;
+            w.entry = entry;
+            w.sl = sl;
+            w.tp1 = tp1;
+            w.tp2 = tp2;
+            w.apex = apex;
+            w.expiryIdx = (int)MathCeil(apex) + len;
+            w.life = (w.expiryIdx > det) ? NqSetupLife(s, det, at, dir, sl, tp2, w.expiryIdx - det) : NQ_SU_EXPIRED;
+            return;
+         }
+      }
+   }
+   if(na >= 4 && NqWolfeShape(alt, na, na - 4, dir, m13, m24, hgt))
+   {
+      int f = na - 4;
+      double u1 = dir * alt[f].price;
+      double y = u1 + m13 * (at - alt[f].idx);
+      w.state = NQ_WW_DEVELOPING;
+      w.dir = dir;
+      for(int i = 0; i < 4; i++)
+      {
+         w.p[i] = alt[f + i].price;
+         w.pIdx[i] = alt[f + i].idx;
+      }
+      double zA = dir * (y - 0.15 * hgt);
+      double zB = dir * (y + 0.15 * hgt);
+      w.zoneLo = MathMin(zA, zB);
+      w.zoneHi = MathMax(zA, zB);
+   }
+}
+
+int NqWolfeVote(const NqWolfe &w, int d)
+{
+   if(d == 0 || w.state != NQ_WW_CONFIRMED || w.life != NQ_SU_ALIVE)
+      return 0;
+   return (w.dir == d) ? 1 : -1;
+}
+
+double NqFibRatio(int k)
+{
+   switch(k)
+   {
+      case 0: return 0.618;
+      case 1: return 1.0;
+      case 2: return 1.272;
+      case 3: return 1.618;
+      case 4: return 2.0;
+   }
+   return 2.618;
+}
+
+// FIBONACCI EXTENSION: the last three alternating pivots (strength 5) are A, B, C when C is a
+// pullback that holds inside A-B (when the newest pivot went beyond A, the three before it).
+// level = C + ratio x (B - A). REACHED = a later closed bar traded it; INVALID = a close beyond C.
+void NqFibReset(NqFibExt &f)
+{
+   f.ok = false;
+   f.dir = 0;
+   f.a = 0.0;
+   f.b = 0.0;
+   f.c = 0.0;
+   f.cIdx = -1;
+   f.reached = 0;
+   f.invalid = false;
+   for(int k = 0; k < NQ_FIB_LEVELS; k++)
+      f.lv[k] = 0.0;
+}
+
+void NqFibExtension(const NqSeries &s, const NqPivot &piv[], int np, int at, NqFibExt &f)
+{
+   NqFibReset(f);
+   NqPivot alt[];
+   int na = NqAltPivots(piv, np, at, alt);
+   for(int back = 0; back <= 1; back++)
+   {
+      int from = na - 3 - back;
+      if(from < 0)
+         return;
+      int dir = -alt[from].kind;
+      double ua = dir * alt[from].price;
+      double ub = dir * alt[from + 1].price;
+      double uc = dir * alt[from + 2].price;
+      if(!(uc > ua && uc < ub))
+         continue;
+      f.ok = true;
+      f.dir = dir;
+      f.a = alt[from].price;
+      f.b = alt[from + 1].price;
+      f.c = alt[from + 2].price;
+      f.cIdx = alt[from + 2].idx;
+      for(int k = 0; k < NQ_FIB_LEVELS; k++)
+         f.lv[k] = f.c + NqFibRatio(k) * (f.b - f.a);
+      for(int j = f.cIdx + 1; j <= at && j < s.n; j++)
+      {
+         if((dir > 0) ? (s.c[j] < f.c) : (s.c[j] > f.c))
+            f.invalid = true;
+         while(f.reached < NQ_FIB_LEVELS && ((dir > 0) ? (s.h[j] >= f.lv[f.reached]) : (s.l[j] <= f.lv[f.reached])))
+            f.reached++;
+      }
+      return;
+   }
+}
+
+// ANCHORED VWAP from bar `from` to `at`: sum(typical x tick volume) / sum(tick volume), with one
+// tick-volume-weighted standard deviation as the band. TICK volume = activity, not traded volume.
+bool NqAnchoredVwap(const NqSeries &s, int from, int at, double &vwap, double &band)
+{
+   vwap = 0.0;
+   band = 0.0;
+   if(from < 0 || from > at || at >= s.n)
+      return false;
+   double pv = 0.0;
+   double vv = 0.0;
+   double pv2 = 0.0;
+   for(int j = from; j <= at; j++)
+   {
+      double tp = (s.h[j] + s.l[j] + s.c[j]) / 3.0;
+      double vol = (s.v[j] > 0.0) ? s.v[j] : 1.0;
+      pv += tp * vol;
+      pv2 += tp * tp * vol;
+      vv += vol;
+   }
+   if(vv <= 0.0)
+      return false;
+   vwap = pv / vv;
+   double vr = pv2 / vv - vwap * vwap;
+   band = (vr > 0.0) ? MathSqrt(vr) : 0.0;
+   return true;
+}
+
+// VOLUME PROFILE: each bar's tick volume spread evenly over its high-low range into `rows` price
+// rows. POC = the busiest row; the value area grows outward from it to 70% of the activity.
+void NqProfileReset(NqProfile &p)
+{
+   p.ok = false;
+   p.lo = 0.0;
+   p.hi = 0.0;
+   p.step = 0.0;
+   p.poc = 0.0;
+   p.vah = 0.0;
+   p.val = 0.0;
+}
+
+void NqVolumeProfile(const NqSeries &s, int from, int at, int rows, NqProfile &p)
+{
+   NqProfileReset(p);
+   if(from < 0 || from > at || at >= s.n || rows < 2)
+      return;
+   double lo = s.l[from];
+   double hi = s.h[from];
+   for(int j = from; j <= at; j++)
+   {
+      if(s.l[j] < lo)
+         lo = s.l[j];
+      if(s.h[j] > hi)
+         hi = s.h[j];
+   }
+   double step = (hi - lo) / rows;
+   if(step <= 0.0)
+      return;
+   double vol[];
+   ArrayResize(vol, rows);
+   for(int k = 0; k < rows; k++)
+      vol[k] = 0.0;
+   double total = 0.0;
+   for(int j = from; j <= at; j++)
+   {
+      double v = (s.v[j] > 0.0) ? s.v[j] : 1.0;
+      double r = s.h[j] - s.l[j];
+      int ka = (int)MathFloor((s.l[j] - lo) / step);
+      int kb = (int)MathFloor((s.h[j] - lo) / step);
+      if(ka < 0)
+         ka = 0;
+      if(kb > rows - 1)
+         kb = rows - 1;
+      if(ka > rows - 1)
+         ka = rows - 1;
+      total += v;
+      if(r <= 0.0 || ka == kb)
+      {
+         vol[ka] += v;
+         continue;
+      }
+      for(int k = ka; k <= kb; k++)
+      {
+         double a = MathMax(s.l[j], lo + k * step);
+         double b = MathMin(s.h[j], lo + (k + 1) * step);
+         if(b > a)
+            vol[k] += v * (b - a) / r;
+      }
+   }
+   int poc = 0;
+   for(int k = 1; k < rows; k++)
+   {
+      if(vol[k] > vol[poc])
+         poc = k;
+   }
+   int ra = poc;
+   int rb = poc;
+   double inside = vol[poc];
+   while(inside < 0.7 * total)
+   {
+      double up = (rb + 1 < rows) ? vol[rb + 1] : -1.0;
+      double dn = (ra - 1 >= 0) ? vol[ra - 1] : -1.0;
+      if(up < 0.0 && dn < 0.0)
+         break;
+      if(up >= dn)
+      {
+         rb++;
+         inside += up;
+      }
+      else
+      {
+         ra--;
+         inside += dn;
+      }
+   }
+   p.ok = true;
+   p.lo = lo;
+   p.hi = hi;
+   p.step = step;
+   p.poc = lo + (poc + 0.5) * step;
+   p.vah = lo + (rb + 1) * step;
+   p.val = lo + ra * step;
+}
+
+// ALL PATTERN STUDIES on one closed series (the last bar is the newest closed one).
+// dayStart = the broker's day start (0 = none: no day-anchored VWAP).
+void NqRunStudies(const NqSeries &s, datetime dayStart, NqStudySet &S)
+{
+   S.ok = false;
+   S.nBars = s.n;
+   S.close = 0.0;
+   NqElliottReset(S.ew);
+   NqWolfeReset(S.ww);
+   NqFibReset(S.fib);
+   S.haveAvHi = false;
+   S.haveAvLo = false;
+   S.haveAvDay = false;
+   S.avHi = 0.0;
+   S.avHiBand = 0.0;
+   S.avLo = 0.0;
+   S.avLoBand = 0.0;
+   S.avDay = 0.0;
+   S.avDayBand = 0.0;
+   NqProfileReset(S.vp);
+   int n = s.n;
+   if(n < 30)
+      return;
+   int at = n - 1;
+   S.close = s.c[at];
+   double atr[];
+   NqCalcATR(s.h, s.l, s.c, n, 14, atr);
+   NqPivot p8[];
+   int n8 = NqFindPivots(s.h, s.l, n, 8, p8);
+   NqElliottCount(s, atr, p8, n8, at, S.ew);
+   NqPivot p10[];
+   int n10 = NqFindPivots(s.h, s.l, n, 10, p10);
+   NqWolfeWave(s, atr, p10, n10, at, S.ww);
+   NqPivot p5[];
+   int n5 = NqFindPivots(s.h, s.l, n, 5, p5);
+   NqFibExtension(s, p5, n5, at, S.fib);
+   int iHi = -1;
+   int iLo = -1;
+   double pHi = 0.0;
+   double pLo = 0.0;
+   for(int i = 0; i < n5; i++)
+   {
+      if(p5[i].kind > 0 && (iHi < 0 || p5[i].price > pHi))
+      {
+         iHi = p5[i].idx;
+         pHi = p5[i].price;
+      }
+      if(p5[i].kind < 0 && (iLo < 0 || p5[i].price < pLo))
+      {
+         iLo = p5[i].idx;
+         pLo = p5[i].price;
+      }
+   }
+   if(iHi >= 0)
+      S.haveAvHi = NqAnchoredVwap(s, iHi, at, S.avHi, S.avHiBand);
+   if(iLo >= 0)
+      S.haveAvLo = NqAnchoredVwap(s, iLo, at, S.avLo, S.avLoBand);
+   if(dayStart > 0)
+   {
+      int iDay = -1;
+      for(int i = at; i >= 0; i--)
+      {
+         if(s.t[i] < dayStart)
+            break;
+         iDay = i;
+      }
+      if(iDay >= 0)
+         S.haveAvDay = NqAnchoredVwap(s, iDay, at, S.avDay, S.avDayBand);
+   }
+   NqVolumeProfile(s, 0, at, NQ_VP_ROWS, S.vp);
+   S.ok = true;
+}
+
+// price above BOTH swing-anchored VWAPs = the buyers have held it since both extremes (+1 for a
+// buy, -1 for a sell); below both = the mirror; between them = no vote
+int NqAvwapVote(const NqStudySet &S, int d)
+{
+   if(d == 0 || !S.ok || !S.haveAvHi || !S.haveAvLo)
+      return 0;
+   if(S.close > S.avHi && S.close > S.avLo)
+      return d;
+   if(S.close < S.avHi && S.close < S.avLo)
+      return -d;
+   return 0;
+}
+
+// price accepted above the value area = +1 for a buy; below it = +1 for a sell; inside = no vote
+int NqValueVote(const NqStudySet &S, int d)
+{
+   if(d == 0 || !S.ok || !S.vp.ok)
+      return 0;
+   if(S.close > S.vp.vah)
+      return d;
+   if(S.close < S.vp.val)
+      return -d;
+   return 0;
+}
+//=== NB_STUDIES_END ===
+
 //+------------------------------------------------------------------+
 //| TERMINAL LAYER - data loading, risk gate, orders, chart, panel.  |
 //| Every order it sends is printed to the Experts log with its      |
@@ -2863,6 +4015,17 @@ input bool           InpSmartFlipCutLoss = true;        // M5 regime flipped aga
 input double         InpSmartM1ProfitR   = 0.5;         // M1 bias turned against a position at least this many R in profit: close and bank it (0 = off)
 input double         InpSmartLockAtR     = 0.7;         // Once a position is this many R in profit, move the SL to ... (0 = off)
 input double         InpSmartLockR       = 0.1;         // ... entry + this many R (tightened only, never loosened)
+input group "MH15 PLUS: DAY FORECAST + PATTERN STUDIES of this pair. Each gate only REMOVES an entry; NO DATA = no gate"
+input bool           InpStudies          = true;        // Master switch: compute and show the MH15 PLUS table (false = exactly 1.0.5: nothing computed, nothing gated)
+input bool           InpStudyTable       = true;        // Show the table (click its header to fold it)
+input int            InpAdrDays          = 14;          // ADR = mean high-low of the last N COMPLETED daily bars
+input bool           InpAdrGate          = true;        // ADR ROOM gate: a new entry's first target must fit inside the forecast top / bottom (ADR full: fade, no chase)
+input double         InpAdrRoomX         = 1.0;         // ... room needed = x the distance from the entry to the first target (TP1; the scalp's TP)
+input bool           InpAdrEventMode     = false;       // EVENT MODE: on a day with a TOP-TIER event of one of the pair's currencies a full day reads EXPANSION and the ADR gate stands down
+input bool           InpStudyGate        = true;        // STUDY VOTE gate: a live Elliott / Wolfe SETUP against an entry blocks it when the vote against is strong
+input int            InpStudyBlockLevel  = 2;           // ... strong = the vote against is at least this (Elliott, Wolfe, anchored VWAP, value area: 1 each). Context alone never blocks
+input int            InpStudyBars        = 500;         // Closed M15 bars the pattern studies read
+input string         InpMyLevels         = "";          // MY LEVELS: your own prices, comma separated (drawn and shown; never traded)
 input group "Portfolio (this EA on several charts with the same magic)"
 input int            InpMaxOpenAcrossPairs = 3;         // Max open positions of this EA across ALL pairs (0 = unlimited)
 input int            InpMaxCcyExposure   = 2;           // Max positions already carrying the same currency the same way (two USD longs = one bet twice); 0 = off
@@ -3099,8 +4262,21 @@ bool     g_deskCollapsed;    // the information desk folded to its header (click
 bool     g_newBar5;
 NqSwingBreak g_sbrk[];
 int      g_nSbrk;
+// MH15 PLUS (v1.1.0): this pair's day forecast and the pattern studies (no ladder on forex)
+bool     g_studies;      // the master switch and the two gates (tests flip them; the inputs are the source of truth)
+bool     g_adrGate;
+bool     g_studyGate;
+NqDayFc  g_fc;           // this pair's day forecast
+NqSeries g_d1;           // daily bars, the forming day last
+NqStudySet g_st;         // the pattern studies on M15
+datetime g_stT;          // the M15 bar they were last run at
+bool     g_evDay;        // EVENT MODE: a top-tier event inside this broker day
+double   g_myLv[];       // MY LEVELS
+int      g_nMyLv;
+bool     g_fcCollapsed;  // the MH15 PLUS table folded to its header
+string   g_studyNote;    // the last entry a study gate removed (panel)
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.0.5"
+#define NQ_EA_VERSION "1.1.0"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -3247,6 +4423,19 @@ string NqBreakKind(const NqSeries &s, const NqSwingBreak &b);
 void   NqDrawWarn();
 void   NqLabelOne(string id, int x, int y, string txt, color clr, int size, string font, int anchor);
 int    NqSplitLabel(string txt, string &parts[]);
+void   NqStudiesInit();
+void   NqReadStudies();
+int    NqStudyVote(int d, string &why);
+bool   NqAdrRoomBlocks(int dir, double entry, double target, string &why);
+bool   NqStudiesBlock(int dir, double entry, double target, string &why);
+int    NqStudiesHeight(double sc);
+void   NqDrawStudies(int x, int y, int W, double sc, color cMetal);
+string NqStudiesJson();
+bool   NqLoadTail(string sym, ENUM_TIMEFRAMES tf, int count, NqSeries &s);
+void   NqRect(string id, int x, int y, int w, int h, color bg, color border);
+void   NqLabel(string id, int x, int y, string txt, color clr, int size, string font, int anchor);
+void   NqRow(string id, int kx, int vx, int y, string key, string val, color vc, color kc, int fs);
+void   NqLevel(string name, datetime t, double price, color clr, int style, string txt);
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -3279,6 +4468,12 @@ int OnInit()
       Print("NQ: invalid inputs (risk per trade is capped at 5%)");
       return INIT_PARAMETERS_INCORRECT;
    }
+   if(InpAdrDays < 5 || InpAdrDays > 60 || InpAdrRoomX < 0.0 || InpAdrRoomX > 10.0 ||
+      InpStudyBlockLevel < 1 || InpStudyBlockLevel > 4 || InpStudyBars < 150 || InpStudyBars > 3000)
+   {
+      Print("NQ: invalid MH15 PLUS inputs (ADR days 5-60, room x 0-10, study block level 1-4, study bars 150-3000)");
+      return INIT_PARAMETERS_INCORRECT;
+   }
 
    g_sym = _Symbol;
    g_pair = NqPairOf(g_sym, SymbolInfoString(g_sym, SYMBOL_CURRENCY_BASE),
@@ -3297,6 +4492,7 @@ int OnInit()
    g_smartExit = InpSmartExit;
    g_sessionTilt = InpSessionTilt;
    NqResolveWitnesses();
+   NqStudiesInit();
 
    g_P.atrPeriod = InpNrtrAtrPeriod;
    g_P.nrtrMult = InpNrtrMultiplier;
@@ -3511,6 +4707,8 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          g_boardCollapsed = !g_boardCollapsed;
       else if(sparam == NQ_PFX_P + "h1" || StringFind(sparam, NQ_PFX_P + "h1~") == 0)
          g_deskCollapsed = !g_deskCollapsed;
+      else if(sparam == NQ_PFX_P + "hF" || StringFind(sparam, NQ_PFX_P + "hF~") == 0)
+         g_fcCollapsed = !g_fcCollapsed;
       else
          return;
       ObjectsDeleteAll(0, NQ_PFX_P);
@@ -3869,6 +5067,7 @@ void NqRecompute()
    NqReadStrength();       // every currency against the basket, in ATR units
    NqReadCalendar();       // the MT5 economic calendar for the pair's two currencies
    NqReadHtf();            // H1 / H4 context, structure, BOS / CHoCH
+   NqReadStudies();        // MH15 PLUS: the day forecast and the pattern studies (NO DATA = no gate)
    // swing plans: the same QML / pullback engine on M15 structure
    NqSeriesResize(g_s15r, g_s15.n);
    g_s15r.sec = g_s15.sec;
@@ -6237,6 +7436,9 @@ string NqTelemetryJson()
        NqJsonI("manual_positions", g_manualPos) + "," + NqJsonI("manual_orders", g_manualOrd) + "," + NqJsonI("trades_today", g_tradesToday) + "," +
        NqJsonN("risk_pct", InpRiskPct, 2) + "," + NqJsonN("risk_money", g_riskMoney, 2) + "," + NqJsonS("last_trade", g_lastTrade) + "},";
 
+   // MH15 PLUS: the day forecast and the pattern studies as the table shows them
+   j = j + NqStudiesJson() + ",";
+
    // the RECORD rows: what the loaded history says happened to each engine
    int done = 0;
    int won = 0;
@@ -6601,6 +7803,16 @@ void NqTrade()
             NqCancel(tk, "SPIKE GUARD: a " + NqPlanKindText(pl.kind) + " in the direction of a " + DoubleToString(g_spikeAtr, 1) + " ATR spike - the bounce of a spike is not a setup");
          else if(g_newsBlock)
             NqCancel(tk, "NEWS GUARD: resting orders are pulled through " + g_newsWhy + " - the plan is re-placed when the window ends");
+         else
+         {
+            // ADR ROOM: the day's range moved and the plan's first target no longer fits inside it
+            string adrWhy = "";
+            if(NqAdrRoomBlocks(pl.dir, pl.entry, pl.tp1, adrWhy))
+            {
+               g_studyNote = adrWhy;
+               NqCancel(tk, adrWhy + " - the resting order is pulled");
+            }
+         }
       }
       // place orders for every armed plan of an enabled kind
       if(InpPendingAuto)
@@ -6664,6 +7876,14 @@ void NqTrade()
             if(isStop && g_volClass == NQ_VOL_EXPANSION && rdScore < InpVolExpandRadar)
             {
                g_note = "RADAR: VOLATILITY EXPANSION - needs score " + IntegerToString(InpVolExpandRadar) + " (" + IntegerToString(rdScore) + "/10)";
+               continue;
+            }
+            // MH15 PLUS (every plan kind): ADR ROOM (TP1 must fit inside the day's forecast range) and the
+            // STUDY VOTE. They only remove an entry
+            string swhy = "";
+            if(NqStudiesBlock(pl.dir, pl.entry, pl.tp1, swhy))
+            {
+               g_note = NqPlanKindText(pl.kind) + ": " + swhy;
                continue;
             }
             double tp = InpPlanUseTp2 ? pl.tp2 : pl.tp1;
@@ -6750,6 +7970,12 @@ void NqTrade()
    // SL/TP from the trigger candle's close, as the record is judged
    double sl = g_sigs[cur].sl;
    double tp = g_sigs[cur].tp;
+   string swhy = "";
+   if(NqStudiesBlock(st, entry, tp, swhy))
+   {
+      g_note = "SCALP TRIGGER " + sideT + " - " + swhy;
+      return;
+   }
    double lot = 0.0;
    int og = NqOrderGate(st, entry, sl, tp, lot, (st > 0) ? (int)ORDER_TYPE_BUY : (int)ORDER_TYPE_SELL);
    if(og != 0)
@@ -6967,6 +8193,18 @@ void NqDrawChart()
       NqLevel(NQ_PFX_C + "L_" + id + "S", ts, g_plans[k].sl, cDn, STYLE_DASH, nmk + " SL");
       NqLevel(NQ_PFX_C + "L_" + id + "1", ts, g_plans[k].tp1, cUp, STYLE_DASH, nmk + " TP1");
       NqLevel(NQ_PFX_C + "L_" + id + "2", ts, g_plans[k].tp2, cUp, STYLE_DOT, nmk + " TP2");
+   }
+   // MH15 PLUS: the day's forecast top / bottom (they move while the day's extremes extend) and MY LEVELS
+   if(InpDrawLevels && g_studies)
+   {
+      if(g_fc.ok)
+      {
+         color cFc = NQ_RGB(255, 105, 180);
+         NqLevel(NQ_PFX_C + "FC_T", g_fc.dayStart, g_fc.top, cFc, STYLE_DASH, "ADR TOP " + DoubleToString(g_fc.usedPct, 0) + "% used");
+         NqLevel(NQ_PFX_C + "FC_B", g_fc.dayStart, g_fc.bottom, cFc, STYLE_DASH, "ADR BOTTOM");
+      }
+      for(int ml = 0; ml < g_nMyLv; ml++)
+         NqLevel(NQ_PFX_C + "MY_" + IntegerToString(ml), g_s5.t[n5 - 1], g_myLv[ml], clrWhite, STYLE_DOT, "MY LEVEL");
    }
    // session levels (support / resistance), break marks and the day VWAP
    if(InpDrawLevels && g_levels.day == NqDayOf(g_s5.t[n5 - 1]))
@@ -7619,6 +8857,21 @@ void NqDrawPanel()
    kx = tx + kOff;
    vx = tx + vOff;
 
+   // ---------------- the MH15 PLUS table (v1.1.0): above the desk in SPLIT, beside the board in ONE ----------------
+   if(g_studies && InpStudyTable && g_pair != NQ_PAIR_NONE)
+   {
+      int hF = NqStudiesHeight(sc);
+      int xF = split ? xInfo : (ox + W + 8);
+      int yF = split ? (yInfo - hF - 6) : oy;
+      if(split && yF < oy + H + 4 && xF < ox + W + 4 && ox + W + 8 + W <= cw - 60)
+         xF = ox + W + 8;          // it would cover the board: beside it when the chart is wide enough (else fold one of them)
+      if(!split && xF + W > cw)
+         xF = (int)MathMax(0, cw - W);
+      if(yF < 0)
+         yF = 0;
+      NqDrawStudies(xF, yF, W, sc, cMetal);
+   }
+
    // ---------------- the TRADING BOARD: NY TRAP + PENDING ORDERS (top-left) ----------------
    if(!boardOpen)
       return;
@@ -8118,3 +9371,470 @@ void NqDrawPanel()
            cDim, fsH, "Arial", ANCHOR_LEFT_UPPER);
 }
 //+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| MH15 PLUS (forex v1.1.0, from metal 1.11.0): the DAY FORECAST and |
+//| the PATTERN STUDIES of THIS pair, read from the broker's closed   |
+//| bars and shown as one table. There is NO rotation ladder here (a  |
+//| pair is not ranked against other pairs: the currency strength and |
+//| the portfolio rule already do that job). Two gates use the table, |
+//| and each only ever REMOVES an entry - none adds, resizes or moves |
+//| one, and closing is never blocked:                                |
+//|  ADR ROOM  a new entry's first target must fit inside the day's   |
+//|            forecast top / bottom ("ADR full: fade, no chase").    |
+//|  STUDIES   a live Elliott / Wolfe SETUP against an entry blocks   |
+//|            it when the anchored VWAPs or the value area agree     |
+//|            (vote of InpStudyBlockLevel against). Context alone    |
+//|            never blocks.                                          |
+//| NO DATA = no vote and no gate: a missing daily series or a count  |
+//| that is UNKNOWN blocks nothing.                                   |
+//+------------------------------------------------------------------+
+// MY LEVELS: "4150.5, 4188" -> prices (anything that is not a positive number is skipped)
+void NqParseMyLevels(string csv)
+{
+   ArrayResize(g_myLv, 0);
+   g_nMyLv = 0;
+   int pos = 0;
+   int n = StringLen(csv);
+   while(pos < n && g_nMyLv < 24)
+   {
+      int c = StringFind(csv, ",", pos);
+      if(c < 0)
+         c = n;
+      string one = StringSubstr(csv, pos, c - pos);
+      pos = c + 1;
+      double v = StringToDouble(one);
+      if(v > 0.0)
+      {
+         ArrayResize(g_myLv, g_nMyLv + 1);
+         g_myLv[g_nMyLv] = v;
+         g_nMyLv++;
+      }
+   }
+}
+
+void NqStudiesInit()
+{
+   g_studies = InpStudies;
+   g_adrGate = InpAdrGate;
+   g_studyGate = InpStudyGate;
+   g_fcCollapsed = false;
+   g_evDay = false;
+   g_studyNote = "";
+   g_stT = 0;
+   NqDayFcReset(g_fc, "not read yet");
+   NqSeriesResize(g_d1, 0);
+   NqSeries noBars;
+   NqSeriesResize(noBars, 0);
+   NqRunStudies(noBars, 0, g_st);
+   NqParseMyLevels(InpMyLevels);
+}
+
+// daily bars in time order, the FORMING day last (CopyRates from shift 0)
+bool NqLoadDays(string sym, int count, NqSeries &d)
+{
+   d.sec = 86400;
+   MqlRates r[];
+   int got = CopyRates(sym, PERIOD_D1, 0, count, r);
+   if(got <= 0)
+   {
+      NqSeriesResize(d, 0);
+      return false;
+   }
+   NqSeriesResize(d, got);
+   for(int i = 0; i < got; i++)
+   {
+      d.t[i] = r[i].time;
+      d.o[i] = r[i].open;
+      d.h[i] = r[i].high;
+      d.l[i] = r[i].low;
+      d.c[i] = r[i].close;
+      d.v[i] = (double)r[i].tick_volume;
+   }
+   return true;
+}
+
+// the last `count` bars of a series (bars only: the studies compute their own ATR and pivots)
+void NqSeriesTail(const NqSeries &src, int count, NqSeries &dst)
+{
+   int n = (src.n < count) ? src.n : count;
+   int from = src.n - n;
+   NqSeriesResize(dst, n);
+   dst.sec = src.sec;
+   for(int i = 0; i < n; i++)
+   {
+      dst.t[i] = src.t[from + i];
+      dst.o[i] = src.o[from + i];
+      dst.h[i] = src.h[from + i];
+      dst.l[i] = src.l[from + i];
+      dst.c[i] = src.c[from + i];
+      dst.v[i] = src.v[from + i];
+   }
+}
+
+// one read per closed M1 candle: this pair's day forecast (closed M5 bars of today: the day's
+// high / low are those of the 15m bars at every 15m close, and fresher in between); the pattern
+// studies once per closed M15 bar
+void NqReadStudies()
+{
+   if(!g_studies)
+      return;
+   datetime now = TimeTradeServer();
+   NqLoadDays(g_sym, InpAdrDays + 3, g_d1);
+   datetime ds = 0;
+   if(g_d1.n > 0 && (long)g_d1.t[g_d1.n - 1] + 86400 > (long)now)
+      ds = g_d1.t[g_d1.n - 1];
+   // EVENT MODE: a top-tier event of one of the pair's two currencies inside this broker day
+   g_evDay = false;
+   if(InpAdrEventMode && ds > 0)
+   {
+      for(int i = 0; i < g_nEv; i++)
+      {
+         if(g_evTop[i] && g_evT[i] >= ds && (long)g_evT[i] < (long)ds + 86400)
+            g_evDay = true;
+      }
+   }
+   // the snap: the newest confirmed 4h swing high / low (strength 5) and 0.5 x ATR(14, 4h)
+   double swHi = 0.0;
+   double swLo = 0.0;
+   double tol = 0.0;
+   if(g_h4Ok && g_h4.n > 20)
+   {
+      double a4[];
+      NqCalcATR(g_h4.h, g_h4.l, g_h4.c, g_h4.n, 14, a4);
+      NqPivot p4[];
+      int n4 = NqFindPivots(g_h4.h, g_h4.l, g_h4.n, 5, p4);
+      for(int i = 0; i < n4; i++)
+      {
+         if(p4[i].kind > 0)
+            swHi = p4[i].price;
+         else
+            swLo = p4[i].price;
+      }
+      tol = 0.5 * a4[g_h4.n - 1];
+   }
+   NqDayForecast(g_d1, g_s5, now, InpAdrDays, swHi, swLo, tol, g_evDay, g_fc);
+
+   // the pattern studies: the last InpStudyBars closed M15 bars, once per closed M15 bar
+   datetime t15 = 0;
+   if(g_s15.n > 0)
+      t15 = g_s15.t[g_s15.n - 1];
+   if(t15 != g_stT)
+   {
+      g_stT = t15;
+      NqSeries w;
+      NqSeriesTail(g_s15, InpStudyBars, w);
+      NqRunStudies(w, g_fc.dayStart, g_st);
+   }
+}
+
+string NqSigned(int v)
+{
+   return ((v >= 0) ? "+" : "") + IntegerToString(v);
+}
+
+string NqPct(double v)
+{
+   return DoubleToString(v, 0) + "%";
+}
+
+// the four voters of the pattern studies for a direction d (+1 = buy); each counts 1 or nothing
+int NqStudyVote(int d, string &why)
+{
+   why = "";
+   if(!g_studies || !g_st.ok || d == 0)
+      return 0;
+   int v = 0;
+   int s = NqEwVote(g_st.ew, d);
+   if(s != 0)
+   {
+      v += s;
+      string what = "elliott ";
+      if(g_st.ew.stage == NQ_EW_W3)
+         what = what + "wave-3 setup " + ((g_st.ew.dir > 0) ? "up" : "down");
+      else if(g_st.ew.stage == NQ_EW_DONE)
+         what = what + "five done " + ((g_st.ew.dir > 0) ? "up" : "down");
+      else
+         what = what + "late wave 5 " + ((g_st.ew.dir > 0) ? "up" : "down");
+      why = why + what + " " + NqSigned(s);
+   }
+   s = NqWolfeVote(g_st.ww, d);
+   if(s != 0)
+   {
+      v += s;
+      why = why + ((why == "") ? "" : ", ") + "wolfe " + ((g_st.ww.dir > 0) ? "bullish " : "bearish ") + NqSigned(s);
+   }
+   s = NqAvwapVote(g_st, d);
+   if(s != 0)
+   {
+      v += s;
+      why = why + ((why == "") ? "" : ", ") + "avwap " + ((s * d > 0) ? "above both " : "below both ") + NqSigned(s);
+   }
+   s = NqValueVote(g_st, d);
+   if(s != 0)
+   {
+      v += s;
+      why = why + ((why == "") ? "" : ", ") + "value " + ((s * d > 0) ? "above VAH " : "below VAL ") + NqSigned(s);
+   }
+   return v;
+}
+
+// ADR ROOM: the first target must fit inside the forecast top / bottom. EXPANSION (event mode) stands down.
+bool NqAdrRoomBlocks(int dir, double entry, double target, string &why)
+{
+   why = "";
+   if(!g_studies || !g_adrGate || dir == 0 || !g_fc.ok || g_fc.state == NQ_FD_EXPAND)
+      return false;
+   double room = (dir > 0) ? (g_fc.top - entry) : (entry - g_fc.bottom);
+   double need = InpAdrRoomX * MathAbs(target - entry);
+   if(room >= need)
+      return false;
+   why = "ADR ROOM: ";
+   why = why + ((dir > 0) ? "BUY" : "SELL") + " at " + DoubleToString(entry, g_digits) + " has " +
+         ((room > 0.0) ? DoubleToString(room, g_digits) : "nothing") + " left to the forecast " +
+         ((dir > 0) ? "top " : "bottom ") + DoubleToString((dir > 0) ? g_fc.top : g_fc.bottom, g_digits) +
+         ", the first target needs " + DoubleToString(need, g_digits) + " (ADR " + NqPct(g_fc.usedPct) + " used, " +
+         NqFdStateText(g_fc.state) + ") - fade, no chase";
+   return true;
+}
+
+// the two MH15 PLUS gates for a NEW entry (they only ever remove one)
+bool NqStudiesBlock(int dir, double entry, double target, string &why)
+{
+   why = "";
+   if(!g_studies || dir == 0)
+      return false;
+   if(NqAdrRoomBlocks(dir, entry, target, why))
+   {
+      g_studyNote = why;
+      return true;
+   }
+   if(g_studyGate)
+   {
+      // the anchored VWAPs and the value area are CONTEXT: they can confirm a setup's objection, never object alone
+      string voters = "";
+      int v = NqStudyVote(dir, voters);
+      int setups = g_st.ok ? (NqEwVote(g_st.ew, dir) + NqWolfeVote(g_st.ww, dir)) : 0;
+      if(v <= -InpStudyBlockLevel && setups < 0)
+      {
+         why = "STUDIES AGAINST ";
+         why = why + ((dir > 0) ? "BUY" : "SELL") + " (vote " + IntegerToString(v) + ": " + voters + ")";
+         g_studyNote = why;
+         return true;
+      }
+   }
+   return false;
+}
+
+string NqEwText()
+{
+   if(!g_st.ok)
+      return "UNKNOWN (" + IntegerToString(g_st.nBars) + " M15 bars loaded)";
+   NqElliott e = g_st.ew;
+   if(e.stage == NQ_EW_UNKNOWN)
+      return "UNKNOWN - no valid impulse count on the last pivots";
+   string t = e.complete ? "COMPLETE " : "PARTIAL ";
+   t = t + ((e.dir > 0) ? "up" : "down") + " - " + NqEwStageText(e.stage);
+   if(e.stage == NQ_EW_ABC)
+      t = t + ((e.abc == 1) ? ": A printed" : ((e.abc == 2) ? ": A-B printed" : ": A-B-C printed"));
+   if(e.stage == NQ_EW_W5)
+      t = t + (e.late ? " - beyond the wave-3 end: DO NOT ADD LATE" : "");
+   if(e.setupIdx >= 0 && (e.stage == NQ_EW_W3 || e.stage == NQ_EW_DONE))
+   {
+      t = t + ((e.setupDir == 0) ? "  (not a setup: entry not between stop and target, or warm-up)  " : ((e.setupDir > 0) ? "  BUY " : "  SELL "));
+      t = t + "entry " + NqPx(e.entry) + " SL " + NqPx(e.sl) + " T1 " + NqPx(e.t1) + " T2 " + NqPx(e.t2);
+      if(e.setupDir != 0)
+         t = t + " (" + NqSetupLifeText(e.setupLife) + ")";
+   }
+   t = t + "   w2 " + NqPct(100.0 * e.retr2);
+   if(e.w3x > 0.0)
+      t = t + "  w3 " + DoubleToString(e.w3x, 2) + "x w1";
+   if(e.altStage != NQ_EW_UNKNOWN)
+      t = t + "   alt " + ((e.altDir > 0) ? "up: " : "down: ") + NqEwStageText(e.altStage);
+   return t;
+}
+
+string NqWolfeText()
+{
+   if(!g_st.ok || g_st.ww.state == NQ_WW_NONE)
+      return "none";
+   NqWolfe w = g_st.ww;
+   string side = (w.dir > 0) ? "bullish" : "bearish";
+   if(w.state == NQ_WW_DEVELOPING)
+      return "DEVELOPING " + side + " (points 1-4 fit, not a setup): point 5 must print in " + NqPx(w.zoneLo) + " - " + NqPx(w.zoneHi);
+   string t = "CONFIRMED " + side + " (" + NqSetupLifeText(w.life) + "): ";
+   t = t + ((w.dir > 0) ? "BUY " : "SELL ") + "entry " + NqPx(w.entry) + " SL " + NqPx(w.sl) + " TP1 " + NqPx(w.tp1) + " TP2 " + NqPx(w.tp2);
+   int left = w.expiryIdx - (g_st.nBars - 1);
+   if(w.life == NQ_SU_ALIVE)
+      t = t + "  expires in " + IntegerToString((left > 0) ? left : 0) + " M15 bars (estimate)";
+   return t;
+}
+
+string NqFibText()
+{
+   if(!g_st.ok || !g_st.fib.ok)
+      return "none (the last pullback does not hold inside its leg)";
+   NqFibExt f = g_st.fib;
+   string t = (f.dir > 0) ? "up" : "down";
+   t = t + "  A " + NqPx(f.a) + " B " + NqPx(f.b) + " C " + NqPx(f.c) + "   reached " + IntegerToString(f.reached) + " of " + IntegerToString(NQ_FIB_LEVELS);
+   if(f.reached < NQ_FIB_LEVELS)
+      t = t + "   next " + DoubleToString(NqFibRatio(f.reached), 3) + " = " + NqPx(f.lv[f.reached]);
+   if(f.invalid)
+      t = t + "   INVALIDATED (a close beyond C)";
+   return t;
+}
+
+// the table's height in pixels (folded = its header)
+int NqStudiesHeight(double sc)
+{
+   int rh = (int)MathRound(17 * sc);
+   int rows = 8 + ((g_nMyLv > 0) ? 1 : 0);
+   return g_fcCollapsed ? (rh + 6) : (rh + 3 + rows * rh + 4);
+}
+
+// the table: this pair's day forecast and the pattern studies
+void NqDrawStudies(int x, int y, int W, double sc, color cMetal)
+{
+   int rh = (int)MathRound(17 * sc);
+   int fs = (int)MathRound(9 * sc);
+   int fsH = (int)MathRound(8 * sc);
+   int kOff = (int)MathRound(8 * sc);
+   int vOff = (int)MathRound(122 * sc);
+   color cTbl = NQ_RGB(22, 27, 37);
+   color cKey = NQ_RGB(140, 150, 165);
+   color cVal = NQ_RGB(235, 238, 242);
+   color cUp = NQ_RGB(46, 204, 113);
+   color cDn = NQ_RGB(231, 76, 60);
+   color cWait = NQ_RGB(241, 196, 15);
+   color cBlock = NQ_RGB(230, 126, 34);
+   color cDim = NQ_RGB(95, 105, 120);
+   NqRect("tF", x, y, W, NqStudiesHeight(sc), cTbl, cMetal);
+   int kx = x + kOff;
+   int vx = x + vOff;
+   string hdr = "MH15 PLUS   DAY FORECAST + PATTERN STUDIES (M15)   analysis levels";
+   hdr = hdr + (g_fcCollapsed ? "   (click: unfold)" : "   (click: fold)");
+   NqLabel("hF", kx, y + 3, hdr, cMetal, fsH, "Arial Black", ANCHOR_LEFT_UPPER);
+   if(g_fcCollapsed)
+      return;
+   int yr = y + rh + 3;
+   // this chart's day forecast
+   string fcT = "UNKNOWN - " + g_fc.why + " (no gate)";
+   color fcC = cDim;
+   if(g_fc.ok)
+   {
+      fcT = "ADR " + NqPx(g_fc.adr) + " (" + IntegerToString(g_fc.adrDays) + " d)   used " + NqPct(g_fc.usedPct) + " " + NqFdStateText(g_fc.state) +
+            "   top " + NqPx(g_fc.top) + ((g_fc.topSnap == 1) ? " (4h swing)" : ((g_fc.topSnap == 2) ? " (PDH)" : "")) +
+            " / bottom " + NqPx(g_fc.bottom) + ((g_fc.botSnap == 1) ? " (4h swing)" : ((g_fc.botSnap == 2) ? " (PDL)" : "")) +
+            "   move " + ((g_fc.movePct >= 0.0) ? "+" : "") + NqPct(g_fc.movePct);
+      fcC = cVal;
+      if(g_fc.state == NQ_FD_NEAR)
+         fcC = cWait;
+      if(g_fc.state == NQ_FD_DONE || g_fc.state == NQ_FD_EXPAND)
+         fcC = cBlock;
+   }
+   NqRow("f1", kx, vx, yr, "DAY FORECAST", fcT, fcC, cKey, fs);
+   yr += rh;
+   string rmT = "---";
+   color rmC = cDim;
+   if(g_fc.ok)
+   {
+      double bidP = SymbolInfoDouble(g_sym, SYMBOL_BID);
+      double askP = SymbolInfoDouble(g_sym, SYMBOL_ASK);
+      double up = g_fc.top - askP;
+      double dn = bidP - g_fc.bottom;
+      rmT = "room up " + ((up > 0.0) ? DoubleToString(up, g_digits) : "none") + " / down " + ((dn > 0.0) ? DoubleToString(dn, g_digits) : "none");
+      if(g_fc.state == NQ_FD_EXPAND)
+         rmT = rmT + "   EVENT DAY: a full day reads EXPANSION, the gate stands down";
+      else
+         rmT = rmT + (g_adrGate ? ("   gate ON: the first target must fit (x" + DoubleToString(InpAdrRoomX, 1) + ")") : "   (gate off)");
+      if(g_fc.fullT > 0)
+         rmT = rmT + "   ADR FULL " + TimeToString(g_fc.fullT, TIME_MINUTES) + ((g_fc.fullSide > 0) ? " top in" : " bottom in");
+      if(g_fc.fadeDir != 0)
+      {
+         rmT = rmT + ": fade ";
+         rmT = rmT + ((g_fc.fadeDir > 0) ? "BUY " : "SELL ") + NqPx(g_fc.fadeEntry) + " SL " + NqPx(g_fc.fadeSl) + " TP1 " + NqPx(g_fc.fadeTp1) +
+               " TP2 " + NqPx(g_fc.fadeTp2) + " (hypothetical, not traded)";
+      }
+      rmC = (g_fc.state == NQ_FD_DONE) ? cBlock : cVal;
+   }
+   NqRow("f2", kx, vx, yr, "ADR ROOM", rmT, rmC, cKey, fs);
+   yr += rh;
+   // the pattern studies
+   color ewC = cDim;
+   if(g_st.ok && g_st.ew.stage != NQ_EW_UNKNOWN)
+      ewC = (g_st.ew.setupDir != 0 && g_st.ew.setupLife == NQ_SU_ALIVE) ? NqDirColor(g_st.ew.setupDir) : cVal;
+   NqRow("f3", kx, vx, yr, "ELLIOTT M15", NqEwText(), ewC, cKey, fs);
+   yr += rh;
+   color wwC = cDim;
+   if(g_st.ok && g_st.ww.state == NQ_WW_CONFIRMED)
+      wwC = (g_st.ww.life == NQ_SU_ALIVE) ? NqDirColor(g_st.ww.dir) : cVal;
+   if(g_st.ok && g_st.ww.state == NQ_WW_DEVELOPING)
+      wwC = cWait;
+   NqRow("f4", kx, vx, yr, "WOLFE M15", NqWolfeText(), wwC, cKey, fs);
+   yr += rh;
+   NqRow("f5", kx, vx, yr, "FIB EXTENSION", NqFibText(), (g_st.ok && g_st.fib.ok && !g_st.fib.invalid) ? cVal : cDim, cKey, fs);
+   yr += rh;
+   string avT = "---";
+   if(g_st.ok)
+   {
+      avT = "AVWAP from the high " + (g_st.haveAvHi ? NqPx(g_st.avHi) : "-") + "  from the low " + (g_st.haveAvLo ? NqPx(g_st.avLo) : "-") +
+            "  day " + (g_st.haveAvDay ? NqPx(g_st.avDay) : "-");
+      if(g_st.vp.ok)
+         avT = avT + "   POC " + NqPx(g_st.vp.poc) + "  VAH " + NqPx(g_st.vp.vah) + "  VAL " + NqPx(g_st.vp.val);
+      avT = avT + "   (tick volume, " + IntegerToString(g_st.nBars) + " bars)";
+   }
+   NqRow("f6", kx, vx, yr, "VWAP / PROFILE", avT, g_st.ok ? cVal : cDim, cKey, fs);
+   yr += rh;
+   string svT = "---";
+   color svC = cDim;
+   if(g_st.ok)
+   {
+      string whyB = "";
+      string whyS = "";
+      int vb = NqStudyVote(1, whyB);
+      int vs = NqStudyVote(-1, whyS);
+      svT = "vote BUY ";
+      svT = svT + NqSigned(vb) + " / SELL " + NqSigned(vs) + (g_studyGate ? ("  (blocks at -" + IntegerToString(InpStudyBlockLevel) + " with a live setup against)") : "  (gate off)") +
+            ((whyB == "") ? "   no study has a view" : ("   " + whyB));
+      svC = (vb >= InpStudyBlockLevel) ? cUp : ((vs >= InpStudyBlockLevel) ? cDn : cVal);
+   }
+   NqRow("f7", kx, vx, yr, "STUDY VOTE", svT, svC, cKey, fs);
+   yr += rh;
+   NqRow("f8", kx, vx, yr, "LAST BLOCK", (g_studyNote == "") ? "none - no entry has been removed by the forecast or the studies" : g_studyNote,
+         (g_studyNote == "") ? cDim : cBlock, cKey, fs);
+   yr += rh;
+   if(g_nMyLv > 0)
+   {
+      double px = SymbolInfoDouble(g_sym, SYMBOL_BID);
+      double above = 0.0;
+      double below = 0.0;
+      for(int i = 0; i < g_nMyLv; i++)
+      {
+         if(g_myLv[i] > px && (above == 0.0 || g_myLv[i] < above))
+            above = g_myLv[i];
+         if(g_myLv[i] <= px && (below == 0.0 || g_myLv[i] > below))
+            below = g_myLv[i];
+      }
+      string myT = "next above " + NqPx(above) + " / below " + NqPx(below) + "   (" + IntegerToString(g_nMyLv) + " levels, drawn; never traded)";
+      NqRow("f9", kx, vx, yr, "MY LEVELS", myT, cVal, cKey, fs);
+   }
+}
+
+// telemetry: the MH15 PLUS state as the table shows it (ANALYSIS ONLY)
+string NqStudiesJson()
+{
+   string whyB = "";
+   string whyS = "";
+   int vb = NqStudyVote(1, whyB);
+   int vs = NqStudyVote(-1, whyS);
+   string j = "\"mh15\":{" + NqJsonB("on", g_studies) + "," + NqJsonB("adr_gate", g_adrGate) + "," + NqJsonB("study_gate", g_studyGate) + "," +
+              NqJsonB("forecast_ok", g_fc.ok) + "," + NqJsonS("forecast_why", g_fc.why) + "," +
+              NqJsonN("adr", g_fc.adr, g_digits) + "," + NqJsonN("used_pct", g_fc.usedPct, 1) + "," + NqJsonN("move_pct", g_fc.movePct, 1) + "," +
+              NqJsonN("top", g_fc.top, g_digits) + "," + NqJsonN("bottom", g_fc.bottom, g_digits) + "," + NqJsonS("state", NqFdStateText(g_fc.state)) + "," +
+              NqJsonI("day_start", (long)g_fc.dayStart) + "," +
+              NqJsonS("elliott", NqEwText()) + "," + NqJsonS("wolfe", NqWolfeText()) + "," + NqJsonS("fib", NqFibText()) + "," +
+              NqJsonN("avwap_high", g_st.avHi, g_digits) + "," + NqJsonN("avwap_low", g_st.avLo, g_digits) + "," + NqJsonN("avwap_day", g_st.avDay, g_digits) + "," +
+              NqJsonN("poc", g_st.vp.poc, g_digits) + "," + NqJsonN("vah", g_st.vp.vah, g_digits) + "," + NqJsonN("val", g_st.vp.val, g_digits) + "," +
+              NqJsonI("vote_buy", vb) + "," + NqJsonI("vote_sell", vs) + "," + NqJsonS("last_block", g_studyNote) + "}";
+   return j;
+}
