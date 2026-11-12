@@ -72,6 +72,10 @@ HEADER = '''//+-----------------------------------------------------------------
 //|     forecast, a BTC / ETH / LTC rotation ladder, the pattern   |
 //|     studies) are carried over and are OFF by default here      |
 //|     (InpStudies): nothing changes until you switch them on.    |
+//|   * v1.6.0 (with metal 1.12.0): CANDLE INTEGRITY (a hole in    |
+//|     the candles is named; a DATA GAP closes the gate until an  |
+//|     hour of candles is back). The MH15 PLUS studies are ON by  |
+//|     default now, and telemetry is sent from a REAL account too.|
 //|                                                                  |
 //|  M15 = CONTEXT ONLY        (EMA200 + NRTR: shades, never gates)  |
 //|   M5 = REGIME + STRUCTURE  (NRTR + confirmed HH/HL or LH/LL)     |
@@ -87,7 +91,7 @@ HEADER = '''//+-----------------------------------------------------------------
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.50"
+#property version     "1.60"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -462,7 +466,7 @@ def derive_ea(m: str) -> str:
             '   yr += rh;\n'
             '   string volT = "---";\n')
     # 14. version + helper functions (after NqReadAccount's spread read block: append before NqEvaluate's doc comment)
-    t = rep(t, '#define NQ_EA_VERSION "1.11.0"', '#define NQ_EA_VERSION "1.5.0"')
+    t = rep(t, '#define NQ_EA_VERSION "1.12.0"', '#define NQ_EA_VERSION "1.6.0"')
     # 14b. v1.3.4 - the weekend is OPEN: crypto never closes, so the metal's WEEKEND block must not
     #      apply; the Friday stop and the week-open guard are off unless the operator sets them
     #      (a broker that closes crypto at the weekend). Nothing else of the week logic changes.
@@ -484,8 +488,6 @@ def derive_ea(m: str) -> str:
     a = t.index("//--- LADDER PEERS BEGIN")
     b = t.index("//--- LADDER PEERS END\n") + len("//--- LADDER PEERS END\n")
     t = t[:a] + PEERS + t[b:]
-    t = rep(t, 'input bool           InpStudies          = true;        // Master switch: compute and show the MH15 PLUS table (false = exactly 1.10.0: nothing computed, nothing gated)\n',
-            'input bool           InpStudies          = false;       // Master switch: compute and show the MH15 PLUS table (BTC / ETH / LTC ladder). OFF by default on crypto: nothing computed, nothing gated\n')
     t = rep(t, "//| MH15 PLUS (v1.11.0): the DAY FORECAST, the ROTATION LADDER and    |", "//| MH15 PLUS (v1.5.0):  the DAY FORECAST, the ROTATION LADDER and    |")
     # 15. renames
     t = t.replace("g_metal", "g_coin").replace("NQ_METAL_NONE", "NQ_COIN_NONE")
@@ -513,7 +515,7 @@ def derive_test(s: str) -> str:
     t = rep(t, 'find("GOLD / SILVER / COPPER ONLY")', 'find("CRYPTO ONLY")')
     t = rep(t, '"\\"metal\\":\\"GOLD\\""', '"\\"coin\\":\\"BTC\\""')
     t = rep(t, '"\\"source\\":\\"NRTR_QML_MetalScalper\\""', '"\\"source\\":\\"NRTR_QML_CryptoScalper\\""')
-    t = rep(t, '"\\"ea_version\\":\\"1.11.0\\""', '"\\"ea_version\\":\\"1.5.0\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
+    t = rep(t, '"\\"ea_version\\":\\"1.12.0\\""', '"\\"ea_version\\":\\"1.6.0\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
     t = rep(t, 'CHECK(rows == 12, "12 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, VOL REGIME + the 7 engine rows)");', 'CHECK(rows == 13, "13 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, COIN PROFILE, VOL REGIME + the 7 engine rows)");')
     t = rep(t, "   SIM.tickValue = tickValue;\n", "   SIM.tickValue = tickValue;\n   SIM.contract = 1.0;   // crypto CFD: one coin per lot\n")
     # price offsets of the hand-made broker items, scaled from a $4,150 metal to a $61,500 coin
@@ -759,22 +761,19 @@ CRYPTO_CHECKS = r'''
    }
    end("C7");
 
-   begin("C8 MH15 PLUS (v1.5.0): carried over and OFF by default; switched on, the ladder is BTC / ETH / LTC and an altcoin is never on it");
+   begin("C8 MH15 PLUS on crypto (ON by default since 1.6.0): the ladder is BTC / ETH / LTC, an altcoin is never on it, the candle check is there");
    {
       load(btc, "BTCUSD", "BTC", 2, 0.01, 0.01);
       startAt(START);
       run(START + 1, START + 20);
       std::string why;
-      CHECK(!g_studies && SIM.objs.count("NQEA_P_tF") == 0 && !g_fc.ok && !g_st.ok && !NqStudiesBlock(1, SIM.bid, SIM.bid + 1.0, why),
-            "default: nothing computed, no table, nothing gated");
-      CHECK(NqTelemetryJson().find("\"mh15\":{\"on\":false") != std::string::npos, "telemetry says the studies are off");
-      g_studies = true;
-      NqResolvePeers();
-      stepTo(START + 21);
-      CHECK(NqPeerName(0) == "BTC" && NqPeerName(1) == "ETH" && NqPeerName(2) == "LTC" && NqPeerRow() == 0 && g_ldSym[0] == "BTCUSD",
-            "switched on: the rows are BTC / ETH / LTC and this chart is row 1");
-      CHECK(lbl("tF") != "<missing>" && lbl("fl0_0") == "BTC" && lbl("v_f1").find("UNKNOWN - no daily bars (no gate)") == 0 && g_st.ok,
-            "the table appears; this simulated broker serves no daily bars = UNKNOWN, no gate; the pattern studies run");
+      CHECK(g_studies && NqPeerName(0) == "BTC" && NqPeerName(1) == "ETH" && NqPeerName(2) == "LTC" && NqPeerRow() == 0 && g_ldSym[0] == "BTCUSD",
+            "on by default: the rows are BTC / ETH / LTC and this chart is row 1");
+      CHECK(lbl("tF") != "<missing>" && lbl("fl0_0") == "BTC" && lbl("v_f1").find("UNKNOWN - no daily bars (no gate)") == 0 && g_st.ok &&
+            !NqStudiesBlock(1, SIM.bid, SIM.bid + 1.0, why), "the table is on the chart; this simulated broker serves no daily bars = UNKNOWN, no gate");
+      CHECK(NqTelemetryJson().find("\"mh15\":{\"on\":true") != std::string::npos && NqTelemetryJson().find("\"candles\":{\"guard\":true,\"blocking\":false") != std::string::npos,
+            "telemetry carries the studies and the candle check");
+      CHECK(g_gapGuard && lbl("v_fg").find("M1 OK / M5 OK / M15 OK") == 0 && (g_gate & NQ_K_DATA_GAP) == 0, "CANDLES row: every timeframe valid on an unbroken feed");
       CHECK(NqPeerInSession(100) && NqPeerInSession(1100), "crypto trades round the clock: the session factor is always 1");
       OnDeinit(0);
       Market sol = makeMarket(13, 148.0, 0.001, 0.07, (int)DAYS);

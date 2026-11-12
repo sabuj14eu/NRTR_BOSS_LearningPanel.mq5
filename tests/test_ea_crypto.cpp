@@ -571,7 +571,7 @@ int main()
       }
       std::printf("    %d rows\n", rows);
       CHECK(rows == 13, "13 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, COIN PROFILE, VOL REGIME + the 7 engine rows)");
-      CHECK(studyRows == (g_studies ? 9 : 0), "the MH15 PLUS table: 9 rows under its ladder when the studies are on, none when they are off");
+      CHECK(studyRows == (g_studies ? 10 : 0), "the MH15 PLUS table: 10 rows under its ladder (CANDLES first) when the studies are on, none when they are off");
       CHECK(dup == 0, "no key twice");
       CHECK(empty == 0, "every row has a value");
       CHECK(lbl("h1").find("ENGINE") != std::string::npos && lbl("h2").find("NY TRAP  +  PENDING ORDER BOARD") != std::string::npos, "engine table + board");
@@ -865,7 +865,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_CryptoScalper\"", "\"ea_version\":\"1.5.0\"", "\"prof_risk\":1.00", "\"prof_spread_atr\":0.15", "\"lead_symbol\":\"\"", "\"trade_swing\":\"ALL\"", "\"profit_lock\":false", "\"hand_managed\":0", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_CryptoScalper\"", "\"ea_version\":\"1.6.0\"", "\"prof_risk\":1.00", "\"prof_spread_atr\":0.15", "\"lead_symbol\":\"\"", "\"trade_swing\":\"ALL\"", "\"profit_lock\":false", "\"hand_managed\":0", "\"htf\":{", "\"witnesses\":{", "\"macro\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"portfolio\":{", "\"smart_exit\":{",
                            "\"symbol\":\"BTCUSD\"", "\"coin\":\"BTC\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"clock\":\"AUTO\"", "\"clock_offset_min\":180", "\"ny_dst\":true", "\"ny_open_min\":990", "\"london_open_min\":600", "\"asia_open_min\":60", "\"rollover_min\":0", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
@@ -2095,22 +2095,19 @@ int main()
    }
    end("C7");
 
-   begin("C8 MH15 PLUS (v1.5.0): carried over and OFF by default; switched on, the ladder is BTC / ETH / LTC and an altcoin is never on it");
+   begin("C8 MH15 PLUS on crypto (ON by default since 1.6.0): the ladder is BTC / ETH / LTC, an altcoin is never on it, the candle check is there");
    {
       load(btc, "BTCUSD", "BTC", 2, 0.01, 0.01);
       startAt(START);
       run(START + 1, START + 20);
       std::string why;
-      CHECK(!g_studies && SIM.objs.count("NQEA_P_tF") == 0 && !g_fc.ok && !g_st.ok && !NqStudiesBlock(1, SIM.bid, SIM.bid + 1.0, why),
-            "default: nothing computed, no table, nothing gated");
-      CHECK(NqTelemetryJson().find("\"mh15\":{\"on\":false") != std::string::npos, "telemetry says the studies are off");
-      g_studies = true;
-      NqResolvePeers();
-      stepTo(START + 21);
-      CHECK(NqPeerName(0) == "BTC" && NqPeerName(1) == "ETH" && NqPeerName(2) == "LTC" && NqPeerRow() == 0 && g_ldSym[0] == "BTCUSD",
-            "switched on: the rows are BTC / ETH / LTC and this chart is row 1");
-      CHECK(lbl("tF") != "<missing>" && lbl("fl0_0") == "BTC" && lbl("v_f1").find("UNKNOWN - no daily bars (no gate)") == 0 && g_st.ok,
-            "the table appears; this simulated broker serves no daily bars = UNKNOWN, no gate; the pattern studies run");
+      CHECK(g_studies && NqPeerName(0) == "BTC" && NqPeerName(1) == "ETH" && NqPeerName(2) == "LTC" && NqPeerRow() == 0 && g_ldSym[0] == "BTCUSD",
+            "on by default: the rows are BTC / ETH / LTC and this chart is row 1");
+      CHECK(lbl("tF") != "<missing>" && lbl("fl0_0") == "BTC" && lbl("v_f1").find("UNKNOWN - no daily bars (no gate)") == 0 && g_st.ok &&
+            !NqStudiesBlock(1, SIM.bid, SIM.bid + 1.0, why), "the table is on the chart; this simulated broker serves no daily bars = UNKNOWN, no gate");
+      CHECK(NqTelemetryJson().find("\"mh15\":{\"on\":true") != std::string::npos && NqTelemetryJson().find("\"candles\":{\"guard\":true,\"blocking\":false") != std::string::npos,
+            "telemetry carries the studies and the candle check");
+      CHECK(g_gapGuard && lbl("v_fg").find("M1 OK / M5 OK / M15 OK") == 0 && (g_gate & NQ_K_DATA_GAP) == 0, "CANDLES row: every timeframe valid on an unbroken feed");
       CHECK(NqPeerInSession(100) && NqPeerInSession(1100), "crypto trades round the clock: the session factor is always 1");
       OnDeinit(0);
       Market sol = makeMarket(13, 148.0, 0.001, 0.07, (int)DAYS);

@@ -32,29 +32,29 @@ the build environment. The EA was therefore verified like this:
 it behaves on a real broker feed. **Press F7 in MetaEditor and do the manual checks below
 before relying on it.** If F7 reports anything, send the exact message.
 
-## Results (2026-11-12, metal 1.11.0 / crypto 1.5.0 / forex 1.1.0)
+## Results (2026-11-12, metal 1.12.0 / crypto 1.6.0 / forex 1.2.0)
 
 ```
 CRYPTO TWIN:      derived files match; engine block identical apart from the asset detector; studies block identical
 FOREX EA:         engine block identical to the metal EA apart from the asset detector; studies block identical
--- NRTR_QML_MetalScalper.mq5 (v1.11.0) --
+-- NRTR_QML_MetalScalper.mq5 (v1.12.0) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 EA ENGINE TESTS:  122 checks passed, 0 failed   (the engine block is unchanged apart from the detector: copper)
-EA TESTS:         418 checks passed, 0 failed   (A1-A15 + A10 and M1-M9 as before, with the three MH15 PLUS gates
+EA TESTS:         443 checks passed, 0 failed   (A1-A15 + A10 and M1-M9 as before, with the three MH15 PLUS gates
                   relaxed in the A sections; S1-S10 new: the day forecast, the ladder, Elliott, Wolfe, Fibonacci /
                   VWAP / profile, the table, ADR ROOM end to end, the ladder end to end, the study vote, copper)
                   The same binary built with -fsanitize=address,undefined -D_GLIBCXX_ASSERTIONS (every array
                   index bounds-checked, as MT5 does at run time): 418 passed, no report
--- NRTR_QML_CryptoScalper.mq5 (v1.5.0) --
+-- NRTR_QML_CryptoScalper.mq5 (v1.6.0) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 CRYPTO EA TESTS:  341 checks passed, 0 failed   (the metal sections re-run on a BTC-sized market + an LTC 3-digit
-                  spec, plus the 8 crypto sections; C8 = MH15 PLUS is OFF by default, BTC / ETH / LTC when on)
--- NRTR_QML_ForexScalper.mq5 (v1.1.0) --
+                  spec, plus the 8 crypto sections; C8 = MH15 PLUS ON by default with a BTC / ETH / LTC ladder)
+-- NRTR_QML_ForexScalper.mq5 (v1.2.0) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-FOREX EA TESTS:   343 checks passed, 0 failed   (A / F sections as before with the two MH15 PLUS gates relaxed;
+FOREX EA TESTS:   368 checks passed, 0 failed   (A / F sections as before with the two MH15 PLUS gates relaxed;
                   F11-F13 new: the table without a ladder, ADR ROOM end to end, the study vote)
                   The same binary built with -fsanitize=address,undefined -D_GLIBCXX_ASSERTIONS: 343 passed, no report
 -- BrotherSniperULTIMATE_v18_MT5.mq5 (18.12-mt5.2, the Pine twin, unchanged) --
@@ -96,6 +96,17 @@ ladder. F12 (ADR ROOM end to end on EURUSD): without the gate 20 of 40 opening r
 target outside the forecast range and orders rested outside it for 430 order-minutes; with the gate
 **0 of 26** and **0** resting, 71 blocks. F13: context alone never blocks; a live Elliott setup against
 + the VWAPs blocks and names the voters; gate off / master switch off = nothing.
+
+**Candle integrity (metal G1-G2, forex FG1-FG2).** G1 (pure): 14 minutes is not a hole; Wednesday
+10:00-10:50 and a missing mid-session hour = DATA GAP; Friday-Monday on an EET and a GMT broker =
+WEEKEND; a break across or within two hours of the rollover = DAILY CLOSE; ten hours around it = LONG
+CLOSE; the scan's from / to / candles-since / recovery and the weekend counted apart. G2 (end to end,
+a 50-minute hole punched into M1 / M5 / M15): valid before; DATA GAP with the hole's exact times on
+the first candle after it; the gate's reason names it; the studies do not vote and the table says
+why; telemetry `candles`; 50 minutes after the candles came back the gate was still closed and
+nothing had been opened; after an hour of candles every timeframe is valid again while the hole,
+still inside the M15 window, keeps the studies silent; guard off = shown only; **a one-hour daily
+close across the rollover never blocked** and is named `DAILY CLOSE ... (legitimate)`.
 
 What these do **not** show: that the gates improve the account. The numbers above are from a synthetic
 random market; they prove the gates remove exactly the entries they describe and nothing else.
