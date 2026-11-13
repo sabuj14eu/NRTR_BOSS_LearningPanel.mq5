@@ -63,7 +63,7 @@
 //|  Personal tool. No network, no Telegram, no DLL, no files.       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.120"
+#property version     "1.121"
 #property description "Gold/Silver/Copper: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot, MH15 PLUS table."
 #property description "Auto scalp + QML/pullback/NY-trap/radar plans, macro vote (DXY, bond, USD news, H4/H1), news guard, smart exit."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -4323,7 +4323,7 @@ NqGapInfo g_gap5;
 NqGapInfo g_gap15;
 string   g_gapText;      // "" = every timeframe valid
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.12.0"
+#define NQ_EA_VERSION "1.12.1"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -7467,6 +7467,9 @@ void NqTrade()
    int n5 = g_s5.n;
    int reg5 = g_s5.regime[n5 - 1];
    datetime now = TimeTradeServer();
+   // the note is THIS candle's reason: before, a refusal ("QML: NO FREE MARGIN") stayed on the panel for hours
+   // after it stopped being true, because nothing ever cleared it
+   g_note = "";
 
    // 0) the week's edge and a news window: resting orders are pulled, a position in profit is
    //    banked. Closing is never blocked by the gate; these run before anything else.
