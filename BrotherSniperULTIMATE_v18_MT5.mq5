@@ -39,7 +39,7 @@
 #property description "SMART SCALP fires = market orders at bar close; PULLBACK arms = limit orders; the Algo Trading button is the switch."
 #property strict
 
-#define BS_VERSION "18.12-mt5.2"
+#define BS_VERSION "18.12-mt5.3"
 
 //=== SECTION 1 - INPUTS (the Pine's inputs, same names, same defaults) ===
 enum BS_MARKET { MK_AUTO = 0, MK_SILVER, MK_GOLD, MK_EURUSD, MK_USDJPY, MK_DXY, MK_OIL, MK_US30, MK_NAS100, MK_BTC, MK_ETH, MK_XRP };
@@ -2191,8 +2191,51 @@ int BsFontDash() { return (InpDashSizeMode == SZ_BIG) ? 11 : ((InpDashSizeMode =
 int BsFontDashTiny() { return (InpDashSizeMode == SZ_BIG) ? 9 : ((InpDashSizeMode == SZ_MEDIUM) ? 8 : 7); }
 int BsFontBrain() { return (InpDashSizeMode == SZ_BIG) ? 14 : ((InpDashSizeMode == SZ_MEDIUM) ? 11 : 9); }
 int BsFontBrainTiny() { return (InpDashSizeMode == SZ_BIG) ? 11 : ((InpDashSizeMode == SZ_MEDIUM) ? 9 : 8); }
+// CLICK TO FOLD (mt5.3): a click on a table's first row folds that table to that row; a second click
+// unfolds it. Each of the five tables folds on its own. Display only: nothing here touches a decision.
+bool g_foldMain = false;
+bool g_foldPend = false;
+bool g_foldMan = false;
+bool g_foldPvt = false;
+bool g_foldSs = false;
+bool BsFolded(string name)
+{
+   if(name == "main") return g_foldMain;
+   if(name == "pend") return g_foldPend;
+   if(name == "man") return g_foldMan;
+   if(name == "pvt") return g_foldPvt;
+   if(name == "ss") return g_foldSs;
+   return false;
+}
+// the table whose FIRST ROW the clicked object belongs to ("" = the click was not on a table's first row)
+string BsClickedTable(string obj)
+{
+   string names[5];
+   names[0] = "main";
+   names[1] = "pend";
+   names[2] = "man";
+   names[3] = "pvt";
+   names[4] = "ss";
+   for(int k = 0; k < 5; k++)
+   {
+      if(StringFind(obj, BS_PREFIX + "T_" + names[k] + "_0_") == 0)
+         return names[k];
+   }
+   return "";
+}
+void BsToggleFold(string name)
+{
+   if(name == "main") g_foldMain = !g_foldMain;
+   if(name == "pend") g_foldPend = !g_foldPend;
+   if(name == "man") g_foldMan = !g_foldMan;
+   if(name == "pvt") g_foldPvt = !g_foldPvt;
+   if(name == "ss") g_foldSs = !g_foldSs;
+   ObjectsDeleteAll(0, BS_PREFIX + "T_" + name + "_");   // the rows of the folded table go; the redraw puts back what is shown
+}
 void BsTable(string name, BS_POS pos, int cols, int w0, int w1, int w2, int rows, int rowH)
 {
+   if(BsFolded(name))
+      rows = 1;               // folded: the table is its first row
    g_tblName = name; g_tblCols = cols; g_tblColW[0] = w0; g_tblColW[1] = w1; g_tblColW[2] = w2; g_tblColW[3] = 0; g_tblRowH = rowH;
    int W = w0 + w1 + ((cols > 2) ? w2 : 0), H = rows * rowH;
    int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS), ch = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS);
@@ -2222,6 +2265,8 @@ void BsTable(string name, BS_POS pos, int cols, int w0, int w1, int w2, int rows
 }
 void BsCell(int col, int row, string text, color txt, int px, color bg, bool hasBg)
 {
+   if(row > 0 && BsFolded(g_tblName))
+      return;                 // folded: only the first row is drawn
    int x = g_tblX;
    for(int k = 0; k < col; k++) x += g_tblColW[k];
    int y = g_tblY + row * g_tblRowH;
@@ -2259,6 +2304,7 @@ void BsCell(int col, int row, string text, color txt, int px, color bg, bool has
    ObjectSetInteger(0, base, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, base, OBJPROP_HIDDEN, true);
    ObjectSetInteger(0, base, OBJPROP_ZORDER, 2);
+   ObjectSetString(0, base, OBJPROP_TOOLTIP, (row == 0) ? (BsFolded(g_tblName) ? "Click: unfold this table" : "Click: fold this table") : "\n");
 }
 // the Pine's row helpers
 void f_hdr(int r, string t0, string t1, string t2, color c0, color c1, color c2, color bg) { int px = BsFontDash(); BsCell(0, r, t0, c0, px, bg, true); BsCell(1, r, t1, c1, px, bg, true); BsCell(2, r, t2, c2, px, bg, true); }
@@ -3064,4 +3110,13 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 {
    if(id == CHARTEVENT_CHART_CHANGE)
       BsUpdate(true);
+   if(id == CHARTEVENT_OBJECT_CLICK)
+   {
+      string tbl = BsClickedTable(sparam);
+      if(tbl == "")
+         return;
+      BsToggleFold(tbl);
+      BsUpdate(true);
+      ChartRedraw(0);
+   }
 }

@@ -401,6 +401,45 @@ int main()
    }
    end("B10");
 
+   begin("B11 click to fold (mt5.3): a click on a table's first row folds that table to that row, a second click unfolds it, each table on its own");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      stepTo(START + 1);
+      auto countRows = [&](const char *tbl) { int n = 0; for(int r = 0; r < 60; r++) if(cell(tbl, r, 0) != "<missing>") n++; return n; };
+      int mainRows = countRows("main"), pendRows = countRows("pend"), pvtRows = countRows("pvt"), manRows = countRows("man"), ssRows = countRows("ss");
+      long long hFull = SIM.objs["BS18_T_main_bg"].i[OBJPROP_YSIZE];
+      CHECK(mainRows > 40 && pendRows > 30 && pvtRows == 10 && manRows == 9 && ssRows > 5, "five tables drawn in full");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "BS18_T_main_0_2");
+      CHECK(g_foldMain && countRows("main") == 1 && cell("main", 0, 0) == "Gold" && cell("main", 1, 0) == "<missing>" &&
+            SIM.objs["BS18_T_main_bg"].i[OBJPROP_YSIZE] < hFull / 10, "a click on the main dashboard's first row folds it to that row");
+      CHECK(countRows("pend") == pendRows && countRows("pvt") == pvtRows && countRows("man") == manRows && countRows("ss") == ssRows, "the other four tables are untouched");
+      stepTo(START + 2);
+      CHECK(countRows("main") == 1, "it stays folded on the next candle");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "BS18_T_main_10_0");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "BS18_T_pend_5_1");
+      CHECK(g_foldMain && !g_foldPend && countRows("pend") == pendRows, "a click on any other row does nothing");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "BS18_T_main_0_0b");
+      CHECK(!g_foldMain && countRows("main") == mainRows && cell("main", 1, 0) == "BIAS", "a second click (the cell's background counts too) unfolds it, every row back");
+      const char *others[4] = {"pend", "pvt", "man", "ss"};
+      int folded = 0, restored = 0;
+      for(const char *tb : others)
+      {
+         int full = countRows(tb);
+         OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, std::string("BS18_T_") + tb + "_0_0");
+         if(countRows(tb) == 1) folded++;
+         OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, std::string("BS18_T_") + tb + "_0_0");
+         if(countRows(tb) == full) restored++;
+      }
+      CHECK(folded == 4 && restored == 4 && !g_foldPend && !g_foldPvt && !g_foldMan && !g_foldSs, "the structural brain, the pivot table, the manual monitor and the scalp panel fold and unfold the same way");
+      size_t sent = SIM.sent.size();
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "BS18_T_ss_0_0");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "BS18_T_ss_0_0");
+      CHECK(SIM.sent.size() == sent, "folding is display only: no order request is sent by a click");
+      OnDeinit(0);
+   }
+   end("B11");
+
    std::printf("\nBS18 EA TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
 }

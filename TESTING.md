@@ -57,10 +57,12 @@ EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 FOREX EA TESTS:   368 checks passed, 0 failed   (A / F sections as before with the two MH15 PLUS gates relaxed;
                   F11-F13 new: the table without a ladder, ADR ROOM end to end, the study vote)
                   The same binary built with -fsanitize=address,undefined -D_GLIBCXX_ASSERTIONS: 343 passed, no report
--- BrotherSniperULTIMATE_v18_MT5.mq5 (18.12-mt5.2, the Pine twin, unchanged) --
+-- BrotherSniperULTIMATE_v18_MT5.mq5 (18.12-mt5.3, the Pine twin: click-to-fold tables, B11) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-BS18 EA TESTS:    86 checks passed, 0 failed
+BS18 EA TESTS:    94 checks passed, 0 failed   (B11 new: each of the five tables folds to its first row on a click
+                  and unfolds on the next; other rows do nothing; no order is sent by a click; also clean under
+                  -fsanitize=address,undefined -D_GLIBCXX_ASSERTIONS)
 MetaEditor F7:    NOT RUN (not available in the build environment) - for ALL FOUR files
 ```
 
