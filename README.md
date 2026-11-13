@@ -858,6 +858,11 @@ or alter a decision, and a failed POST costs one `Print`.
 
 ## The Pine twin: `BrotherSniperULTIMATE_v18_MT5.mq5` (sensor + execution)
 
+**18.12-mt5.3: click to fold.** A click on the first row of any of the five tables (main dashboard,
+structural brain, manual monitor, pivot table, smart scalp panel) folds that table to that row; a
+second click unfolds it. Each table folds on its own and stays folded across candles and timeframe
+changes. Display only: a click never touches a decision or an order.
+
 The TradingView indicator `BrotherSniperULTIMATE_v18_FINAL_v6.pine` (v18.12, in the
 Sniper-System repo under `pine/`) ported to MQL5 **line by line** so the same readings
 appear on the MT5 chart - and, because an EA can trade, so the Pine's two bot fires
