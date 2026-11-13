@@ -39,7 +39,7 @@
 #property description "SMART SCALP fires = market orders at bar close; PULLBACK arms = limit orders; the Algo Trading button is the switch."
 #property strict
 
-#define BS_VERSION "18.12-mt5.3"
+#define BS_VERSION "18.12-mt5.4"
 
 //=== SECTION 1 - INPUTS (the Pine's inputs, same names, same defaults) ===
 enum BS_MARKET { MK_AUTO = 0, MK_SILVER, MK_GOLD, MK_EURUSD, MK_USDJPY, MK_DXY, MK_OIL, MK_US30, MK_NAS100, MK_BTC, MK_ETH, MK_XRP };
@@ -2232,13 +2232,34 @@ void BsToggleFold(string name)
    if(name == "ss") g_foldSs = !g_foldSs;
    ObjectsDeleteAll(0, BS_PREFIX + "T_" + name + "_");   // the rows of the folded table go; the redraw puts back what is shown
 }
+// the tables placed in this draw pass (reset by BsDrawAll): a later table never covers an earlier one when the chart has room
+int g_plX[8], g_plY[8], g_plW[8], g_plH[8], g_plN = 0;
+// true when the rectangle is on the chart and at least 4 px away from every table placed so far
+bool BsPlaceFree(int x, int y, int w, int h, int cw, int ch)
+{
+   if(x < 0 || y < 20 || x + w > cw || y + h > ch)
+      return false;
+   for(int k = 0; k < g_plN; k++)
+   {
+      if(x < g_plX[k] + g_plW[k] + 4 && x + w > g_plX[k] - 4 && y < g_plY[k] + g_plH[k] + 4 && y + h > g_plY[k] - 4)
+         return false;
+   }
+   return true;
+}
 void BsTable(string name, BS_POS pos, int cols, int w0, int w1, int w2, int rows, int rowH)
 {
    if(BsFolded(name))
       rows = 1;               // folded: the table is its first row
+   int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS), ch = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS);
+   // FIT (mt5.4): a table taller than the chart gets shorter rows (never under 12 px) so its last rows stay on screen
+   if(rows > 1 && rows * rowH > ch - 30)
+   {
+      int fit = (ch - 30) / rows;
+      if(fit < 12) fit = 12;
+      if(fit < rowH) rowH = fit;
+   }
    g_tblName = name; g_tblCols = cols; g_tblColW[0] = w0; g_tblColW[1] = w1; g_tblColW[2] = w2; g_tblColW[3] = 0; g_tblRowH = rowH;
    int W = w0 + w1 + ((cols > 2) ? w2 : 0), H = rows * rowH;
-   int cw = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS), ch = (int)ChartGetInteger(0, CHART_HEIGHT_IN_PIXELS);
    int x = 6, y = 24;
    if(pos == P_TOP_CENTER || pos == P_MID_CENTER || pos == P_BOT_CENTER) x = (cw - W) / 2;
    if(pos == P_TOP_RIGHT || pos == P_MID_RIGHT || pos == P_BOT_RIGHT) x = cw - W - 60;
@@ -2246,6 +2267,34 @@ void BsTable(string name, BS_POS pos, int cols, int w0, int w1, int w2, int rows
    if(pos == P_BOT_LEFT || pos == P_BOT_CENTER || pos == P_BOT_RIGHT) y = ch - H - 30;
    if(x < 0) x = 0;
    if(y < 0) y = 0;
+   // NO OVERLAP (mt5.4): a table that would cover one drawn before it moves to the first free place beside,
+   // above or below a placed table; when the chart has no free place it keeps its position (fold one of them)
+   if(!BsPlaceFree(x, y, W, H, cw, ch))
+   {
+      bool moved = false;
+      for(int k = 0; k < g_plN && !moved; k++)
+      {
+         int cx[4], cy[4];
+         cx[0] = g_plX[k] + g_plW[k] + 8; cy[0] = y;                    // right of it
+         cx[1] = g_plX[k] - W - 8;        cy[1] = y;                    // left of it
+         cx[2] = g_plX[k];                cy[2] = g_plY[k] - H - 8;     // above it
+         cx[3] = g_plX[k];                cy[3] = g_plY[k] + g_plH[k] + 8;   // below it
+         for(int c = 0; c < 4 && !moved; c++)
+         {
+            if(BsPlaceFree(cx[c], cy[c], W, H, cw, ch))
+            {
+               x = cx[c];
+               y = cy[c];
+               moved = true;
+            }
+         }
+      }
+   }
+   if(g_plN < 8)
+   {
+      g_plX[g_plN] = x; g_plY[g_plN] = y; g_plW[g_plN] = W; g_plH[g_plN] = H;
+      g_plN++;
+   }
    g_tblX = x; g_tblY = y;
    string bg = BS_PREFIX + "T_" + name + "_bg";
    if(ObjectFind(0, bg) < 0)
@@ -2495,7 +2544,7 @@ void BsDrawSSPanel()
    if(!InpSsShowPanel) { ObjectsDeleteAll(0, BS_PREFIX + "T_ss_"); return; }
    BsOut o = g_out;
    int rh = 22;
-   BsTable("ss", InpSsPanelPos, 2, 130, 200, 0, 12, rh);
+   BsTable("ss", InpSsPanelPos, 2, 190, 160, 0, 12, rh);   // the title ("SMART SCALP Conservative") was cut at 130 px
    string modeT = (InpSsMode == SM_AGGRESSIVE) ? "Aggressive" : ((InpSsMode == SM_CONSERVATIVE) ? "Conservative" : "Balanced");
    BsCell(0, 0, g_uStar + " SMART SCALP " + modeT, cAmber, 9, cNavy, true);
    BsCell(1, 0, "", cAmber, 9, cNavy, true);
@@ -2534,6 +2583,11 @@ void BsDrawAll(bool newBar)
    if(newBar)
       BsDrawEvents();
    BsDrawLive();
+   // ON TOP (mt5.4): MT5 draws newer objects over older ones, so chart arrows and labels made after the tables
+   // covered them. On every new bar the tables are recreated after the chart objects: they stay readable.
+   if(newBar)
+      ObjectsDeleteAll(0, BS_PREFIX + "T_");
+   g_plN = 0;
    BsDrawMain();
    BsDrawBrain();
    BsDrawManual();

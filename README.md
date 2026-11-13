@@ -858,6 +858,13 @@ or alter a decision, and a failed POST costs one `Print`.
 
 ## The Pine twin: `BrotherSniperULTIMATE_v18_MT5.mq5` (sensor + execution)
 
+**18.12-mt5.4: layout.** Seen on a live 1750 x 739 chart: the pivot table sat on the structural brain,
+the main dashboard ran off the bottom, chart arrows were drawn over the tables and the scalp panel's
+title was cut. Now a table that would cover one drawn before it moves to the first free place beside,
+above or below a placed table (when the chart has no free place it keeps its position: fold one); a
+table taller than the chart gets shorter rows (never under 12 px); the tables are recreated after the
+chart objects on every new bar, so they stay on top; the scalp panel's title column is wider.
+
 **18.12-mt5.3: click to fold.** A click on the first row of any of the five tables (main dashboard,
 structural brain, manual monitor, pivot table, smart scalp panel) folds that table to that row; a
 second click unfolds it. Each table folds on its own and stays folded across candles and timeframe
