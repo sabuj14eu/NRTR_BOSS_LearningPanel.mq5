@@ -39,7 +39,7 @@
 #property description "SMART SCALP fires = market orders at bar close; PULLBACK arms = limit orders; the Algo Trading button is the switch."
 #property strict
 
-#define BS_VERSION "18.12-mt5.4"
+#define BS_VERSION "18.12-mt5.5"
 
 //=== SECTION 1 - INPUTS (the Pine's inputs, same names, same defaults) ===
 enum BS_MARKET { MK_AUTO = 0, MK_SILVER, MK_GOLD, MK_EURUSD, MK_USDJPY, MK_DXY, MK_OIL, MK_US30, MK_NAS100, MK_BTC, MK_ETH, MK_XRP };
@@ -2668,6 +2668,98 @@ void BsEmit(string json)
    g_webN++;
    NqWebFlush();
 }
+//--- SIGNALMESH ASSET NAME BEGIN
+// The SignalMesh asset a broker symbol belongs to ("" = not one of SignalMesh's assets). Every journal event and
+// telemetry snapshot carries it as `asset`, so the platform can file the EA's results under its own names
+// whatever the broker calls the symbol (XAUUSD.m -> GOLD, USTEC -> US100, NVDA.NAS -> NVDA, LNKUSD -> "").
+// The list: GOLD SILVER DXY GER40 US100 US10Y US30 US500 VIX, AUDUSD EURGBP EURJPY EURUSD GBPJPY GBPUSD NZDUSD
+// USDCAD USDCHF USDJPY, ADA BNB BTC DOT ETH LTC SOL XRP, OIL (WTI), NVDA.
+bool NqAssetHas(string u, string tk)
+{
+   if(StringFind(u, tk) != 0)
+      return false;
+   string rest = StringSubstr(u, StringLen(tk));
+   if(rest == "" || StringFind(rest, "USD") == 0)
+      return true;
+   ushort ch = StringGetCharacter(rest, 0);
+   return !(ch >= 'A' && ch <= 'Z');
+}
+
+string NqAssetName(string sym)
+{
+   string u = sym;
+   StringToUpper(u);
+   int len = StringLen(u);
+   int p = 0;
+   while(p < len)
+   {
+      ushort ch = StringGetCharacter(u, p);
+      if(ch >= 'A' && ch <= 'Z')
+         break;
+      p++;
+   }
+   if(p > 0)
+      u = StringSubstr(u, p);
+   // a company share (GOLD.NYSE is Barrick, SCCO.NYSE a copper miner) is never the commodity: only NVDA is listed
+   if(StringFind(u, ".NYSE") >= 0 || StringFind(u, ".NAS") >= 0 || StringFind(u, ".US") >= 0)
+      return (StringFind(u, "NVDA") == 0) ? "NVDA" : "";
+   if(StringFind(u, "NVDA") == 0 || StringFind(u, "NVIDIA") == 0)
+      return "NVDA";
+   if(StringFind(u, "XAUUSD") == 0 || StringFind(u, "GOLD") == 0)
+      return "GOLD";
+   if(StringFind(u, "XAGUSD") == 0 || StringFind(u, "SILVER") == 0)
+      return "SILVER";
+   string fx = "AUDUSD,EURGBP,EURJPY,EURUSD,GBPJPY,GBPUSD,NZDUSD,USDCAD,USDCHF,USDJPY";
+   for(int k = 0; k < 10; k++)
+   {
+      string pr = StringSubstr(fx, k * 7, 6);
+      if(StringFind(u, pr) >= 0)
+         return pr;                // anywhere in the name: some brokers put a letter in front (mUSDJPY)
+   }
+   if(StringFind(u, "BITCOINCASH") == 0 || StringFind(u, "ETHEREUMCLASSIC") == 0)
+      return "";
+   if(NqAssetHas(u, "BTC") || NqAssetHas(u, "XBT") || StringFind(u, "BITCOIN") == 0)
+      return "BTC";
+   if(NqAssetHas(u, "ETH") || StringFind(u, "ETHEREUM") == 0)
+      return "ETH";
+   if(NqAssetHas(u, "LTC") || StringFind(u, "LITECOIN") == 0)
+      return "LTC";
+   if(NqAssetHas(u, "XRP") || StringFind(u, "RIPPLE") == 0)
+      return "XRP";
+   if(NqAssetHas(u, "SOL") || StringFind(u, "SOLANA") == 0)
+      return "SOL";
+   if(NqAssetHas(u, "ADA") || StringFind(u, "CARDANO") == 0)
+      return "ADA";
+   if(NqAssetHas(u, "DOT") || StringFind(u, "POLKADOT") == 0)
+      return "DOT";
+   if(NqAssetHas(u, "BNB") || StringFind(u, "BINANCE") == 0)
+      return "BNB";
+   if(StringFind(u, "DXY") == 0 || StringFind(u, "USDX") == 0 || StringFind(u, "USDOLLAR") == 0 || StringFind(u, "USDIDX") == 0 ||
+      StringFind(u, "USIDX") == 0 || StringFind(u, "DOLLAR") == 0 || NqAssetHas(u, "DX"))
+      return "DXY";
+   if(StringFind(u, "US10Y") == 0 || StringFind(u, "UST10Y") == 0 || StringFind(u, "TNX") == 0)
+      return "US10Y";
+   if(StringFind(u, "USTEC") == 0 || StringFind(u, "US100") == 0 || StringFind(u, "NAS100") == 0 || StringFind(u, "NASDAQ") == 0 ||
+      StringFind(u, "NDX") == 0 || StringFind(u, "UT100") == 0 || StringFind(u, "TECH100") == 0)
+      return "US100";
+   if(StringFind(u, "US500") == 0 || StringFind(u, "SPX") == 0 || StringFind(u, "SP500") == 0 || StringFind(u, "USA500") == 0)
+      return "US500";
+   if(StringFind(u, "US30") == 0 || StringFind(u, "DJ30") == 0 || StringFind(u, "DJI") == 0 || StringFind(u, "WS30") == 0 ||
+      StringFind(u, "WALLSTREET") == 0 || StringFind(u, "USA30") == 0 || StringFind(u, "DOWJONES") == 0)
+      return "US30";
+   if(StringFind(u, "GER40") == 0 || StringFind(u, "GER30") == 0 || StringFind(u, "DE40") == 0 || StringFind(u, "DE30") == 0 ||
+      StringFind(u, "DAX") == 0 || StringFind(u, "GDAXI") == 0 || StringFind(u, "GERMANY") == 0 || StringFind(u, "FDAX") == 0)
+      return "GER40";
+   if(NqAssetHas(u, "VIX"))
+      return "VIX";
+   if(StringFind(u, "BRENT") >= 0 || StringFind(u, "XBR") == 0 || StringFind(u, "UKOIL") == 0)
+      return "";                // SignalMesh's OIL is WTI: Brent is not filed under it
+   if(StringFind(u, "XTIUSD") == 0 || StringFind(u, "USOIL") == 0 || StringFind(u, "WTI") == 0 || StringFind(u, "CRUDE") == 0 ||
+      StringFind(u, "OIL") == 0 || NqAssetHas(u, "CL"))
+      return "OIL";
+   return "";
+}
+//--- SIGNALMESH ASSET NAME END
 // one event line: the Pine's SMART_SCALP / PULLBACK payload fields (append-only contract) + the EA's status words
 string BsEventJson(string type, string sigId, string dir, double entry, double sl, double tp1, double tp2, double rr, string grade,
                    string event, string status, string extra)
@@ -2690,6 +2782,7 @@ string BsEventJson(string type, string sigId, string dir, double entry, double s
               NqJsonI("ts", (long)TimeTradeServer());
    if(extra != "")
       j = j + "," + extra;
+   j = j + "," + NqJsonS("asset", NqAssetName(g_sym));   // the SignalMesh asset name ("" = not on its list)
    return j + "}";
 }
 

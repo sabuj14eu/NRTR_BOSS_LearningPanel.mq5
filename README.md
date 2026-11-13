@@ -70,6 +70,24 @@ cut; it has no `InpProfitLock` or session masks (those take their defaults). F7 
 first (metal and crypto), a demo chart second, the real terminal last - tests passing is not a
 reason to flip the Algo button.
 
+## The SignalMesh asset name (metal 1.12.2 / forex 1.2.2 / crypto 1.6.2 / Pine twin 18.12-mt5.5)
+
+Every journal event and every telemetry snapshot of all four EAs now carries `asset`: SignalMesh's own
+name for the instrument, whatever the broker calls it (`XAUUSD.m` -> `GOLD`, `USTEC` -> `US100`,
+`NVDA.NAS` -> `NVDA`, `XTIUSD` -> `OIL`, `mUSDJPY` -> `USDJPY`). A symbol that is not on SignalMesh's
+list (`AUDCHF`, `LNKUSD`, Brent, a company share such as `GOLD.NYSE`) gets `asset: ""`. The metal EA's
+events also name their engine (`engine: NQ-METAL`), as the twins already did.
+
+| SignalMesh asset | Traded by |
+|---|---|
+| GOLD, SILVER | metal EA (and the Pine twin) |
+| AUDUSD, EURGBP, EURJPY, EURUSD, GBPJPY, GBPUSD, NZDUSD, USDCAD, USDCHF, USDJPY | forex EA (the Pine twin: EURUSD, USDJPY) |
+| ADA, BNB, BTC, DOT, ETH, LTC, SOL, XRP | crypto EA (the Pine twin: BTC, ETH, XRP) |
+| DXY, OIL, US30, US100 | the Pine twin only (its DXY / Oil WTI / US30 / NAS100 market types) |
+| GER40, US500, US10Y, VIX, NVDA | **no EA yet** |
+
+---
+
 ## v1.12.0 (metal) / v1.2.0 (forex) / v1.6.0 (crypto): candle integrity (2026-11-12)
 
 **1.12.1 / 1.2.1 / 1.6.1 (2026-11-13): the REASON note is this candle's.** Seen on a live chart: `QML: NO

@@ -32,6 +32,11 @@ def studies_core(text: str) -> str:
     return text[a:b]
 
 
+def asset_core(text: str) -> str:
+    a, b = text.index("//--- SIGNALMESH ASSET NAME BEGIN"), text.index("//--- SIGNALMESH ASSET NAME END")
+    return text[a:b]
+
+
 def main() -> int:
     metal = open(METAL, encoding="ascii").read()
     forex = open(FOREX, encoding="ascii").read()
@@ -50,6 +55,10 @@ def main() -> int:
     sm, sf = studies_core(metal), studies_core(forex)
     if sm != sf:
         print("forex EA: STUDIES DRIFT - its MH15 PLUS studies block is not the metal EA's text; port the change by hand and re-run")
+        return 1
+    bs = open("BrotherSniperULTIMATE_v18_MT5.mq5", encoding="ascii").read()
+    if asset_core(metal) != asset_core(bs):
+        print("Pine twin: ASSET NAME DRIFT - its NqAssetName is not the metal EA's text")
         return 1
     for bad in ("NQ_METAL", "NqMetalOf", "GOLD / SILVER", "InpMacroSymbol", "g_macroDir", "InpMaxSpreadPoints"):
         if bad in forex:
