@@ -976,7 +976,8 @@ inline int ObjectsDeleteAll(long, const string &prefix, int = -1, int = -1)
 inline bool TextSetFont(const string &, int, unsigned = 0, int = 0) { return true; }
 inline bool TextGetSize(const string &t, unsigned &w, unsigned &h) { w = (unsigned)t.size() * 7; h = 14; return true; }   // a fixed-pitch stand-in
 inline void ChartRedraw(long = 0) {}
-inline long long ChartGetInteger(long, int prop, int = 0) { return prop == CHART_WIDTH_IN_PIXELS ? 1400 : 900; }
+static int SIM_chartW = 1400, SIM_chartH = 900;   // a test may resize the simulated chart
+inline long long ChartGetInteger(long, int prop, int = 0) { return prop == CHART_WIDTH_IN_PIXELS ? SIM_chartW : SIM_chartH; }
 static std::map<int, double> SIM_chartProps;
 inline bool ChartSetInteger(long, int prop, long long v) { SIM_chartProps[prop] = (double)v; return true; }
 inline bool ChartSetDouble(long, int prop, double v) { SIM_chartProps[prop] = v; return true; }

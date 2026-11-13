@@ -440,6 +440,37 @@ int main()
    }
    end("B11");
 
+   begin("B12 layout (mt5.4): on a 1750 x 739 chart no table covers another, the main dashboard fits the height, the tables are recreated on top every bar");
+   {
+      SIM_chartW = 1750; SIM_chartH = 739;
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      stepTo(START + 1);
+      struct R { long long x, y, w, h; };
+      auto rect = [&](const char *tb) { SimObj &o = SIM.objs[std::string("BS18_T_") + tb + "_bg"]; return R{o.i[OBJPROP_XDISTANCE], o.i[OBJPROP_YDISTANCE], o.i[OBJPROP_XSIZE], o.i[OBJPROP_YSIZE]}; };
+      const char *names[5] = {"main", "pend", "man", "pvt", "ss"};
+      auto overlaps = [&]() { int n = 0; for(int a = 0; a < 5; a++) for(int b = a + 1; b < 5; b++) { R p = rect(names[a]), q = rect(names[b]);
+                                 if(p.x < q.x + q.w && p.x + p.w > q.x && p.y < q.y + q.h && p.y + p.h > q.y) n++; } return n; };
+      int off = 0;
+      for(const char *tb : names) { R r = rect(tb); if(r.x < 0 || r.y < 0 || r.x + r.w > 1750 || r.y + r.h > 739) off++; }
+      std::printf("    main %lldx%lld at %lld,%lld  brain at %lld,%lld  pivot at %lld,%lld  manual at %lld,%lld  scalp at %lld,%lld\n", rect("main").w, rect("main").h, rect("main").x, rect("main").y,
+                  rect("pend").x, rect("pend").y, rect("pvt").x, rect("pvt").y, rect("man").x, rect("man").y, rect("ss").x, rect("ss").y);
+      CHECK(overlaps() == 0, "no table covers another (the pivot table, which sat on the structural brain, moved to a free place)");
+      CHECK(off == 0 && rect("main").h <= 739 - 24 && cell("main", 54, 0) != "<missing>", "every table is on the chart; the 55-row main dashboard is fitted to the chart height, its last row drawn");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "BS18_T_pend_0_0");
+      CHECK(overlaps() == 0 && rect("pvt").x < 100, "with the structural brain folded the pivot table is back at the bottom left: the layout follows the folds");
+      OnChartEvent(CHARTEVENT_OBJECT_CLICK, 0, 0.0, "BS18_T_pend_0_0");
+      CHECK(overlaps() == 0 && !g_foldPend, "unfolded again: still no overlap");
+      // a chart object made after the tables must not stay on top: on the next bar the tables are the newest objects again
+      SIM.objs["BS18_T_main_3_0"].s[OBJPROP_TEXT] = "STALE";
+      stepTo(START + 2);
+      CHECK(cell("main", 3, 0) == "Score SELL", "every new bar the tables are deleted and recreated after the chart objects (newest = on top in MT5)");
+      CHECK(SIM.objs["BS18_T_ss_bg"].i[OBJPROP_XSIZE] == 190 + 160 + 4, "the scalp panel's title column is wide enough for its title");
+      OnDeinit(0);
+      SIM_chartW = 1400; SIM_chartH = 900;
+   }
+   end("B12");
+
    std::printf("\nBS18 EA TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
 }

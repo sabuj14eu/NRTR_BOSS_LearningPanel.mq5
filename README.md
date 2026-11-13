@@ -72,6 +72,11 @@ reason to flip the Algo button.
 
 ## v1.12.0 (metal) / v1.2.0 (forex) / v1.6.0 (crypto): candle integrity (2026-11-12)
 
+**1.12.1 / 1.2.1 / 1.6.1 (2026-11-13): the REASON note is this candle's.** Seen on a live chart: `QML: NO
+FREE MARGIN` stayed under the banner long after it had stopped being true, because the note was only
+ever cleared at start-up. It is now cleared on every closed M1 candle, so the second REASON line shows
+only what the EA decided on the latest candle.
+
 ATR, NRTR, swing detection and the pattern studies read candle **sequences**. Before this release a
 hole in the sequence (a broker outage, a history that did not load) was silently bridged. Now every
 closed M1 candle the M1, M5 and M15 series are scanned and every hole of `InpGapMinutes` (15) or more
@@ -857,6 +862,13 @@ platform stops answering. Telemetry runs after `NqTrade()` and has no queue; it 
 or alter a decision, and a failed POST costs one `Print`.
 
 ## The Pine twin: `BrotherSniperULTIMATE_v18_MT5.mq5` (sensor + execution)
+
+**18.12-mt5.4: layout.** Seen on a live 1750 x 739 chart: the pivot table sat on the structural brain,
+the main dashboard ran off the bottom, chart arrows were drawn over the tables and the scalp panel's
+title was cut. Now a table that would cover one drawn before it moves to the first free place beside,
+above or below a placed table (when the chart has no free place it keeps its position: fold one); a
+table taller than the chart gets shorter rows (never under 12 px); the tables are recreated after the
+chart objects on every new bar, so they stay on top; the scalp panel's title column is wider.
 
 **18.12-mt5.3: click to fold.** A click on the first row of any of the five tables (main dashboard,
 structural brain, manual monitor, pivot table, smart scalp panel) folds that table to that row; a
