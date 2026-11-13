@@ -63,7 +63,7 @@
 //|  Personal tool. No network, no Telegram, no DLL, no files.       |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.121"
+#property version     "1.122"
 #property description "Gold/Silver/Copper: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot, MH15 PLUS table."
 #property description "Auto scalp + QML/pullback/NY-trap/radar plans, macro vote (DXY, bond, USD news, H4/H1), news guard, smart exit."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -3940,6 +3940,99 @@ string NqGapKindText(int kind)
    }
    return "none";
 }
+
+//--- SIGNALMESH ASSET NAME BEGIN
+// The SignalMesh asset a broker symbol belongs to ("" = not one of SignalMesh's assets). Every journal event and
+// telemetry snapshot carries it as `asset`, so the platform can file the EA's results under its own names
+// whatever the broker calls the symbol (XAUUSD.m -> GOLD, USTEC -> US100, NVDA.NAS -> NVDA, LNKUSD -> "").
+// The list: GOLD SILVER DXY GER40 US100 US10Y US30 US500 VIX, AUDUSD EURGBP EURJPY EURUSD GBPJPY GBPUSD NZDUSD
+// USDCAD USDCHF USDJPY, ADA BNB BTC DOT ETH LTC SOL XRP, OIL (WTI), NVDA.
+bool NqAssetHas(string u, string tk)
+{
+   if(StringFind(u, tk) != 0)
+      return false;
+   string rest = StringSubstr(u, StringLen(tk));
+   if(rest == "" || StringFind(rest, "USD") == 0)
+      return true;
+   ushort ch = StringGetCharacter(rest, 0);
+   return !(ch >= 'A' && ch <= 'Z');
+}
+
+string NqAssetName(string sym)
+{
+   string u = sym;
+   StringToUpper(u);
+   int len = StringLen(u);
+   int p = 0;
+   while(p < len)
+   {
+      ushort ch = StringGetCharacter(u, p);
+      if(ch >= 'A' && ch <= 'Z')
+         break;
+      p++;
+   }
+   if(p > 0)
+      u = StringSubstr(u, p);
+   // a company share (GOLD.NYSE is Barrick, SCCO.NYSE a copper miner) is never the commodity: only NVDA is listed
+   if(StringFind(u, ".NYSE") >= 0 || StringFind(u, ".NAS") >= 0 || StringFind(u, ".US") >= 0)
+      return (StringFind(u, "NVDA") == 0) ? "NVDA" : "";
+   if(StringFind(u, "NVDA") == 0 || StringFind(u, "NVIDIA") == 0)
+      return "NVDA";
+   if(StringFind(u, "XAUUSD") == 0 || StringFind(u, "GOLD") == 0)
+      return "GOLD";
+   if(StringFind(u, "XAGUSD") == 0 || StringFind(u, "SILVER") == 0)
+      return "SILVER";
+   string fx = "AUDUSD,EURGBP,EURJPY,EURUSD,GBPJPY,GBPUSD,NZDUSD,USDCAD,USDCHF,USDJPY";
+   for(int k = 0; k < 10; k++)
+   {
+      string pr = StringSubstr(fx, k * 7, 6);
+      if(StringFind(u, pr) >= 0)
+         return pr;                // anywhere in the name: some brokers put a letter in front (mUSDJPY)
+   }
+   if(StringFind(u, "BITCOINCASH") == 0 || StringFind(u, "ETHEREUMCLASSIC") == 0)
+      return "";
+   if(NqAssetHas(u, "BTC") || NqAssetHas(u, "XBT") || StringFind(u, "BITCOIN") == 0)
+      return "BTC";
+   if(NqAssetHas(u, "ETH") || StringFind(u, "ETHEREUM") == 0)
+      return "ETH";
+   if(NqAssetHas(u, "LTC") || StringFind(u, "LITECOIN") == 0)
+      return "LTC";
+   if(NqAssetHas(u, "XRP") || StringFind(u, "RIPPLE") == 0)
+      return "XRP";
+   if(NqAssetHas(u, "SOL") || StringFind(u, "SOLANA") == 0)
+      return "SOL";
+   if(NqAssetHas(u, "ADA") || StringFind(u, "CARDANO") == 0)
+      return "ADA";
+   if(NqAssetHas(u, "DOT") || StringFind(u, "POLKADOT") == 0)
+      return "DOT";
+   if(NqAssetHas(u, "BNB") || StringFind(u, "BINANCE") == 0)
+      return "BNB";
+   if(StringFind(u, "DXY") == 0 || StringFind(u, "USDX") == 0 || StringFind(u, "USDOLLAR") == 0 || StringFind(u, "USDIDX") == 0 ||
+      StringFind(u, "USIDX") == 0 || StringFind(u, "DOLLAR") == 0 || NqAssetHas(u, "DX"))
+      return "DXY";
+   if(StringFind(u, "US10Y") == 0 || StringFind(u, "UST10Y") == 0 || StringFind(u, "TNX") == 0)
+      return "US10Y";
+   if(StringFind(u, "USTEC") == 0 || StringFind(u, "US100") == 0 || StringFind(u, "NAS100") == 0 || StringFind(u, "NASDAQ") == 0 ||
+      StringFind(u, "NDX") == 0 || StringFind(u, "UT100") == 0 || StringFind(u, "TECH100") == 0)
+      return "US100";
+   if(StringFind(u, "US500") == 0 || StringFind(u, "SPX") == 0 || StringFind(u, "SP500") == 0 || StringFind(u, "USA500") == 0)
+      return "US500";
+   if(StringFind(u, "US30") == 0 || StringFind(u, "DJ30") == 0 || StringFind(u, "DJI") == 0 || StringFind(u, "WS30") == 0 ||
+      StringFind(u, "WALLSTREET") == 0 || StringFind(u, "USA30") == 0 || StringFind(u, "DOWJONES") == 0)
+      return "US30";
+   if(StringFind(u, "GER40") == 0 || StringFind(u, "GER30") == 0 || StringFind(u, "DE40") == 0 || StringFind(u, "DE30") == 0 ||
+      StringFind(u, "DAX") == 0 || StringFind(u, "GDAXI") == 0 || StringFind(u, "GERMANY") == 0 || StringFind(u, "FDAX") == 0)
+      return "GER40";
+   if(NqAssetHas(u, "VIX"))
+      return "VIX";
+   if(StringFind(u, "BRENT") >= 0 || StringFind(u, "XBR") == 0 || StringFind(u, "UKOIL") == 0)
+      return "";                // SignalMesh's OIL is WTI: Brent is not filed under it
+   if(StringFind(u, "XTIUSD") == 0 || StringFind(u, "USOIL") == 0 || StringFind(u, "WTI") == 0 || StringFind(u, "CRUDE") == 0 ||
+      StringFind(u, "OIL") == 0 || NqAssetHas(u, "CL"))
+      return "OIL";
+   return "";
+}
+//--- SIGNALMESH ASSET NAME END
 //=== NB_STUDIES_END ===
 
 //+------------------------------------------------------------------+
@@ -4323,7 +4416,7 @@ NqGapInfo g_gap5;
 NqGapInfo g_gap15;
 string   g_gapText;      // "" = every timeframe valid
 // journal: last known status per plan (by signal id) so only CHANGES are emitted
-#define NQ_EA_VERSION "1.12.1"
+#define NQ_EA_VERSION "1.12.2"
 string   g_jrCmt[];
 int      g_jrStatus[];
 int      g_jrN;
@@ -6928,6 +7021,8 @@ string NqEventJson(const NqPlan &p, string event, string extra)
               NqJsonS("ctx15", (n15 > 0) ? NqContextText(g_s15.ctx[n15 - 1]) : "") + "," +
               NqJsonN("risk_pct", InpRiskPct, 2) + "," +
               NqJsonS("session", NqSessionName());   // ASIA / LONDON / NY / OFF when the event was recorded (1.10.0, append-only)
+   j = j + "," + NqJsonS("engine", "NQ-METAL");          // which engine made the signal (the twins say NQ-CRYPTO / NQ-FOREX): SignalMesh's "engine detail"
+   j = j + "," + NqJsonS("asset", NqAssetName(g_sym));   // the SignalMesh asset name ("" = not on its list): the database files the result under it
    if(p.kind == NQ_PLAN_RADAR)
       j = j + "," + NqJsonI("radar_score", (p.dir > 0) ? g_rdUp.score : g_rdDn.score);
    if(extra != "")
@@ -7294,7 +7389,7 @@ string NqTelemetryJson()
        NqJsonN("risk_pct", InpRiskPct, 2) + "," + NqJsonN("risk_money", g_riskMoney, 2) + "," + NqJsonS("last_trade", g_lastTrade) + "},";
 
    // MH15 PLUS: the day forecast, the ladder and the pattern studies as the table shows them
-   j = j + NqGapJson() + "," + NqStudiesJson() + ",";
+   j = j + NqJsonS("asset", NqAssetName(g_sym)) + "," + NqGapJson() + "," + NqStudiesJson() + ",";
 
    // the RECORD rows: what the loaded history says happened to each engine
    int done = 0;

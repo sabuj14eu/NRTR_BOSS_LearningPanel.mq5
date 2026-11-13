@@ -32,35 +32,35 @@ the build environment. The EA was therefore verified like this:
 it behaves on a real broker feed. **Press F7 in MetaEditor and do the manual checks below
 before relying on it.** If F7 reports anything, send the exact message.
 
-## Results (2026-11-13, metal 1.12.1 / crypto 1.6.1 / forex 1.2.1 / Pine twin 18.12-mt5.4)
+## Results (2026-11-13, metal 1.12.2 / crypto 1.6.2 / forex 1.2.2 / Pine twin 18.12-mt5.5)
 
 ```
 CRYPTO TWIN:      derived files match; engine block identical apart from the asset detector; studies block identical
 FOREX EA:         engine block identical to the metal EA apart from the asset detector; studies block identical
--- NRTR_QML_MetalScalper.mq5 (v1.12.1) --
+-- NRTR_QML_MetalScalper.mq5 (v1.12.2) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 EA ENGINE TESTS:  122 checks passed, 0 failed   (the engine block is unchanged apart from the detector: copper)
-EA TESTS:         443 checks passed, 0 failed   (A1-A15 + A10 and M1-M9 as before, with the three MH15 PLUS gates
+EA TESTS:         446 checks passed, 0 failed   (A1-A15 + A10 and M1-M9 as before, with the three MH15 PLUS gates
                   relaxed in the A sections; S1-S10 new: the day forecast, the ladder, Elliott, Wolfe, Fibonacci /
                   VWAP / profile, the table, ADR ROOM end to end, the ladder end to end, the study vote, copper)
                   The same binary built with -fsanitize=address,undefined -D_GLIBCXX_ASSERTIONS (every array
                   index bounds-checked, as MT5 does at run time): 418 passed, no report
--- NRTR_QML_CryptoScalper.mq5 (v1.6.1) --
+-- NRTR_QML_CryptoScalper.mq5 (v1.6.2) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
 CRYPTO EA TESTS:  341 checks passed, 0 failed   (the metal sections re-run on a BTC-sized market + an LTC 3-digit
                   spec, plus the 8 crypto sections; C8 = MH15 PLUS ON by default with a BTC / ETH / LTC ladder)
--- NRTR_QML_ForexScalper.mq5 (v1.2.1) --
+-- NRTR_QML_ForexScalper.mq5 (v1.2.2) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-FOREX EA TESTS:   368 checks passed, 0 failed   (A / F sections as before with the two MH15 PLUS gates relaxed;
+FOREX EA TESTS:   370 checks passed, 0 failed   (A / F sections as before with the two MH15 PLUS gates relaxed;
                   F11-F13 new: the table without a ladder, ADR ROOM end to end, the study vote)
                   The same binary built with -fsanitize=address,undefined -D_GLIBCXX_ASSERTIONS: 343 passed, no report
--- BrotherSniperULTIMATE_v18_MT5.mq5 (18.12-mt5.4, the Pine twin: click-to-fold tables B11, layout B12) --
+-- BrotherSniperULTIMATE_v18_MT5.mq5 (18.12-mt5.5, the Pine twin: click-to-fold tables B11, layout B12, asset name B13) --
 EA SAFETY SCAN: PASS
 EA FULL FILE (g++ -Wall -Wextra -Werror): 0 errors, 0 warnings
-BS18 EA TESTS:    100 checks passed, 0 failed  (B12 new: on a 1750 x 739 chart no table covers another, the 55-row
+BS18 EA TESTS:    102 checks passed, 0 failed  (B12 new: on a 1750 x 739 chart no table covers another, the 55-row
                   main dashboard fits the height, the layout follows the folds, the tables are recreated on top
                   every bar. B11: each of the five tables folds to its first row on a click
                   and unfolds on the next; other rows do nothing; no order is sent by a click; also clean under

@@ -471,6 +471,17 @@ int main()
    }
    end("B12");
 
+   begin("B13 the SignalMesh asset name on every event (mt5.5)");
+   {
+      load(gold, "XAUUSD", "XAU", 2, 0.01, 1.0);
+      startAt(START);
+      stepTo(START + 1);
+      CHECK(BsEventJson("SMART_SCALP", "id", "BUY", 1, 1, 1, 1, 1, "A", "fire", "open", "").find("\"asset\":\"GOLD\"") != std::string::npos, "XAUUSD is filed as GOLD");
+      CHECK(NqAssetName("USTEC") == "US100" && NqAssetName("NVDA.NAS") == "NVDA" && NqAssetName("XTIUSD") == "OIL" && NqAssetName("SCCO.NYSE") == "", "the same mapping as the other EAs");
+      OnDeinit(0);
+   }
+   end("B13");
+
    std::printf("\nBS18 EA TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;
 }

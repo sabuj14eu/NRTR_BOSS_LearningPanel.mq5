@@ -863,7 +863,7 @@ int main()
          else if(ch == ']') brackets--;
       }
       CHECK(braces == 0 && brackets == 0 && !inStr && last.back() == '}', "the snapshot is balanced JSON");
-      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_ForexScalper\"", "\"ea_version\":\"1.2.1\"", "\"strength\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"htf\":{", "\"smart_exit\":{", "\"portfolio\":{",
+      for(const char *k : {"\"label\":\"ANALYSIS ONLY - DEMO - NOT A TRADE SIGNAL\"", "\"source\":\"NRTR_QML_ForexScalper\"", "\"ea_version\":\"1.2.2\"", "\"strength\":{", "\"news\":{\"state\":\"CLEAR\"", "\"session\":{", "\"htf\":{", "\"smart_exit\":{", "\"portfolio\":{",
                            "\"symbol\":\"EURUSD\"", "\"asset_class\":\"forex\"", "\"pair_class\":\"MAJOR\"", "\"base\":\"EUR\"", "\"quote\":\"USD\"", "\"account_mode\":\"demo\"", "\"ts_server\":", "\"ts_gmt\":",
                            "\"server_offset_sec\":10800", "\"heartbeat_sec\":60", "\"clock\":\"AUTO\"", "\"clock_offset_min\":180", "\"ny_dst\":true", "\"ny_open_min\":990", "\"london_open_min\":600", "\"asia_open_min\":60", "\"rollover_min\":0", "\"fresh\":true", "\"candles\":{\"state\":\"CLOSED FRESH\"",
                            "\"m1_closed_server\":", "\"m1_age_sec\":", "\"atr5\":", "\"m15\":{\"context\":\"", "\"nrtr_level\":",
@@ -2063,6 +2063,39 @@ int main()
       OnDeinit(0);
    }
    end("FG2");
+
+   begin("FG3 the SignalMesh asset name: every broker spelling of a listed asset maps to SignalMesh's own name, anything else to nothing");
+   {
+      struct Case { const char *sym; const char *asset; };
+      const Case cases[] = {
+         {"XAUUSD", "GOLD"}, {"#XAUUSD.m", "GOLD"}, {"GOLD", "GOLD"}, {"XAGUSD", "SILVER"}, {"Silver", "SILVER"},
+         {"DXY", "DXY"}, {"USDX", "DXY"}, {"DX_Z6", "DXY"}, {"USDOLLAR", "DXY"}, {"GER40", "GER40"}, {"DE40", "GER40"}, {"DAX40", "GER40"},
+         {"USTEC", "US100"}, {"NAS100", "US100"}, {"US100.cash", "US100"}, {"US10Y", "US10Y"}, {"US30", "US30"}, {"DJ30", "US30"},
+         {"US500", "US500"}, {"SPX500", "US500"}, {"VIX", "VIX"}, {"VIX_X6", "VIX"},
+         {"AUDUSD", "AUDUSD"}, {"EURGBP", "EURGBP"}, {"EURJPY", "EURJPY"}, {"EURUSD.m", "EURUSD"}, {"GBPJPY", "GBPJPY"}, {"GBPUSD", "GBPUSD"},
+         {"NZDUSD", "NZDUSD"}, {"USDCAD", "USDCAD"}, {"USDCHF", "USDCHF"}, {"mUSDJPY", "USDJPY"},
+         {"ADAUSD", "ADA"}, {"BNBUSD", "BNB"}, {"BTCUSD", "BTC"}, {"XBTUSD", "BTC"}, {"Bitcoin", "BTC"}, {"DOTUSD", "DOT"}, {"ETHUSD", "ETH"},
+         {"LTCUSDT", "LTC"}, {"SOLUSD", "SOL"}, {"XRPUSD", "XRP"},
+         {"XTIUSD", "OIL"}, {"USOIL", "OIL"}, {"WTI", "OIL"}, {"CL-OIL", "OIL"}, {"NVDA.NAS", "NVDA"}, {"NVDA", "NVDA"},
+         // not on SignalMesh's list, or not the thing its name suggests
+         {"AUDCHF", ""}, {"AUDNZD", ""}, {"LNKUSD", ""}, {"XCUUSD", ""}, {"XBRUSD", ""}, {"UKOIL", ""}, {"BRENT", ""}, {"GOLD.NYSE", ""}, {"SCCO.NYSE", ""},
+         {"DOW.NYSE", ""}, {"BITCOINCASH", ""}, {"ETCUSD", ""}, {"VIXY", ""}, {"SOLV", ""}, {"AAPL.NAS", ""}, {"", ""}};
+      int bad = 0;
+      for(const Case &c : cases)
+         if(NqAssetName(c.sym) != c.asset) { bad++; std::printf("    %s -> [%s], expected [%s]\n", c.sym, NqAssetName(c.sym).c_str(), c.asset); }
+      CHECK(bad == 0, "29 SignalMesh assets in their broker spellings; pairs, coins, Brent and company shares that are not listed map to nothing");
+      load(eur, "EURUSD", "EUR", 5, 0.00001, 1.0);
+      startAt(START);
+      relax();
+      run(START + 1, START + 3);
+      NqPlan pl;
+      pl.kind = NQ_PLAN_QML; pl.tf = 300; pl.dir = 1; pl.idx = 0; pl.keyTime = T0; pl.madeAt = T0; pl.entry = 1; pl.sl = 1; pl.tp1 = 1; pl.tp2 = 1; pl.risk = 1;
+      pl.lvlA = 1; pl.lvlB = 1; pl.status = NQ_PL_ACTIVE; pl.statusIdx = 0; pl.fillIdx = -1;
+      CHECK(NqEventJson(pl, "armed", "").find("\"asset\":\"EURUSD\"") != std::string::npos && NqTelemetryJson().find("\"asset\":\"EURUSD\"") != std::string::npos,
+            "every journal event and the telemetry snapshot carry the asset");
+      OnDeinit(0);
+   }
+   end("FG3");
 
    std::printf("\nFOREX EA TESTS: %d checks passed, %d failed\n", g_pass, g_fail);
    return g_fail == 0 ? 0 : 1;

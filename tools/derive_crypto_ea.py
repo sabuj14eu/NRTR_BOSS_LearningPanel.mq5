@@ -91,7 +91,7 @@ HEADER = '''//+-----------------------------------------------------------------
 //|  SignalMesh POSTs (journal, telemetry), both off by default.     |
 //+------------------------------------------------------------------+
 #property copyright   "Personal use - demo trading tool"
-#property version     "1.61"
+#property version     "1.62"
 #property description "BTC/ETH/LTC/altcoins: M15 context, M5 regime+structure, M1 trigger, risk engine, auto lot."
 #property description "Auto scalp + QML/pullback/NY-trap/radar pending plans, coin-class specialist profile, BTC-lead filter."
 #property description "The MT5 Algo Trading button is the on/off switch. Only orders with this EA magic are ever touched."
@@ -466,7 +466,7 @@ def derive_ea(m: str) -> str:
             '   yr += rh;\n'
             '   string volT = "---";\n')
     # 14. version + helper functions (after NqReadAccount's spread read block: append before NqEvaluate's doc comment)
-    t = rep(t, '#define NQ_EA_VERSION "1.12.1"', '#define NQ_EA_VERSION "1.6.1"')
+    t = rep(t, '#define NQ_EA_VERSION "1.12.2"', '#define NQ_EA_VERSION "1.6.2"')
     # 14b. v1.3.4 - the weekend is OPEN: crypto never closes, so the metal's WEEKEND block must not
     #      apply; the Friday stop and the week-open guard are off unless the operator sets them
     #      (a broker that closes crypto at the weekend). Nothing else of the week logic changes.
@@ -489,12 +489,17 @@ def derive_ea(m: str) -> str:
     b = t.index("//--- LADDER PEERS END\n") + len("//--- LADDER PEERS END\n")
     t = t[:a] + PEERS + t[b:]
     t = rep(t, "//| MH15 PLUS (v1.11.0): the DAY FORECAST, the ROTATION LADDER and    |", "//| MH15 PLUS (v1.5.0):  the DAY FORECAST, the ROTATION LADDER and    |")
+    # 14d. the metal EA names its engine in its own statement; the crypto twin already says NQ-CRYPTO (step 12)
+    t = rep(t, '   j = j + "," + NqJsonS("engine", "NQ-METAL");          // which engine made the signal (the twins say NQ-CRYPTO / NQ-FOREX): SignalMesh\'s "engine detail"\n', "")
     # 15. renames
     t = t.replace("g_metal", "g_coin").replace("NQ_METAL_NONE", "NQ_COIN_NONE")
     # 16. comment wording
     t = rep(t, "the metal's intended break", "the coin's intended break", count=t.count("the metal's intended break"))
+    # the SignalMesh asset-name block is shared text and names every asset, the metals included: it is not a leftover
+    a0, b0 = t.index("//--- SIGNALMESH ASSET NAME BEGIN"), t.index("//--- SIGNALMESH ASSET NAME END")
+    rest = t[:a0] + t[b0:]
     for bad in ("NQ_METAL", "NqMetalOf", "GOLD / SILVER", 'InpMacroSymbol == ""', "XAUUSD", "XAGUSD", "XCUUSD", "COPPER"):
-        if bad in t:
+        if bad in rest:
             raise SystemExit(f"leftover metal token in the crypto EA: {bad}")
     return t
 
@@ -515,7 +520,7 @@ def derive_test(s: str) -> str:
     t = rep(t, 'find("GOLD / SILVER / COPPER ONLY")', 'find("CRYPTO ONLY")')
     t = rep(t, '"\\"metal\\":\\"GOLD\\""', '"\\"coin\\":\\"BTC\\""')
     t = rep(t, '"\\"source\\":\\"NRTR_QML_MetalScalper\\""', '"\\"source\\":\\"NRTR_QML_CryptoScalper\\""')
-    t = rep(t, '"\\"ea_version\\":\\"1.12.1\\""', '"\\"ea_version\\":\\"1.6.1\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
+    t = rep(t, '"\\"ea_version\\":\\"1.12.2\\""', '"\\"ea_version\\":\\"1.6.2\\"", "\\"prof_risk\\":1.00", "\\"prof_spread_atr\\":0.15", "\\"lead_symbol\\":\\"\\""')
     t = rep(t, 'CHECK(rows == 12, "12 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, VOL REGIME + the 7 engine rows)");', 'CHECK(rows == 13, "13 engine rows (H4 / H1, MACRO VOTE, NEWS, WEEK / SMART, COIN PROFILE, VOL REGIME + the 7 engine rows)");')
     t = rep(t, "   SIM.tickValue = tickValue;\n", "   SIM.tickValue = tickValue;\n   SIM.contract = 1.0;   // crypto CFD: one coin per lot\n")
     # price offsets of the hand-made broker items, scaled from a $4,150 metal to a $61,500 coin
@@ -704,7 +709,7 @@ CRYPTO_CHECKS = r'''
             if(!l.empty())
             {
                lines++;
-               for(const char *k : {"\"engine\":\"NQ-CRYPTO\"", "\"coin\":\"BTC\"", "\"system\":\"NQ-EA\"", "\"symbol\":\"BTCUSD\"", "\"signal_id\":\"NQ:BTCUSD:"})
+               for(const char *k : {"\"engine\":\"NQ-CRYPTO\"", "\"coin\":\"BTC\"", "\"asset\":\"BTC\"", "\"system\":\"NQ-EA\"", "\"symbol\":\"BTCUSD\"", "\"signal_id\":\"NQ:BTCUSD:"})
                   if(l.find(k) == std::string::npos) missing++;
             }
             p = e + 1;
